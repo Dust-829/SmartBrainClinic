@@ -1,9 +1,0 @@
-* text=auto
-*.md text working-tree-encoding=UTF-8
-*.java text working-tree-encoding=UTF-8
-*.py text working-tree-encoding=UTF-8
-*.js text working-tree-encoding=UTF-8
-*.ts text working-tree-encoding=UTF-8
-*.vue text working-tree-encoding=UTF-8
-*.sql text working-tree-encoding=UTF-8
-
