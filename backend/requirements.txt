@@ -1,0 +1,40 @@
+# =============================================
+# 智慧云脑诊疗平台 - Python Backend Dependencies
+# =============================================
+
+# --- Web Framework ---
+fastapi==0.115.12
+uvicorn[standard]==0.34.3
+
+# --- Database ORM & Async Driver ---
+sqlmodel==0.0.24
+sqlalchemy[asyncio]==2.0.41
+asyncpg==0.30.0
+greenlet==3.2.2
+
+# --- Data Validation ---
+pydantic==2.11.3
+pydantic-settings==2.9.1
+
+# --- Authentication (供鉴权开发人员使用) ---
+python-jose[cryptography]==3.4.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.20
+
+# --- AI & Vector (LangChain + LangGraph + pgvector) ---
+langchain-core>=0.3.0
+langchain-openai>=0.3.0
+langgraph>=0.3.0
+pgvector==0.4.0
+
+# --- Utilities ---
+python-dotenv==1.1.0
+httpx==0.28.1
+redis==5.2.1
+nacos-sdk-python~=3.2.0
+aio-pika==9.4.1
+
+# --- Testing ---
+pytest==8.0.0
+pytest-asyncio==0.23.5
+bcrypt~=5.0.0
