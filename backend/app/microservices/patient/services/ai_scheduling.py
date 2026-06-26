@@ -2,13 +2,13 @@
 AI 智能排班解析与执行引擎
 """
 
-import json
 import logging
-import httpx
 import re
 from datetime import date, timedelta
 from typing import Dict, Any
 from ..config import settings
+from app.common.ai_client import AIClient
+from app.common.ai_schema import AISource, SchedulingParseData, build_ai_result
 
 logger = logging.getLogger("patient.ai_scheduling")
 
@@ -96,11 +96,6 @@ async def run_ai_scheduling(
     if api_key and api_key.strip():
         logger.info("🤖 [AI Scheduling] Invoking real LLM Chat Completion API...")
         try:
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
             system_prompt = (
                 f"You are an expert hospital resource planning and scheduling AI. Today's date is {today_str} ({weekday_str}).\n"
                 "Analyze the doctor's natural language request to modify their schedule and return a JSON object.\n"
@@ -125,37 +120,25 @@ async def run_ai_scheduling(
                 "- Return ONLY the raw JSON string without any Markdown code blocks or wrapping."
             )
             
-            payload = {
-                "model": model,
-                "messages": [
+            data = await AIClient(api_key=api_key, api_base=api_base).chat_json(
+                model=model,
+                messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.1
-            }
-            
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{api_base.rstrip('/')}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=60.0
+                temperature=0.1,
+                timeout=60.0,
+            )
+            if isinstance(data, dict) and "actions" in data:
+                data = SchedulingParseData(**data).model_dump(mode="json")
+                logger.info(f"✅ [AI Scheduling] Real LLM parsing succeeded: {data}")
+                return build_ai_result(
+                    data,
+                    source=AISource.LLM,
+                    model=model,
+                    confidence=0.8,
+                    validated=True,
                 )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    content = result["choices"][0]["message"]["content"].strip()
-                    if content.startswith("```"):
-                        content = content.split("```")[1]
-                        if content.startswith("json"):
-                            content = content[4:]
-                        content = content.strip("` \n")
-                    
-                    data = json.loads(content)
-                    if "actions" in data:
-                        logger.info(f"✅ [AI Scheduling] Real LLM parsing succeeded: {data}")
-                        return data
-                else:
-                    logger.error(f"❌ [AI Scheduling] LLM HTTP error {resp.status_code}: {resp.text}")
         except Exception as e:
             logger.error(f"⚠️ [AI Scheduling] Real LLM invocation failed: {e}. Falling back to offline engine...")
 
@@ -263,7 +246,16 @@ async def run_ai_scheduling(
         
     rule_desc = "；".join(llm_text_rule_parts) + "。" if llm_text_rule_parts else "排班规则未发生微调。"
     
-    return {
+    data = {
         "actions": actions,
         "llm_text_rule": rule_desc
     }
+    data = SchedulingParseData(**data).model_dump(mode="json")
+    return build_ai_result(
+        data,
+        source=AISource.RULE,
+        model="rule-scheduling-parser",
+        confidence=0.6 if actions else 0.2,
+        warnings=["using_rule_based_scheduling_parser"],
+        validated=True,
+    )

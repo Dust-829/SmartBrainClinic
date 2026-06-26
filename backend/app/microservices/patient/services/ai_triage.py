@@ -5,10 +5,10 @@ AI 智能分诊 - 多轮对话引擎
 返回中包含 dept_determined 标志，便于前端判断是否已得出科室。
 """
 
-import json
 import logging
-import httpx
 from typing import Dict, Any, List
+from app.common.ai_client import AIClient
+from app.common.ai_schema import AISource, TriageResultData, build_ai_result
 
 logger = logging.getLogger("patient.ai_triage")
 
@@ -69,11 +69,6 @@ async def run_ai_triage(
     if api_key and api_key.strip():
         logger.info("🤖 [AI Triage] Invoking real LLM for multi-turn triage...")
         try:
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-
             # 构造完整的消息列表：system + 历史对话
             full_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
             for msg in messages:
@@ -82,46 +77,42 @@ async def run_ai_triage(
                     "content": msg.get("content", "")
                 })
 
-            payload = {
-                "model": model,
-                "messages": full_messages,
-                "temperature": 0.3
-            }
+            data = await AIClient(api_key=api_key, api_base=api_base).chat_json(
+                model=model,
+                messages=full_messages,
+                temperature=0.3,
+                timeout=10.0,
+            )
+            if data:
+                # 校验科室代码合法性
+                dept_code = data.get("recommended_dept_code")
+                if dept_code and dept_code not in DEPT_MAP:
+                    data["recommended_dept_code"] = None
+                    data["dept_determined"] = False
+                data = TriageResultData(**data).model_dump(mode="json")
 
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{api_base.rstrip('/')}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=10.0
+                logger.info(f"✅ [AI Triage] LLM response: {data}")
+                return build_ai_result(
+                    data,
+                    source=AISource.LLM,
+                    model=model,
+                    confidence=0.85 if data.get("dept_determined") else 0.45,
+                    validated=True,
                 )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    content = result["choices"][0]["message"]["content"].strip()
-                    # 去除可能的 markdown 包裹
-                    if content.startswith("```"):
-                        content = content.split("```")[1]
-                        if content.startswith("json"):
-                            content = content[4:]
-                        content = content.strip("` \n")
-
-                    data = json.loads(content)
-                    # 校验科室代码合法性
-                    dept_code = data.get("recommended_dept_code")
-                    if dept_code and dept_code not in DEPT_MAP:
-                        data["recommended_dept_code"] = None
-                        data["dept_determined"] = False
-
-                    logger.info(f"✅ [AI Triage] LLM response: {data}")
-                    return data
-                else:
-                    logger.error(f"❌ [AI Triage] LLM HTTP error {resp.status_code}: {resp.text}")
         except Exception as e:
             logger.error(f"⚠️ [AI Triage] LLM invocation failed: {e}. Falling back to Mock...")
 
     # 2. Mock 多轮对话引擎（离线/测试模式）
     logger.info("🔌 [AI Triage] Running offline Mock multi-turn triage engine...")
-    return _mock_multi_turn_triage(messages)
+    data = TriageResultData(**_mock_multi_turn_triage(messages)).model_dump(mode="json")
+    return build_ai_result(
+        data,
+        source=AISource.MOCK,
+        model="mock-triage",
+        confidence=0.65 if data.get("dept_determined") else 0.35,
+        warnings=["using_mock_triage_engine"],
+        validated=True,
+    )
 
 
 def _mock_multi_turn_triage(messages: List[Dict[str, str]]) -> Dict[str, Any]:

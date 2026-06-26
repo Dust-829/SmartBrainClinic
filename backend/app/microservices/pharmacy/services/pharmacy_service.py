@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.drug import DrugInfo, Prescription, PrescriptionItem
 from .internal_client import PatientClient, MedicalClient
 from .ai_prescription import run_ai_prescription
+from app.common.ai_schema import unwrap_ai_data
 from app.common.enums import DrugState
 
 def _gen_prescription_code() -> str:
@@ -257,13 +258,15 @@ async def recommend_prescription(session: AsyncSession, register_uuid: uuid_pkg.
         })
         
     # 4. 运行 AI 大模型 / 规则阻断推荐引擎
-    recommendations = await run_ai_prescription(medical_record, available_drugs)
+    recommendations_result = await run_ai_prescription(medical_record, available_drugs)
+    recommendations = unwrap_ai_data(recommendations_result)
     
     return {
         "register_uuid": str(register_uuid),
         "patient_allergy": medical_record.get("allergy") or "无",
         "diagnosis": medical_record.get("diagnosis") or "未确诊",
-        "recommendations": recommendations
+        "recommendations": recommendations,
+        "ai_result": recommendations_result
     }
 
 async def batch_import_drugs(session: AsyncSession, drugs_input: list[dict]) -> list[dict]:
@@ -333,4 +336,3 @@ async def get_prescription_items_batch(session: AsyncSession, item_uuids: list[s
             "price": str(drug.price) if drug else "0.00"
         })
     return ret
-

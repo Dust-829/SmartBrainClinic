@@ -3,11 +3,12 @@ AI Embedding Engine
 Handles converting text to vector embeddings using SiliconFlow or fallback.
 """
 
-import httpx
 import logging
 import random
-from typing import List
+from typing import Optional
+from app.common.ai_client import AIClient
 from app.common.config import BaseMicroserviceSettings
+from app.common.ai_schema import AISource, build_ai_result
 
 logger = logging.getLogger("common.ai_embedding")
 
@@ -16,11 +17,12 @@ async def get_embedding(
     api_key: str = None,
     api_base: str = None,
     model: str = None,
-) -> List[float]:
+) -> Optional[list[float]]:
     """
     Get the embedding vector for a given text.
     Uses SiliconFlow BAAI/bge-m3 by default. Returns a 1024-dimensional float vector.
-    Falls back to a random mock vector if API fails.
+    In development, an explicit mock fallback can generate a normalized vector.
+    In production, failures return None to avoid polluting vector indexes.
     """
     settings = BaseMicroserviceSettings()
     
@@ -30,38 +32,46 @@ async def get_embedding(
 
     if api_key and api_key.strip():
         logger.info(f"🧬 [AI Embedding] Calling Real Embedding API ({model})...")
-        try:
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": model,
-                "input": text,
-                "encoding_format": "float"
-            }
-            
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{api_base.rstrip('/')}/embeddings",
-                    json=payload,
-                    headers=headers,
-                    timeout=10.0
-                )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    vector = result["data"][0]["embedding"]
-                    logger.info(f"✅ [AI Embedding] Successfully retrieved embedding of length {len(vector)}")
-                    return vector
-                else:
-                    logger.error(f"❌ [AI Embedding] HTTP error {resp.status_code}: {resp.text}")
-        except Exception as e:
-            logger.error(f"⚠️ [AI Embedding] API invocation failed: {e}. Falling back to Mock Engine...")
+        vector = await AIClient(api_key=api_key, api_base=api_base).embedding(
+            model=model,
+            text=text,
+            timeout=10.0,
+        )
+        if vector:
+            logger.info(f"✅ [AI Embedding] Successfully retrieved embedding of length {len(vector)}")
+            return vector
 
-    # Fallback: Generate a normalized mock 1024-dimensional vector
-    logger.info("🔌 [AI Embedding] Using Mock Vector Engine (1024-dim)...")
+    allow_mock = settings.AI_ALLOW_MOCK_FALLBACK and settings.APP_ENV != "production"
+    if not allow_mock:
+        logger.warning(
+            "[AI Embedding] Embedding unavailable and mock fallback is disabled; returning None."
+        )
+        return None
+
+    logger.info("[AI Embedding] Using development Mock Vector Engine (1024-dim).")
     import math
     mock_vector = [random.uniform(-1, 1) for _ in range(1024)]
     magnitude = math.sqrt(sum(x*x for x in mock_vector))
     normalized_mock = [x/magnitude for x in mock_vector]
     return normalized_mock
+
+
+async def get_embedding_result(
+    text: str,
+    api_key: str = None,
+    api_base: str = None,
+    model: str = None,
+) -> dict:
+    settings = BaseMicroserviceSettings()
+    model_name = model or getattr(settings, "LLM_EMBEDDING_MODEL", "BAAI/bge-m3")
+    vector = await get_embedding(text, api_key=api_key, api_base=api_base, model=model)
+    source = AISource.EMBEDDING if vector is not None else AISource.FALLBACK
+    warnings = [] if vector is not None else ["embedding_unavailable"]
+    return build_ai_result(
+        {"vector": vector, "dimension": len(vector) if vector else 0},
+        source=source,
+        model=model_name,
+        confidence=1.0 if vector is not None else 0.0,
+        warnings=warnings,
+        validated=vector is not None,
+    )
