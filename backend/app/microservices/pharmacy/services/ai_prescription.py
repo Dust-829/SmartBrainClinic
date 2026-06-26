@@ -4,10 +4,11 @@ AI 智能处方推荐解析引擎
 
 import json
 import logging
-from typing import List
+from typing import Any, Iterable, List, Mapping
 from ..config import settings
 from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
 from app.common.ai_client import AIClient
+from app.common.ai_reviewer import review_prescription_result
 from app.common.ai_schema import AISource, PrescriptionRecommendationData, build_ai_result
 from app.common.ai_validator import AIResultValidator
 
@@ -87,13 +88,43 @@ async def run_ai_prescription(
                 validation = AIResultValidator.validate_prescription(
                     recommendations,
                     patient_allergy=allergy,
+                    available_drugs=available_drugs,
+                )
+                secondary_validation = AIResultValidator.secondary_verify_prescription(
+                    recommendations,
+                    patient_allergy=allergy,
+                    available_drugs=available_drugs,
+                )
+                validation = AIResultValidator.combine(validation, secondary_validation)
+                confidence = _calculate_prescription_confidence(
+                    recommendations,
+                    validation=validation,
+                    available_drugs=available_drugs,
+                    source=AISource.LLM,
+                )
+                llm_review = await review_prescription_result(
+                    recommendations=recommendations,
+                    medical_record=medical_record,
+                    available_drugs=available_drugs,
+                    validation=validation,
+                    confidence=confidence,
+                    api_key=api_key,
+                    api_base=api_base,
+                    model=model,
+                )
+                validation = AIResultValidator.combine(validation, llm_review)
+                confidence = _calculate_prescription_confidence(
+                    recommendations,
+                    validation=validation,
+                    available_drugs=available_drugs,
+                    source=AISource.LLM,
                 )
                 logger.info(f"✅ [AI Prescription] Real LLM prescription succeeded: {recommendations}")
                 result = build_ai_result(
                     recommendations,
                     source=AISource.LLM,
                     model=model,
-                    confidence=0.75,
+                    confidence=confidence,
                     **validation.as_result_kwargs(),
                 )
                 await record_ai_audit(
@@ -221,12 +252,42 @@ async def run_ai_prescription(
     validation = AIResultValidator.validate_prescription(
         recommendations,
         patient_allergy=allergy,
+        available_drugs=available_drugs,
+    )
+    secondary_validation = AIResultValidator.secondary_verify_prescription(
+        recommendations,
+        patient_allergy=allergy,
+        available_drugs=available_drugs,
+    )
+    validation = AIResultValidator.combine(validation, secondary_validation)
+    confidence = _calculate_prescription_confidence(
+        recommendations,
+        validation=validation,
+        available_drugs=available_drugs,
+        source=AISource.RULE,
+    )
+    llm_review = await review_prescription_result(
+        recommendations=recommendations,
+        medical_record=medical_record,
+        available_drugs=available_drugs,
+        validation=validation,
+        confidence=confidence,
+        api_key=api_key,
+        api_base=api_base,
+        model=model,
+    )
+    validation = AIResultValidator.combine(validation, llm_review)
+    confidence = _calculate_prescription_confidence(
+        recommendations,
+        validation=validation,
+        available_drugs=available_drugs,
+        source=AISource.RULE,
     )
     result = build_ai_result(
         recommendations,
         source=AISource.RULE,
         model="rule-prescription-engine",
-        confidence=0.6,
+        confidence=confidence,
         warnings=["using_rule_based_prescription_engine", *validation.warnings],
         validated=validation.is_valid,
         validator_messages=list(validation.messages),
@@ -245,3 +306,95 @@ async def run_ai_prescription(
         latency_ms=elapsed_ms(started_at),
     )
     return result
+
+
+def _calculate_prescription_confidence(
+    recommendations: Iterable[Mapping[str, Any]],
+    *,
+    validation,
+    available_drugs: Iterable[Mapping[str, Any]],
+    source: AISource,
+) -> float:
+    recommendations_list = list(recommendations)
+    drug_fact_map = _build_drug_fact_map(available_drugs)
+    score = 0.62 if source == AISource.LLM else 0.50
+
+    if recommendations_list:
+        score += 0.12
+    else:
+        score -= 0.20
+
+    if recommendations_list and drug_fact_map:
+        matched_count = 0
+        stock_ok_count = 0
+        for item in recommendations_list:
+            drug_id = _to_int(item.get("drug_id"))
+            fact = drug_fact_map.get(drug_id) if drug_id is not None else None
+            if not fact:
+                continue
+            matched_count += 1
+            stock = _to_int(fact.get("stock"))
+            requested = _to_int(item.get("drug_number"))
+            if stock is None or requested is None or requested <= stock:
+                stock_ok_count += 1
+
+        matched_ratio = matched_count / len(recommendations_list)
+        score += matched_ratio * 0.12
+        if matched_count == len(recommendations_list):
+            score += 0.05
+
+        stock_ratio = stock_ok_count / len(recommendations_list)
+        score += stock_ratio * 0.06
+
+    if recommendations_list and _all_prescription_fields_present(recommendations_list):
+        score += 0.06
+
+    meaningful_warnings = [
+        warning
+        for warning in validation.warnings
+        if not warning.endswith("_llm_second_review_unavailable")
+        and "secondary_prescription_verification_passed" not in warning
+    ]
+    score -= min(0.35, len(validation.messages) * 0.10)
+    score -= min(0.16, len(meaningful_warnings) * 0.04)
+    if not validation.is_valid:
+        score -= 0.12
+
+    return _clamp_confidence(score)
+
+
+def _build_drug_fact_map(
+    available_drugs: Iterable[Mapping[str, Any]],
+) -> dict[int, Mapping[str, Any]]:
+    facts: dict[int, Mapping[str, Any]] = {}
+    for drug in available_drugs:
+        drug_id = _to_int(drug.get("id"))
+        if drug_id is not None:
+            facts[drug_id] = drug
+    return facts
+
+
+def _all_prescription_fields_present(items: Iterable[Mapping[str, Any]]) -> bool:
+    required_fields = (
+        "drug_id",
+        "drug_name",
+        "drug_usage",
+        "drug_number",
+        "reason",
+        "allergy_check",
+    )
+    return all(
+        all(str(item.get(field) or "").strip() for field in required_fields)
+        for item in items
+    )
+
+
+def _to_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp_confidence(value: float) -> float:
+    return round(max(0.05, min(0.95, value)), 2)

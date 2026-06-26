@@ -2,14 +2,13 @@
 Lightweight validation for AI-generated business payloads.
 
 This validator catches malformed structures, unsafe medical wording, invalid
-enums, impossible dates, and obvious allergy conflicts before the payload is
-marked as validated. It intentionally avoids database access; database-backed
-existence checks can be added in a later layer.
+enums, impossible dates, obvious allergy conflicts, and optional database facts
+passed in by the service layer before the payload is marked as validated.
 """
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from pydantic import ValidationError
 
@@ -55,6 +54,35 @@ class AIResultValidator:
     VALID_GENDER_PREFERENCES = ("男", "女", "不限")
     VALID_ACTION_TYPES = ("cancel", "modify", "add", "cancel_after_time")
     VALID_NOON_VALUES = ("上午", "下午")
+    EMERGENCY_TERMS = (
+        "胸痛",
+        "胸闷严重",
+        "呼吸困难",
+        "喘不上气",
+        "意识不清",
+        "昏迷",
+        "抽搐",
+        "大出血",
+        "中风",
+        "偏瘫",
+        "剧烈头痛",
+        "自杀",
+        "服毒",
+    )
+    EMERGENCY_RESPONSE_TERMS = ("急诊", "急救", "120", "立即")
+
+    @classmethod
+    def combine(cls, *results: AIValidationResult) -> AIValidationResult:
+        messages: list[str] = []
+        warnings: list[str] = []
+        for result in results:
+            messages.extend(result.messages)
+            warnings.extend(result.warnings)
+        return AIValidationResult(
+            not messages,
+            tuple(cls._dedupe(messages)),
+            tuple(cls._dedupe(warnings)),
+        )
 
     @classmethod
     def validate_triage(
@@ -62,6 +90,8 @@ class AIResultValidator:
         data: Any,
         *,
         allowed_dept_codes: Optional[Iterable[str]] = None,
+        dept_exists_in_db: Optional[bool] = None,
+        require_db_fact_check: bool = False,
     ) -> AIValidationResult:
         messages: list[str] = []
         warnings: list[str] = []
@@ -80,6 +110,10 @@ class AIResultValidator:
                 messages.append("dept_determined_without_recommended_dept_code")
             elif allowed and triage.recommended_dept_code not in allowed:
                 messages.append(f"unknown_recommended_dept_code: {triage.recommended_dept_code}")
+            elif dept_exists_in_db is False:
+                messages.append(f"recommended_dept_not_found_in_db: {triage.recommended_dept_code}")
+            elif require_db_fact_check and dept_exists_in_db is None:
+                warnings.append("recommended_dept_db_fact_check_unavailable")
         elif triage.recommended_dept_code:
             warnings.append("recommended_dept_code_present_when_dept_not_determined")
 
@@ -92,6 +126,32 @@ class AIResultValidator:
             messages,
             prefix="triage_contains_forbidden_medical_advice",
         )
+
+        return AIValidationResult(not messages, tuple(messages), tuple(warnings))
+
+    @classmethod
+    def secondary_verify_triage(cls, data: Any, *, patient_text: str) -> AIValidationResult:
+        messages: list[str] = []
+        warnings: list[str] = []
+
+        try:
+            triage = TriageResultData(**data)
+        except ValidationError as exc:
+            return AIValidationResult(False, (f"secondary_triage_schema_invalid: {exc}",))
+
+        emergency_terms = cls.detect_emergency_terms(patient_text)
+        if emergency_terms:
+            combined_reply = triage.reply or ""
+            if not any(term in combined_reply for term in cls.EMERGENCY_RESPONSE_TERMS):
+                messages.append(
+                    "secondary_triage_emergency_not_escalated: "
+                    + ",".join(emergency_terms)
+                )
+            else:
+                warnings.append(
+                    "secondary_triage_emergency_escalation_verified: "
+                    + ",".join(emergency_terms)
+                )
 
         return AIValidationResult(not messages, tuple(messages), tuple(warnings))
 
@@ -128,6 +188,7 @@ class AIResultValidator:
         data: Any,
         *,
         patient_allergy: Optional[str] = None,
+        available_drugs: Optional[Iterable[Mapping[str, Any]]] = None,
     ) -> AIValidationResult:
         messages: list[str] = []
         warnings: list[str] = []
@@ -136,6 +197,7 @@ class AIResultValidator:
             return AIValidationResult(False, ("prescription_result_must_be_list",))
 
         allergy_tokens = cls._split_allergy_terms(patient_allergy)
+        drug_fact_map = cls._build_drug_fact_map(available_drugs)
         for idx, item in enumerate(data):
             try:
                 rec = PrescriptionRecommendationData(**item)
@@ -146,6 +208,21 @@ class AIResultValidator:
             if rec.drug_id <= 0:
                 messages.append(f"prescription_item_invalid_drug_id[{idx}]")
 
+            drug_fact = drug_fact_map.get(rec.drug_id) if drug_fact_map else None
+            if drug_fact_map and not drug_fact:
+                messages.append(f"prescription_drug_not_found_in_db[{idx}]: {rec.drug_id}")
+            elif drug_fact:
+                db_name = str(drug_fact.get("drug_name") or "")
+                if db_name and rec.drug_name and db_name != rec.drug_name:
+                    warnings.append(
+                        f"prescription_drug_name_mismatch[{idx}]: ai={rec.drug_name}, db={db_name}"
+                    )
+                stock = cls._to_int(drug_fact.get("stock"))
+                if stock is not None and rec.drug_number > stock:
+                    messages.append(
+                        f"prescription_drug_stock_insufficient[{idx}]: requested={rec.drug_number}, stock={stock}"
+                    )
+
             if allergy_tokens and cls._matches_allergy(rec.drug_name, allergy_tokens):
                 if not any(term in rec.allergy_check for term in ("警告", "过敏", "禁用", "禁止")):
                     messages.append(f"prescription_allergy_conflict_not_flagged[{idx}]")
@@ -153,6 +230,53 @@ class AIResultValidator:
                     warnings.append(f"prescription_allergy_conflict_flagged[{idx}]")
 
         return AIValidationResult(not messages, tuple(messages), tuple(warnings))
+
+    @classmethod
+    def secondary_verify_prescription(
+        cls,
+        data: Any,
+        *,
+        patient_allergy: Optional[str] = None,
+        available_drugs: Optional[Iterable[Mapping[str, Any]]] = None,
+    ) -> AIValidationResult:
+        primary = cls.validate_prescription(
+            data,
+            patient_allergy=patient_allergy,
+            available_drugs=available_drugs,
+        )
+        messages = list(primary.messages)
+        warnings = list(primary.warnings)
+
+        if not isinstance(data, list):
+            return AIValidationResult(
+                False,
+                tuple(messages or ["secondary_prescription_result_must_be_list"]),
+                tuple(warnings),
+            )
+
+        seen_drug_ids: set[int] = set()
+        allergy_tokens = cls._split_allergy_terms(patient_allergy)
+        for idx, item in enumerate(data):
+            try:
+                rec = PrescriptionRecommendationData(**item)
+            except ValidationError:
+                continue
+
+            if rec.drug_id in seen_drug_ids:
+                messages.append(f"secondary_prescription_duplicate_drug[{idx}]: {rec.drug_id}")
+            seen_drug_ids.add(rec.drug_id)
+
+            if allergy_tokens and cls._matches_allergy(rec.drug_name, allergy_tokens):
+                messages.append(f"secondary_prescription_allergy_conflict[{idx}]: {rec.drug_name}")
+
+        if not messages:
+            warnings.append("secondary_prescription_verification_passed")
+
+        return AIValidationResult(
+            not messages,
+            tuple(cls._dedupe(messages)),
+            tuple(cls._dedupe(warnings)),
+        )
 
     @classmethod
     def validate_scheduling(
@@ -218,6 +342,10 @@ class AIResultValidator:
             if term in text:
                 target.append(f"{prefix}: {term}")
 
+    @classmethod
+    def detect_emergency_terms(cls, text: str) -> tuple[str, ...]:
+        return tuple(term for term in cls.EMERGENCY_TERMS if term in (text or ""))
+
     @staticmethod
     def _split_allergy_terms(allergy: Optional[str]) -> tuple[str, ...]:
         if not allergy or allergy in ("无", "未详细说明"):
@@ -231,3 +359,33 @@ class AIResultValidator:
         if not drug_name_lower:
             return False
         return any(token in drug_name_lower or drug_name_lower in token for token in allergy_tokens)
+
+    @staticmethod
+    def _build_drug_fact_map(
+        available_drugs: Optional[Iterable[Mapping[str, Any]]],
+    ) -> dict[int, Mapping[str, Any]]:
+        if not available_drugs:
+            return {}
+        facts: dict[int, Mapping[str, Any]] = {}
+        for drug in available_drugs:
+            drug_id = AIResultValidator._to_int(drug.get("id"))
+            if drug_id is not None:
+                facts[drug_id] = drug
+        return facts
+
+    @staticmethod
+    def _to_int(value: Any) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _dedupe(values: Iterable[str]) -> tuple[str, ...]:
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for value in values:
+            if value not in seen:
+                seen.add(value)
+                deduped.append(value)
+        return tuple(deduped)

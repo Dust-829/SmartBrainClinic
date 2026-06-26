@@ -79,6 +79,13 @@ class ImageInferenceData(BaseModel):
     risk_level: str
 
 
+class AIReviewData(BaseModel):
+    approved: bool
+    risk_level: str = "low"
+    reasons: tuple[str, ...] = ()
+    suggested_action: str = "pass"
+
+
 def build_ai_result(
     data: Any,
     *,

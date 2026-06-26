@@ -7,10 +7,18 @@ AI 智能分诊 - 多轮对话引擎
 
 import logging
 from typing import Dict, Any, List
-from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
+from app.common.ai_audit import (
+    elapsed_ms,
+    record_ai_audit,
+    redact_sensitive_data,
+    start_ai_timer,
+)
 from app.common.ai_client import AIClient
+from app.common.ai_reviewer import review_triage_result
 from app.common.ai_schema import AISource, TriageResultData, build_ai_result
-from app.common.ai_validator import AIResultValidator
+from app.common.ai_validator import AIResultValidator, AIValidationResult
+from app.common.clients import AuthClient
+from app.microservices.patient.config import PatientSettings
 
 logger = logging.getLogger("patient.ai_triage")
 
@@ -25,29 +33,28 @@ DEPT_MAP = {
 
 DEPT_LIST = [{"code": k, "name": v} for k, v in DEPT_MAP.items()]
 
+MAX_TRIAGE_RECENT_MESSAGES = 6
+MAX_TRIAGE_MEMORY_CHARS = 700
+MAX_TRIAGE_MESSAGE_CHARS = 500
+
 SYSTEM_PROMPT = (
-    "你是一位专业的医院AI分诊助手。你的唯一职责是通过与患者对话，引导并收集关键症状信息，最终判断出应该前往哪个科室就诊。\n\n"
-    "【你的行为准则】\n"
-    "1. 如果患者的描述信息不足以判断科室（比如只说了'你好'、'不舒服'等模糊表述），你必须礼貌地追问，引导患者描述具体症状、持续时间、部位等关键信息。\n"
-    "2. 当你根据对话内容有足够的信心判断出科室时，在回复中标记科室，但不要擅自结束对话——患者可能还想继续补充信息。\n"
-    "3. 你只负责分诊引导，禁止给出任何诊断结论、用药建议、检查建议或治疗方案。\n"
-    "4. 在对话过程中，尽量自然地引导患者提及：主要症状、持续时间、过敏史、既往病史。但不要一次问太多，每次1-2个问题即可。\n\n"
-    "【输出格式要求】\n"
-    "你必须严格输出一个JSON对象，不要包含任何markdown代码块包裹，格式如下：\n"
-    "{\n"
+    "你是医院AI分诊助手，只负责收集症状并推荐就诊科室。"
+    "信息不足时追问主要症状、部位、持续时间、过敏史、既往史，每次最多问1-2个问题。"
+    "禁止诊断、用药、开检查、给治疗方案。"
+    "若有胸痛、呼吸困难、意识不清、大出血、自杀等急症风险，应提示急诊/120。"
+    "只能推荐这些科室代码：SJWK(神经外科), XNK(心内科), GK(骨科), EK(儿科), FCK(妇产科)。"
+    "信息不足时 dept_determined=false 且 recommended_dept_code=null；"
+    "能判断科室时 dept_determined=true 且填写代码，后续对话除非新信息明显推翻，否则保持该科室。"
+    "symptom_summary 要持续融合已知症状、部位、持续时间、过敏史、既往史。"
+    "gender_preference 只能是 男、女、不限；妇产科默认女，患者明确偏好时按患者偏好，否则不限。"
+    "必须只返回原始JSON，不要Markdown，不要额外文字。格式：\n"
+    "{"
     '  "reply": "你要对患者说的话（中文）",\n'
     '  "dept_determined": false或true,\n'
     '  "recommended_dept_code": null或科室代码字符串,\n'
     '  "symptom_summary": "从对话中提炼的核心症状摘要（用于后续医生推荐的语义匹配），如果信息不足则填null",\n'
     '  "gender_preference": "根据症状或患者表述判断的医生性别倾向，只能填 男、女 或 不限，默认不限"\n'
-    "}\n\n"
-    "其中 recommended_dept_code 只能是以下值之一：SJWK(神经外科), XNK(心内科), GK(骨科), EK(儿科), FCK(妇产科)\n"
-    "当你尚未判断出科室时，dept_determined=false，recommended_dept_code=null。\n"
-    "当你判断出科室后，dept_determined=true，recommended_dept_code填对应的代码。\n"
-    "一旦判断出科室，后续对话中仍然保持dept_determined=true和对应的科室代码。\n"
-    "symptom_summary 应当随着每轮对话不断完善，将已知的症状、持续时间、部位等信息浓缩成一句话。\n"
-    "gender_preference 的判断规则：涉及妇产科时填女，其他情况默认填不限，除非患者明确表达了偏好。\n\n"
-    "请只返回原始JSON字符串，不要有任何额外文字。"
+    "}"
 )
 
 async def run_ai_triage(
@@ -61,7 +68,6 @@ async def run_ai_triage(
     messages: 前端传入的对话历史，格式为 [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]
     返回: {"reply": "...", "dept_determined": bool, "recommended_dept_code": str|null}
     """
-    from app.microservices.patient.config import PatientSettings
     started_at = start_ai_timer()
     settings = PatientSettings()
     api_key = api_key or settings.LLM_API_KEY
@@ -72,13 +78,7 @@ async def run_ai_triage(
     if api_key and api_key.strip():
         logger.info("🤖 [AI Triage] Invoking real LLM for multi-turn triage...")
         try:
-            # 构造完整的消息列表：system + 历史对话
-            full_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-            for msg in messages:
-                full_messages.append({
-                    "role": msg.get("role", "user"),
-                    "content": msg.get("content", "")
-                })
+            full_messages = _build_triage_llm_messages(messages)
 
             data = await AIClient(api_key=api_key, api_base=api_base).chat_json(
                 model=model,
@@ -93,9 +93,13 @@ async def run_ai_triage(
                     data["recommended_dept_code"] = None
                     data["dept_determined"] = False
                 data = TriageResultData(**data).model_dump(mode="json")
-                validation = AIResultValidator.validate_triage(
+                data, validation, confidence = await _apply_triage_trust_controls(
                     data,
-                    allowed_dept_codes=DEPT_MAP.keys(),
+                    messages,
+                    source=AISource.LLM,
+                    api_key=api_key,
+                    api_base=api_base,
+                    model=model,
                 )
 
                 logger.info(f"✅ [AI Triage] LLM response: {data}")
@@ -103,7 +107,7 @@ async def run_ai_triage(
                     data,
                     source=AISource.LLM,
                     model=model,
-                    confidence=0.85 if data.get("dept_determined") else 0.45,
+                    confidence=confidence,
                     **validation.as_result_kwargs(),
                 )
                 await record_ai_audit(
@@ -119,12 +123,19 @@ async def run_ai_triage(
     # 2. Mock 多轮对话引擎（离线/测试模式）
     logger.info("🔌 [AI Triage] Running offline Mock multi-turn triage engine...")
     data = TriageResultData(**_mock_multi_turn_triage(messages)).model_dump(mode="json")
-    validation = AIResultValidator.validate_triage(data, allowed_dept_codes=DEPT_MAP.keys())
+    data, validation, confidence = await _apply_triage_trust_controls(
+        data,
+        messages,
+        source=AISource.MOCK,
+        api_key=api_key,
+        api_base=api_base,
+        model=model,
+    )
     result = build_ai_result(
         data,
         source=AISource.MOCK,
         model="mock-triage",
-        confidence=0.65 if data.get("dept_determined") else 0.35,
+        confidence=confidence,
         warnings=["using_mock_triage_engine", *validation.warnings],
         validated=validation.is_valid,
         validator_messages=list(validation.messages),
@@ -136,6 +147,247 @@ async def run_ai_triage(
         latency_ms=elapsed_ms(started_at),
     )
     return result
+
+
+def _build_triage_llm_messages(messages: List[Dict[str, str]]) -> list[dict[str, str]]:
+    normalized_messages = _normalize_triage_messages(messages)
+    recent_messages = normalized_messages[-MAX_TRIAGE_RECENT_MESSAGES:]
+    older_messages = normalized_messages[:-MAX_TRIAGE_RECENT_MESSAGES]
+
+    llm_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    memory = _build_triage_memory(older_messages)
+    if memory:
+        llm_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "以下是较早对话的压缩记忆，仅作为上下文参考；"
+                    "如果和最近对话冲突，以最近对话为准。\n"
+                    f"{memory}"
+                ),
+            }
+        )
+    llm_messages.extend(recent_messages)
+    return llm_messages
+
+
+def _normalize_triage_messages(messages: List[Dict[str, str]]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for message in messages:
+        role = message.get("role") if isinstance(message, dict) else "user"
+        content = str(message.get("content") or "") if isinstance(message, dict) else ""
+        if role not in {"user", "assistant"}:
+            role = "user"
+        content = str(redact_sensitive_data(content))
+        content = _compact_text(content, MAX_TRIAGE_MESSAGE_CHARS)
+        if content:
+            normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def _build_triage_memory(messages: list[dict[str, str]]) -> str:
+    if not messages:
+        return ""
+
+    older_user_text = "；".join(
+        message["content"] for message in messages if message["role"] == "user"
+    )
+    older_assistant_text = "；".join(
+        message["content"] for message in messages if message["role"] == "assistant"
+    )
+
+    memory_parts: list[str] = []
+    if older_user_text:
+        memory_parts.append(
+            "较早患者表述摘要："
+            + _compact_text(older_user_text, MAX_TRIAGE_MEMORY_CHARS)
+        )
+
+    dept_hints = _extract_dept_hints(older_assistant_text)
+    if dept_hints:
+        memory_parts.append("较早科室判断线索：" + "、".join(dept_hints))
+
+    emergency_terms = AIResultValidator.detect_emergency_terms(older_user_text)
+    if emergency_terms:
+        memory_parts.append("较早急症风险词：" + "、".join(emergency_terms))
+
+    return "\n".join(memory_parts)
+
+
+def _extract_dept_hints(text: str) -> list[str]:
+    hints: list[str] = []
+    for code, name in DEPT_MAP.items():
+        if code in text or name in text:
+            hints.append(f"{code}({name})")
+    return hints
+
+
+def _compact_text(text: str, max_chars: int) -> str:
+    compacted = " ".join(str(text or "").split())
+    if len(compacted) <= max_chars:
+        return compacted
+    return compacted[: max_chars - 3] + "..."
+
+
+async def _apply_triage_trust_controls(
+    data: dict[str, Any],
+    messages: List[Dict[str, str]],
+    *,
+    source: AISource,
+    api_key: str | None,
+    api_base: str | None,
+    model: str | None,
+) -> tuple[dict[str, Any], AIValidationResult, float]:
+    data = dict(data)
+    patient_text = _collect_user_text(messages)
+    guardrail_warnings: list[str] = []
+
+    precheck = AIResultValidator.secondary_verify_triage(data, patient_text=patient_text)
+    if not precheck.is_valid:
+        data["reply"] = (
+            "您描述的症状可能存在急症风险，请立即前往急诊科就诊，"
+            "如症状严重或正在加重，请立刻拨打120。"
+        )
+        data["dept_determined"] = False
+        data["recommended_dept_code"] = None
+        data["symptom_summary"] = data.get("symptom_summary") or patient_text[:200] or None
+        guardrail_warnings.append("secondary_triage_guardrail_applied")
+
+    dept_exists_in_db = None
+    if data.get("dept_determined") and data.get("recommended_dept_code"):
+        dept_exists_in_db = await _department_exists_in_db(data["recommended_dept_code"])
+
+    primary = AIResultValidator.validate_triage(
+        data,
+        allowed_dept_codes=DEPT_MAP.keys(),
+        dept_exists_in_db=dept_exists_in_db,
+        require_db_fact_check=bool(data.get("dept_determined") and data.get("recommended_dept_code")),
+    )
+    secondary = AIResultValidator.secondary_verify_triage(data, patient_text=patient_text)
+    if guardrail_warnings:
+        secondary = AIResultValidator.combine(
+            secondary,
+            AIValidationResult(True, warnings=tuple(guardrail_warnings)),
+        )
+    validation = AIResultValidator.combine(primary, secondary)
+    confidence = _calculate_triage_confidence(
+        data,
+        validation=validation,
+        patient_text=patient_text,
+        source=source,
+        dept_exists_in_db=dept_exists_in_db,
+    )
+    llm_review = await review_triage_result(
+        data=data,
+        patient_text=patient_text,
+        validation=validation,
+        confidence=confidence,
+        api_key=api_key,
+        api_base=api_base,
+        model=model,
+    )
+    validation = AIResultValidator.combine(validation, llm_review)
+    confidence = _calculate_triage_confidence(
+        data,
+        validation=validation,
+        patient_text=patient_text,
+        source=source,
+        dept_exists_in_db=dept_exists_in_db,
+    )
+    return data, validation, confidence
+
+
+def _calculate_triage_confidence(
+    data: dict[str, Any],
+    *,
+    validation: AIValidationResult,
+    patient_text: str,
+    source: AISource,
+    dept_exists_in_db: bool | None,
+) -> float:
+    score = 0.56 if source == AISource.LLM else 0.42
+
+    has_patient_text = len(patient_text.strip()) >= 6
+    has_summary = len(str(data.get("symptom_summary") or "").strip()) >= 8
+    has_dept = bool(data.get("dept_determined") and data.get("recommended_dept_code"))
+
+    if has_dept:
+        score += 0.18
+    elif has_patient_text:
+        score += 0.04
+    else:
+        score -= 0.08
+
+    if has_summary:
+        score += 0.08
+
+    if _contains_triage_detail(patient_text):
+        score += 0.06
+
+    if dept_exists_in_db is True:
+        score += 0.08
+    elif dept_exists_in_db is False:
+        score -= 0.25
+
+    emergency_terms = AIResultValidator.detect_emergency_terms(patient_text)
+    if emergency_terms:
+        score -= 0.08
+        reply = str(data.get("reply") or "")
+        if any(term in reply for term in ("急诊", "急救", "120", "立即")):
+            score += 0.08
+
+    meaningful_warnings = [
+        warning
+        for warning in validation.warnings
+        if not warning.endswith("_llm_second_review_unavailable")
+        and "fact_check_unavailable" not in warning
+    ]
+    score -= min(0.30, len(validation.messages) * 0.10)
+    score -= min(0.15, len(meaningful_warnings) * 0.04)
+    if not validation.is_valid:
+        score -= 0.12
+
+    return _clamp_confidence(score)
+
+
+def _contains_triage_detail(text: str) -> bool:
+    detail_terms = (
+        "天",
+        "小时",
+        "分钟",
+        "部位",
+        "左",
+        "右",
+        "持续",
+        "疼",
+        "痛",
+        "发热",
+        "咳嗽",
+        "外伤",
+        "过敏",
+        "病史",
+    )
+    return any(term in text for term in detail_terms)
+
+
+def _clamp_confidence(value: float) -> float:
+    return round(max(0.05, min(0.95, value)), 2)
+
+
+def _collect_user_text(messages: List[Dict[str, str]]) -> str:
+    return " ".join(
+        str(message.get("content") or "")
+        for message in messages
+        if message.get("role") == "user"
+    )
+
+
+async def _department_exists_in_db(dept_code: str) -> bool | None:
+    try:
+        return await AuthClient.get_department_by_code(dept_code) is not None
+    except Exception as exc:
+        logger.warning("[AI Triage] Department fact check unavailable: %s", exc)
+        return None
 
 
 def _mock_multi_turn_triage(messages: List[Dict[str, str]]) -> Dict[str, Any]:
