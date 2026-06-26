@@ -1,6 +1,8 @@
 # 环境
 venv/
 env/
+.venv/
+.venv*/
 .env
 
 # 缓存

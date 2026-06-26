@@ -7,8 +7,10 @@ AI 智能分诊 - 多轮对话引擎
 
 import logging
 from typing import Dict, Any, List
+from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
 from app.common.ai_client import AIClient
 from app.common.ai_schema import AISource, TriageResultData, build_ai_result
+from app.common.ai_validator import AIResultValidator
 
 logger = logging.getLogger("patient.ai_triage")
 
@@ -60,6 +62,7 @@ async def run_ai_triage(
     返回: {"reply": "...", "dept_determined": bool, "recommended_dept_code": str|null}
     """
     from app.microservices.patient.config import PatientSettings
+    started_at = start_ai_timer()
     settings = PatientSettings()
     api_key = api_key or settings.LLM_API_KEY
     api_base = api_base or settings.LLM_API_BASE
@@ -90,29 +93,49 @@ async def run_ai_triage(
                     data["recommended_dept_code"] = None
                     data["dept_determined"] = False
                 data = TriageResultData(**data).model_dump(mode="json")
+                validation = AIResultValidator.validate_triage(
+                    data,
+                    allowed_dept_codes=DEPT_MAP.keys(),
+                )
 
                 logger.info(f"✅ [AI Triage] LLM response: {data}")
-                return build_ai_result(
+                result = build_ai_result(
                     data,
                     source=AISource.LLM,
                     model=model,
                     confidence=0.85 if data.get("dept_determined") else 0.45,
-                    validated=True,
+                    **validation.as_result_kwargs(),
                 )
+                await record_ai_audit(
+                    module_name="patient.triage",
+                    input_text=messages,
+                    result=result,
+                    latency_ms=elapsed_ms(started_at),
+                )
+                return result
         except Exception as e:
             logger.error(f"⚠️ [AI Triage] LLM invocation failed: {e}. Falling back to Mock...")
 
     # 2. Mock 多轮对话引擎（离线/测试模式）
     logger.info("🔌 [AI Triage] Running offline Mock multi-turn triage engine...")
     data = TriageResultData(**_mock_multi_turn_triage(messages)).model_dump(mode="json")
-    return build_ai_result(
+    validation = AIResultValidator.validate_triage(data, allowed_dept_codes=DEPT_MAP.keys())
+    result = build_ai_result(
         data,
         source=AISource.MOCK,
         model="mock-triage",
         confidence=0.65 if data.get("dept_determined") else 0.35,
-        warnings=["using_mock_triage_engine"],
-        validated=True,
+        warnings=["using_mock_triage_engine", *validation.warnings],
+        validated=validation.is_valid,
+        validator_messages=list(validation.messages),
     )
+    await record_ai_audit(
+        module_name="patient.triage",
+        input_text=messages,
+        result=result,
+        latency_ms=elapsed_ms(started_at),
+    )
+    return result
 
 
 def _mock_multi_turn_triage(messages: List[Dict[str, str]]) -> Dict[str, Any]:

@@ -6,7 +6,14 @@ from .config import settings
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    nacos_manager.register_service(settings.SERVICE_NAME, "127.0.0.1", settings.SERVICE_PORT)
+    import os, socket
+    service_host = os.getenv("SERVICE_HOST")
+    if not service_host:
+        try:
+            service_host = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            service_host = "127.0.0.1"
+    nacos_manager.register_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
     
     import asyncio
     from .mq_worker import start_vector_sync_listener
@@ -17,7 +24,7 @@ async def lifespan(app: FastAPI):
     yield
     worker_task.cancel()
     outbox_task.cancel()
-    nacos_manager.deregister_service(settings.SERVICE_NAME, "127.0.0.1", settings.SERVICE_PORT)
+    nacos_manager.deregister_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
 
 app = FastAPI(title="Auth Service", version="1.0.0", lifespan=lifespan)
 

@@ -52,7 +52,7 @@ class AIClient:
         model: str,
         messages: list[dict[str, str]],
         temperature: float = 0.2,
-        timeout: float = 10.0,
+        timeout: float = 30.0,
         max_tokens: Optional[int] = None,
     ) -> Optional[str]:
         if not self.is_configured:
@@ -119,7 +119,7 @@ class AIClient:
         *,
         model: str,
         text: str,
-        timeout: float = 10.0,
+        timeout: float = 30.0,
     ) -> Optional[list[float]]:
         if not self.is_configured:
             logger.info("[AIClient] API key/base not configured; skipping embedding.")

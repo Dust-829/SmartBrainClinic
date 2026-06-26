@@ -7,8 +7,10 @@ import re
 from datetime import date, timedelta
 from typing import Dict, Any
 from ..config import settings
+from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
 from app.common.ai_client import AIClient
 from app.common.ai_schema import AISource, SchedulingParseData, build_ai_result
+from app.common.ai_validator import AIResultValidator
 
 logger = logging.getLogger("patient.ai_scheduling")
 
@@ -88,6 +90,7 @@ async def run_ai_scheduling(
     api_key = api_key or settings.LLM_API_KEY
     api_base = api_base or settings.LLM_API_BASE
     model = model or settings.LLM_MODEL
+    started_at = start_ai_timer()
     
     today = date.today()
     today_str = today.strftime("%Y-%m-%d")
@@ -131,14 +134,23 @@ async def run_ai_scheduling(
             )
             if isinstance(data, dict) and "actions" in data:
                 data = SchedulingParseData(**data).model_dump(mode="json")
+                validation = AIResultValidator.validate_scheduling(data)
                 logger.info(f"✅ [AI Scheduling] Real LLM parsing succeeded: {data}")
-                return build_ai_result(
+                result = build_ai_result(
                     data,
                     source=AISource.LLM,
                     model=model,
                     confidence=0.8,
-                    validated=True,
+                    **validation.as_result_kwargs(),
                 )
+                await record_ai_audit(
+                    module_name="patient.scheduling",
+                    input_text=prompt,
+                    result=result,
+                    context={"employee_uuid": employee_uuid},
+                    latency_ms=elapsed_ms(started_at),
+                )
+                return result
         except Exception as e:
             logger.error(f"⚠️ [AI Scheduling] Real LLM invocation failed: {e}. Falling back to offline engine...")
 
@@ -251,11 +263,21 @@ async def run_ai_scheduling(
         "llm_text_rule": rule_desc
     }
     data = SchedulingParseData(**data).model_dump(mode="json")
-    return build_ai_result(
+    validation = AIResultValidator.validate_scheduling(data)
+    result = build_ai_result(
         data,
         source=AISource.RULE,
         model="rule-scheduling-parser",
         confidence=0.6 if actions else 0.2,
-        warnings=["using_rule_based_scheduling_parser"],
-        validated=True,
+        warnings=["using_rule_based_scheduling_parser", *validation.warnings],
+        validated=validation.is_valid,
+        validator_messages=list(validation.messages),
     )
+    await record_ai_audit(
+        module_name="patient.scheduling",
+        input_text=prompt,
+        result=result,
+        context={"employee_uuid": employee_uuid},
+        latency_ms=elapsed_ms(started_at),
+    )
+    return result

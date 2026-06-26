@@ -6,8 +6,10 @@ import json
 import logging
 from typing import List
 from ..config import settings
+from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
 from app.common.ai_client import AIClient
 from app.common.ai_schema import AISource, PrescriptionRecommendationData, build_ai_result
+from app.common.ai_validator import AIResultValidator
 
 logger = logging.getLogger("pharmacy.ai_prescription")
 
@@ -26,6 +28,7 @@ async def run_ai_prescription(
     api_key = api_key or settings.LLM_API_KEY
     api_base = api_base or settings.LLM_API_BASE
     model = model or settings.LLM_MODEL
+    started_at = start_ai_timer()
     
     # 提取病历核心字段
     diagnosis = medical_record.get("diagnosis") or ""
@@ -81,14 +84,32 @@ async def run_ai_prescription(
                     PrescriptionRecommendationData(**item).model_dump(mode="json")
                     for item in recommendations
                 ]
+                validation = AIResultValidator.validate_prescription(
+                    recommendations,
+                    patient_allergy=allergy,
+                )
                 logger.info(f"✅ [AI Prescription] Real LLM prescription succeeded: {recommendations}")
-                return build_ai_result(
+                result = build_ai_result(
                     recommendations,
                     source=AISource.LLM,
                     model=model,
                     confidence=0.75,
-                    validated=True,
+                    **validation.as_result_kwargs(),
                 )
+                await record_ai_audit(
+                    module_name="pharmacy.prescription",
+                    input_text={
+                        "diagnosis": diagnosis,
+                        "readme": readme,
+                        "present": present,
+                        "history": history,
+                        "allergy": allergy,
+                        "available_drug_count": len(available_drugs),
+                    },
+                    result=result,
+                    latency_ms=elapsed_ms(started_at),
+                )
+                return result
         except Exception as e:
             logger.error(f"⚠️ [AI Prescription] Real LLM invocation failed: {e}. Falling back to offline engine...")
 
@@ -197,11 +218,30 @@ async def run_ai_prescription(
         PrescriptionRecommendationData(**item).model_dump(mode="json")
         for item in recommendations
     ]
-    return build_ai_result(
+    validation = AIResultValidator.validate_prescription(
+        recommendations,
+        patient_allergy=allergy,
+    )
+    result = build_ai_result(
         recommendations,
         source=AISource.RULE,
         model="rule-prescription-engine",
         confidence=0.6,
-        warnings=["using_rule_based_prescription_engine"],
-        validated=True,
+        warnings=["using_rule_based_prescription_engine", *validation.warnings],
+        validated=validation.is_valid,
+        validator_messages=list(validation.messages),
     )
+    await record_ai_audit(
+        module_name="pharmacy.prescription",
+        input_text={
+            "diagnosis": diagnosis,
+            "readme": readme,
+            "present": present,
+            "history": history,
+            "allergy": allergy,
+            "available_drug_count": len(available_drugs),
+        },
+        result=result,
+        latency_ms=elapsed_ms(started_at),
+    )
+    return result

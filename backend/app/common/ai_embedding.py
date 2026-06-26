@@ -8,7 +8,9 @@ import random
 from typing import Optional
 from app.common.ai_client import AIClient
 from app.common.config import BaseMicroserviceSettings
+from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
 from app.common.ai_schema import AISource, build_ai_result
+from app.common.ai_validator import AIResultValidator
 
 logger = logging.getLogger("common.ai_embedding")
 
@@ -62,16 +64,23 @@ async def get_embedding_result(
     api_base: str = None,
     model: str = None,
 ) -> dict:
+    started_at = start_ai_timer()
     settings = BaseMicroserviceSettings()
     model_name = model or getattr(settings, "LLM_EMBEDDING_MODEL", "BAAI/bge-m3")
     vector = await get_embedding(text, api_key=api_key, api_base=api_base, model=model)
     source = AISource.EMBEDDING if vector is not None else AISource.FALLBACK
-    warnings = [] if vector is not None else ["embedding_unavailable"]
-    return build_ai_result(
+    validation = AIResultValidator.validate_embedding(vector)
+    result = build_ai_result(
         {"vector": vector, "dimension": len(vector) if vector else 0},
         source=source,
         model=model_name,
         confidence=1.0 if vector is not None else 0.0,
-        warnings=warnings,
-        validated=vector is not None,
+        **validation.as_result_kwargs(),
     )
+    await record_ai_audit(
+        module_name="embedding",
+        input_text=text,
+        result={**result, "data": {"dimension": len(vector) if vector else 0}},
+        latency_ms=elapsed_ms(started_at),
+    )
+    return result
