@@ -1,15 +1,24 @@
 from datetime import datetime
 from decimal import Decimal
+import asyncio
 import random
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..models.bill import OutpatientBill, OutpatientBillDetail
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from ..models.bill import BillingItemChargeLock, OutpatientBill, OutpatientBillDetail
 from .internal_client import PatientClient, MedicalClient, PharmacyClient
 import uuid as uuid_pkg
 from app.common.clients import AuthClient
 import json
 from ..models.bill import OutboxEvent
 from sqlalchemy import select
-from app.common.enums import VisitState
+from app.common.enums import (
+    BillState,
+    VisitState,
+)
+from app.common.idempotency import begin_idempotency, complete_idempotency, fail_idempotency
+from app.common.state_machine import (
+    ensure_bill_transition,
+)
 
 def _gen_bill_code() -> str:
     now = datetime.now()
@@ -17,7 +26,83 @@ def _gen_bill_code() -> str:
     seq = random.randint(1000, 9999)
     return f"FP{now.strftime('%Y%m%d%H%M%S')}{seq}"
 
+
+def _item_key(detail: dict) -> tuple[str, str]:
+    return detail["item_type"], detail["item_source_id"]
+
+
+def _ensure_no_duplicate_request_items(detail_records: list[dict]) -> None:
+    seen: set[tuple[str, str]] = set()
+    duplicates: list[str] = []
+    for detail in detail_records:
+        key = _item_key(detail)
+        if key in seen:
+            duplicates.append(f"{key[0]}:{key[1]}")
+        seen.add(key)
+
+    if duplicates:
+        raise ValueError(f"同一收费请求中包含重复项目: {', '.join(duplicates)}")
+
+
+async def _reserve_bill_items(
+    session: AsyncSession,
+    bill: OutpatientBill,
+    detail_records: list[dict],
+) -> None:
+    """
+    Reserve source items in the billing database before writing bill details.
+
+    The unique constraint on (item_type, item_source_id) is the concurrency
+    guard: two different idempotency keys can race, but only one transaction can
+    reserve a source item.
+    """
+    _ensure_no_duplicate_request_items(detail_records)
+    values = [
+        {
+            "item_type": detail["item_type"],
+            "item_source_id": detail["item_source_id"],
+            "bill_id": bill.id,
+            "bill_code": bill.bill_code,
+        }
+        for detail in detail_records
+    ]
+    if not values:
+        return
+
+    stmt = (
+        pg_insert(BillingItemChargeLock)
+        .values(values)
+        .on_conflict_do_nothing(index_elements=["item_type", "item_source_id"])
+        .returning(BillingItemChargeLock.item_type, BillingItemChargeLock.item_source_id)
+    )
+    result = await session.execute(stmt)
+    reserved_keys = {(row[0], row[1]) for row in result.all()}
+    expected_keys = [_item_key(detail) for detail in detail_records]
+
+    if len(reserved_keys) != len(expected_keys):
+        conflicts = [
+            f"{item_type}:{item_source_id}"
+            for item_type, item_source_id in expected_keys
+            if (item_type, item_source_id) not in reserved_keys
+        ]
+        raise ValueError(f"重复扣款拦截: 以下项目已被其他账单占用: {', '.join(conflicts)}")
+
+
 async def create_bill(session: AsyncSession, data: dict) -> dict:
+    idempotency_key = data.get("idempotency_key")
+    idem = await begin_idempotency(
+        session,
+        scope="billing.create_bill",
+        idempotency_key=idempotency_key,
+        request_payload={
+            "register_uuid": str(data.get("register_uuid")),
+            "item_ids": data.get("item_ids", []),
+            "pay_method": data.get("pay_method", "微信"),
+            "settle_category_uuid": str(data.get("settle_category_uuid")) if data.get("settle_category_uuid") else None,
+        },
+    )
+    if idem and idem.is_replay:
+        return idem.response or {}
     
     reg = await PatientClient.get_register(data["register_uuid"])
     if not reg:
@@ -39,7 +124,6 @@ async def create_bill(session: AsyncSession, data: dict) -> dict:
     detail_records = []
 
     # 1. 分类聚合请求
-    import asyncio
     check_uuids, inspection_uuids, disposal_uuids, drug_uuids = [], [], [], []
     for item in data["item_ids"]:
         item_type = item["type"]
@@ -63,10 +147,15 @@ async def create_bill(session: AsyncSession, data: dict) -> dict:
     # 2. 并发发起批量网络请求 (极大消除 N+1 瓶颈)
     medical_data, pharmacy_data = await asyncio.gather(
         MedicalClient.get_requests_batch(check_uuids, inspection_uuids, disposal_uuids),
-        PharmacyClient.get_prescription_items_batch(drug_uuids)
+        PharmacyClient.get_prescription_items_for_billing(drug_uuids)
     )
     
     pharmacy_dict = {pi["uuid"]: pi for pi in pharmacy_data} if pharmacy_data else {}
+    pharmacy_by_prescription = {}
+    for pi in pharmacy_data or []:
+        prescription_key = pi.get("prescription_uuid") or str(pi.get("prescription_id"))
+        pharmacy_by_prescription.setdefault(prescription_key, []).append(pi)
+    charged_prescriptions = set()
 
     # 3. 内存处理与计算
     for item in data["item_ids"]:
@@ -95,8 +184,33 @@ async def create_bill(session: AsyncSession, data: dict) -> dict:
                 raise ValueError(f"项目所有权校验失败: 无法为不属于当前挂号单的药品处方项 {item_id} 缴费")
             if pi.get("drug_state") != "开立":
                 raise ValueError(f"重复扣款拦截: 药品处方项 {item_id} 已处于 '{pi.get('drug_state')}' 状态")
-                
-            amount = Decimal(str(pi.get("price", "0.00"))) * pi.get("drug_number", 1)
+
+            prescription_key = pi.get("prescription_uuid") or str(pi.get("prescription_id"))
+            if prescription_key in charged_prescriptions:
+                continue
+
+            prescription_items = pharmacy_by_prescription.get(prescription_key, [])
+            if not prescription_items:
+                raise ValueError(f"处方收费失败：无法加载处方 {prescription_key} 的完整明细")
+
+            for prescription_item in prescription_items:
+                if str(prescription_item.get("register_uuid")) != str(reg["uuid"]):
+                    raise ValueError(f"项目所有权校验失败: 处方 {prescription_key} 中存在不属于当前挂号单的药品")
+                if prescription_item.get("drug_state") != "开立":
+                    raise ValueError(
+                        "重复扣款拦截: "
+                        f"药品处方项 {prescription_item.get('uuid')} 已处于 '{prescription_item.get('drug_state')}' 状态"
+                    )
+
+                amount = Decimal(str(prescription_item.get("price", "0.00"))) * prescription_item.get("drug_number", 1)
+                total_amount += amount
+                detail_records.append({
+                    "item_type": item_type,
+                    "item_source_id": prescription_item["uuid"],
+                    "amount": amount,
+                })
+            charged_prescriptions.add(prescription_key)
+            continue
 
         total_amount += amount
         detail_records.append({"item_type": item_type, "item_source_id": item_id, "amount": amount})
@@ -121,10 +235,12 @@ async def create_bill(session: AsyncSession, data: dict) -> dict:
         settle_category_uuid=settle_category_uuid,
         pay_method=data.get("pay_method", "微信"),
         transaction_id=transaction_id,
-        bill_state="已收费",
+        bill_state=BillState.PAID.value,
     )
     session.add(bill)
     await session.flush()
+
+    await _reserve_bill_items(session, bill, detail_records)
 
     for d in detail_records:
         detail = OutpatientBillDetail(
@@ -156,21 +272,66 @@ async def create_bill(session: AsyncSession, data: dict) -> dict:
     session.add(evt_medical)
     session.add(evt_pharmacy)
 
-    # 强制提交事务，确保账单与发件箱事件原子落盘
-    await session.commit()
-    await session.refresh(bill)
-
-    return {
+    result = {
         "uuid": str(bill.uuid),
         "bill_code": bill.bill_code,
         "total_amount": str(bill.total_amount),
         "transaction_id": bill.transaction_id,
     }
+    await complete_idempotency(session, idem, result)
 
-async def refund_bill(session: AsyncSession, bill_code: str) -> dict:
+    # 强制提交事务，确保账单、发件箱事件与幂等记录原子落盘
+    await session.commit()
+    await session.refresh(bill)
+
+    return result
+
+def _split_refund_details(details: list[OutpatientBillDetail]) -> tuple[list[dict], list[str]]:
+    medical_items = []
+    drug_item_uuids = []
+    for detail in details:
+        if detail.item_type in ["检查", "检验", "处置"]:
+            medical_items.append({"type": detail.item_type, "id": detail.item_source_id})
+        elif detail.item_type == "药品":
+            drug_item_uuids.append(detail.item_source_id)
+        else:
+            raise ValueError(f"未知退费项目类型: {detail.item_type}")
+    return medical_items, drug_item_uuids
+
+
+async def _refund_downstream_items(details: list[OutpatientBillDetail]) -> None:
+    medical_items, drug_item_uuids = _split_refund_details(details)
+    if medical_items:
+        await MedicalClient.refund_items(medical_items)
+    if drug_item_uuids:
+        await PharmacyClient.refund_items(drug_item_uuids)
+
+
+async def _mark_refund_failed(session: AsyncSession, bill_code: str, idem) -> None:
+    stmt = select(OutpatientBill).where(OutpatientBill.bill_code == bill_code).with_for_update()
+    result = await session.execute(stmt)
+    bill = result.scalar_one_or_none()
+    if bill and bill.bill_state != BillState.REFUNDED.value:
+        target_state = ensure_bill_transition(bill.bill_state, BillState.REFUND_FAILED)
+        bill.bill_state = target_state.value
+        session.add(bill)
+    await fail_idempotency(session, idem)
+    await session.commit()
+
+async def refund_bill(session: AsyncSession, bill_code: str, idempotency_key: str = None) -> dict:
     """
-    退费逻辑：变更为已退费，并通过 MQ 通知医疗和药房取消相关单据执行
+    退费逻辑：先标记退费中，再同步调用下游原子退费接口；
+    只有所有下游项目退费成功后，账单才进入已退费。
     """
+    idem = await begin_idempotency(
+        session,
+        scope="billing.refund_bill",
+        idempotency_key=idempotency_key,
+        request_payload={"bill_code": bill_code},
+    )
+    if idem and idem.is_replay:
+        return idem.response or {}
+
     # 增加行级悲观锁，防止并发退费
     stmt = select(OutpatientBill).where(OutpatientBill.bill_code == bill_code).with_for_update()
     result = await session.execute(stmt)
@@ -179,47 +340,49 @@ async def refund_bill(session: AsyncSession, bill_code: str) -> dict:
     if not bill:
         raise ValueError("收费单不存在")
         
-    if bill.bill_state == "已退费":
+    if bill.bill_state == BillState.REFUNDED.value:
         raise ValueError("该单据已经是已退费状态，请勿重复操作")
-        
-    bill.bill_state = "已退费"
-    session.add(bill)
     
-    # 查找关联的明细，准备 MQ 消息
+    # 查找关联明细，后续同步调用下游原子退费接口
     stmt_detail = select(OutpatientBillDetail).where(OutpatientBillDetail.bill_id == bill.id)
     detail_result = await session.execute(stmt_detail)
     details = detail_result.scalars().all()
-    
-    await session.flush()
-    
-    # 发件箱模式投递退费成功事件
-    message_payload = {
-        "bill_code": bill.bill_code,
-        "items": [
-            {"type": d.item_type, "id": d.item_source_id}
-            for d in details
-        ]
-    }
-    
-    evt_medical = OutboxEvent(
-        topic="billing.refund.success.medical",
-        payload=json.dumps(message_payload, ensure_ascii=False)
-    )
-    evt_pharmacy = OutboxEvent(
-        topic="billing.refund.success.pharmacy",
-        payload=json.dumps(message_payload, ensure_ascii=False)
-    )
-    session.add(evt_medical)
-    session.add(evt_pharmacy)
-    
-    # 因为 FastAPI 的 get_session 通常是在整个请求结束时统一提交，或者调用者自己 flush，这里为了发件箱立刻生效，显式提交
+
+    if bill.bill_state != BillState.REFUNDING.value:
+        target_state = ensure_bill_transition(bill.bill_state, BillState.REFUNDING)
+        bill.bill_state = target_state.value
+        session.add(bill)
+
     await session.commit()
-        
-    return {
+
+    try:
+        await _refund_downstream_items(details)
+    except Exception as exc:
+        await _mark_refund_failed(session, bill_code, idem)
+        raise ValueError(f"退费下游处理失败: {exc}") from exc
+
+    stmt = select(OutpatientBill).where(OutpatientBill.bill_code == bill_code).with_for_update()
+    result = await session.execute(stmt)
+    bill = result.scalar_one_or_none()
+    if not bill:
+        raise ValueError("收费单不存在")
+
+    if bill.bill_state != BillState.REFUNDED.value:
+        target_state = ensure_bill_transition(bill.bill_state, BillState.REFUNDED)
+        bill.bill_state = target_state.value
+        session.add(bill)
+    
+    result = {
         "bill_code": bill.bill_code,
         "bill_state": bill.bill_state,
         "refund_amount": str(bill.total_amount)
     }
+    await complete_idempotency(session, idem, result)
+
+    # 因为 FastAPI 的 get_session 通常是在整个请求结束时统一提交，或者调用者自己 flush，这里为了发件箱立刻生效，显式提交
+    await session.commit()
+
+    return result
 
 
 async def get_bills_by_register(session: AsyncSession, register_uuid: uuid_pkg.UUID) -> list[dict]:

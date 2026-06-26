@@ -69,6 +69,18 @@ class BaseClient:
                 return resp.json()["data"]
             return None
 
+    @staticmethod
+    async def post_required(url: str, json_data: dict = None):
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, json=json_data)
+            if resp.status_code in (200, 201):
+                return resp.json()["data"]
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except Exception:
+                detail = resp.text
+            raise ValueError(f"下游服务调用失败 {resp.status_code}: {detail}")
+
 
 class AuthClient:
     @staticmethod
@@ -231,6 +243,11 @@ class MedicalClient:
         res = await BaseClient.post(url, json_data=payload)
         return res if res is not None else {"checks": {}, "inspections": {}, "disposals": {}}
 
+    @staticmethod
+    async def refund_items(items: list[dict]):
+        url = f"{BaseClient.get_url('medical')}/refund-items"
+        return await BaseClient.post_required(url, json_data={"items": items})
+
 
 class PharmacyClient:
     @staticmethod
@@ -253,6 +270,17 @@ class PharmacyClient:
         url = f"{BaseClient.get_url('pharmacy')}/prescription-items/batch"
         res = await BaseClient.post(url, json_data={"item_uuids": item_uuids})
         return res if res is not None else []
+
+    @staticmethod
+    async def get_prescription_items_for_billing(item_uuids: list[str]):
+        url = f"{BaseClient.get_url('pharmacy')}/prescription-items/billing-batch"
+        res = await BaseClient.post(url, json_data={"item_uuids": item_uuids})
+        return res if res is not None else []
+
+    @staticmethod
+    async def refund_items(item_uuids: list[str]):
+        url = f"{BaseClient.get_url('pharmacy')}/refund-items"
+        return await BaseClient.post_required(url, json_data={"item_uuids": item_uuids})
 
 class BillingClient:
     @staticmethod

@@ -1,5 +1,5 @@
 import uuid as uuid_pkg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..services import patient_service as svc
@@ -64,6 +64,7 @@ class ConfirmPaymentRequest(BaseModel):
     register_uuid: uuid_pkg.UUID
     pay_method: str = "微信"
     amount: float = 0.01
+    idempotency_key: Optional[str] = None
 
 @router.post("", summary="患者注册建档")
 async def create_patient_record(data: PatientCreate, session: AsyncSession = Depends(get_session)):
@@ -163,13 +164,18 @@ async def online_register(data: OnlineRegisterCreate, session: AsyncSession = De
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/online-register/pay", summary="线上支付模拟与激活")
-async def confirm_payment(data: ConfirmPaymentRequest, session: AsyncSession = Depends(get_session)):
+async def confirm_payment(
+    data: ConfirmPaymentRequest,
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+):
     try:
         res = await svc.confirm_online_payment(
             session=session,
             register_uuid=data.register_uuid,
             pay_method=data.pay_method,
-            amount=data.amount
+            amount=data.amount,
+            idempotency_key=idempotency_key or data.idempotency_key,
         )
         return success(res)
     except ValueError as e:
