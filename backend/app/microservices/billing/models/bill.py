@@ -2,8 +2,9 @@ import uuid as uuid_pkg
 from typing import Optional
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import Column, Text
+from sqlalchemy import Column, Text, UniqueConstraint
 from sqlmodel import SQLModel, Field
+from app.common.enums import BillState
 
 class OutpatientBill(SQLModel, table=True):
     __tablename__ = "outpatient_bill"
@@ -16,7 +17,7 @@ class OutpatientBill(SQLModel, table=True):
     pay_method: str = Field(max_length=32, nullable=False)
     pay_time: Optional[datetime] = Field(default_factory=datetime.now)
     transaction_id: Optional[str] = Field(default=None, max_length=128)
-    bill_state: str = Field(default="已收费", max_length=32, nullable=False)
+    bill_state: str = Field(default=BillState.PAID.value, max_length=32, nullable=False)
 
 class OutpatientBillDetail(SQLModel, table=True):
     __tablename__ = "outpatient_bill_detail"
@@ -26,6 +27,19 @@ class OutpatientBillDetail(SQLModel, table=True):
     item_type: str = Field(max_length=64, nullable=False)
     item_source_id: str = Field(max_length=64, nullable=False)
     amount: Decimal = Field(max_digits=8, decimal_places=2, nullable=False)
+
+class BillingItemChargeLock(SQLModel, table=True):
+    __tablename__ = "billing_item_charge_lock"
+    __table_args__ = (
+        UniqueConstraint("item_type", "item_source_id", name="uq_billing_item_charge_lock_item"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    item_type: str = Field(max_length=64, nullable=False)
+    item_source_id: str = Field(max_length=64, nullable=False)
+    bill_id: int = Field(nullable=False, foreign_key="outpatient_bill.id")
+    bill_code: str = Field(max_length=64, nullable=False)
+    created_at: Optional[datetime] = Field(default_factory=datetime.now)
 
 class OutboxEvent(SQLModel, table=True):
     __tablename__ = "outbox_event"

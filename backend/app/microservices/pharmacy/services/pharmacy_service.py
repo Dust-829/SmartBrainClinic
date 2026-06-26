@@ -8,6 +8,8 @@ from .internal_client import PatientClient, MedicalClient
 from .ai_prescription import run_ai_prescription
 from app.common.ai_schema import unwrap_ai_data
 from app.common.enums import DrugState
+from app.common.idempotency import begin_idempotency, complete_idempotency
+from app.common.state_machine import ensure_drug_transition, normalize_drug_state
 
 def _gen_prescription_code() -> str:
     now = datetime.now()
@@ -75,12 +77,11 @@ async def update_prescription_state_by_item(session: AsyncSession, item_uuid: st
     stmt_pres = select(Prescription).where(Prescription.id == pi.prescription_id).with_for_update()
     prescription = (await session.execute(stmt_pres)).scalar_one_or_none()
     if prescription:
-        # [修复退费不退库] 如果是从“已发药”状态退费，说明库存已被扣减，必须加回来
-        if state == "已退费" and prescription.drug_state == DrugState.DISPENSED:
-            stmt = update(DrugInfo).where(DrugInfo.id == pi.drug_id).values(stock=DrugInfo.stock + pi.drug_number)
-            await session.execute(stmt)
-            
-        prescription.drug_state = state
+        current_state = normalize_drug_state(prescription.drug_state)
+        target_state = ensure_drug_transition(current_state, state)
+        if target_state == DrugState.REFUNDED:
+            raise ValueError("处方退费必须按整张处方批量处理，不能只按单个处方项更新")
+        prescription.drug_state = target_state.value
         session.add(prescription)
         await session.flush()
     return prescription
@@ -105,10 +106,19 @@ async def get_prescription_item_by_uuid(session: AsyncSession, item_uuid: str) -
         "drug_number": pi.drug_number
     }
 
-async def dispense_drugs(session: AsyncSession, prescription_uuid: str) -> dict:
+async def dispense_drugs(session: AsyncSession, prescription_uuid: str, idempotency_key: str = None) -> dict:
     """
     药房发药逻辑：校验缴费状态、扣减库存、更新处方状态
     """
+    idem = await begin_idempotency(
+        session,
+        scope="pharmacy.dispense_drugs",
+        idempotency_key=idempotency_key,
+        request_payload={"prescription_uuid": str(prescription_uuid)},
+    )
+    if idem and idem.is_replay:
+        return idem.response or {}
+
     # 1. 查找处方单 (使用悲观锁，防止并发发药超扣库存)
     stmt = select(Prescription).where(Prescription.uuid == uuid_pkg.UUID(prescription_uuid)).with_for_update()
     result = await session.execute(stmt)
@@ -118,8 +128,10 @@ async def dispense_drugs(session: AsyncSession, prescription_uuid: str) -> dict:
         raise ValueError("未找到对应的处方记录")
         
     # 2. 状态校验
-    if prescription.drug_state != DrugState.PAID:
+    current_state = normalize_drug_state(prescription.drug_state)
+    if current_state != DrugState.PAID:
         raise ValueError(f"当前处方状态为 '{prescription.drug_state}'，不满足发药条件（仅限'{DrugState.PAID.value}'）")
+    target_state = ensure_drug_transition(current_state, DrugState.DISPENSED)
         
     # 3. 查找所有的处方明细
     stmt_items = select(PrescriptionItem).where(PrescriptionItem.prescription_id == prescription.id)
@@ -160,24 +172,35 @@ async def dispense_drugs(session: AsyncSession, prescription_uuid: str) -> dict:
             logging.warning(warning_msg)
         
     # 5. 更新单据发药状态
-    prescription.drug_state = DrugState.DISPENSED
+    prescription.drug_state = target_state.value
     session.add(prescription)
     
     await session.flush()
     
-    return {
+    result = {
         "prescription_uuid": str(prescription.uuid),
         "prescription_code": prescription.prescription_code,
         "drug_state": prescription.drug_state,
         "items_count": len(items),
         "stock_warnings": warnings
     }
+    await complete_idempotency(session, idem, result)
+    return result
 
 
-async def return_drugs(session: AsyncSession, prescription_uuid: str) -> dict:
+async def return_drugs(session: AsyncSession, prescription_uuid: str, idempotency_key: str = None) -> dict:
     """
     退药逻辑：检查状态、恢复库存、扭转状态为已退药
     """
+    idem = await begin_idempotency(
+        session,
+        scope="pharmacy.return_drugs",
+        idempotency_key=idempotency_key,
+        request_payload={"prescription_uuid": str(prescription_uuid)},
+    )
+    if idem and idem.is_replay:
+        return idem.response or {}
+
     # 查找处方单 (使用悲观锁，防止并发退药造成多加库存)
     stmt = select(Prescription).where(Prescription.uuid == uuid_pkg.UUID(prescription_uuid)).with_for_update()
     result = await session.execute(stmt)
@@ -186,8 +209,10 @@ async def return_drugs(session: AsyncSession, prescription_uuid: str) -> dict:
     if not prescription:
         raise ValueError("未找到对应的处方记录")
         
-    if prescription.drug_state != DrugState.DISPENSED:
+    current_state = normalize_drug_state(prescription.drug_state)
+    if current_state != DrugState.DISPENSED:
         raise ValueError(f"当前处方状态为 '{prescription.drug_state}'，未发药无法执行退药！")
+    target_state = ensure_drug_transition(current_state, DrugState.REFUNDED)
         
     stmt_items = select(PrescriptionItem).where(PrescriptionItem.prescription_id == prescription.id)
     items_result = await session.execute(stmt_items)
@@ -201,16 +226,18 @@ async def return_drugs(session: AsyncSession, prescription_uuid: str) -> dict:
         )
         await session.execute(stmt)
             
-    prescription.drug_state = DrugState.REFUNDED
+    prescription.drug_state = target_state.value
     session.add(prescription)
     await session.flush()
     
-    return {
+    result = {
         "prescription_uuid": str(prescription.uuid),
         "prescription_code": prescription.prescription_code,
         "drug_state": prescription.drug_state,
         "returned_items": len(items)
     }
+    await complete_idempotency(session, idem, result)
+    return result
 
 async def recommend_prescription(session: AsyncSession, register_uuid: uuid_pkg.UUID) -> dict:
     """
@@ -336,3 +363,135 @@ async def get_prescription_items_batch(session: AsyncSession, item_uuids: list[s
             "price": str(drug.price) if drug else "0.00"
         })
     return ret
+
+
+async def get_prescription_items_for_billing(session: AsyncSession, item_uuids: list[str]) -> list[dict]:
+    if not item_uuids:
+        return []
+
+    requested_uuid_objs = [uuid_pkg.UUID(u) for u in item_uuids]
+    stmt_requested = select(PrescriptionItem).where(PrescriptionItem.uuid.in_(requested_uuid_objs))
+    requested_result = await session.execute(stmt_requested)
+    requested_items = requested_result.scalars().all()
+    prescription_ids = sorted({item.prescription_id for item in requested_items})
+    if not prescription_ids:
+        return []
+
+    stmt_items = (
+        select(PrescriptionItem)
+        .where(PrescriptionItem.prescription_id.in_(prescription_ids))
+        .order_by(PrescriptionItem.prescription_id, PrescriptionItem.id)
+    )
+    result = await session.execute(stmt_items)
+    items = result.scalars().all()
+
+    drug_ids = sorted({item.drug_id for item in items})
+    drugs = {}
+    if drug_ids:
+        stmt_drugs = select(DrugInfo).where(DrugInfo.id.in_(drug_ids))
+        result_drugs = await session.execute(stmt_drugs)
+        drugs = {drug.id: drug for drug in result_drugs.scalars().all()}
+
+    stmt_prescriptions = select(Prescription).where(Prescription.id.in_(prescription_ids))
+    result_prescriptions = await session.execute(stmt_prescriptions)
+    prescriptions = {prescription.id: prescription for prescription in result_prescriptions.scalars().all()}
+    requested_set = {str(item_uuid) for item_uuid in requested_uuid_objs}
+
+    return [
+        _prescription_item_payload(
+            item,
+            prescriptions.get(item.prescription_id),
+            drugs.get(item.drug_id),
+            requested=str(item.uuid) in requested_set,
+        )
+        for item in items
+    ]
+
+
+async def refund_prescription_items(session: AsyncSession, item_uuids: list[str]) -> dict:
+    if not item_uuids:
+        return {"refunded_items": [], "refunded_prescriptions": []}
+
+    requested_uuid_objs = sorted({uuid_pkg.UUID(str(item_uuid)) for item_uuid in item_uuids})
+    stmt_requested = select(PrescriptionItem).where(PrescriptionItem.uuid.in_(requested_uuid_objs))
+    requested_items = list((await session.execute(stmt_requested)).scalars().all())
+    requested_by_uuid = {item.uuid: item for item in requested_items}
+    missing = [str(item_uuid) for item_uuid in requested_uuid_objs if item_uuid not in requested_by_uuid]
+    if missing:
+        raise ValueError(f"退费失败：未找到处方项 {', '.join(missing)}")
+
+    prescription_ids = sorted({item.prescription_id for item in requested_items})
+    stmt_prescriptions = (
+        select(Prescription)
+        .where(Prescription.id.in_(prescription_ids))
+        .order_by(Prescription.id)
+        .with_for_update()
+    )
+    prescriptions = list((await session.execute(stmt_prescriptions)).scalars().all())
+    prescriptions_by_id = {prescription.id: prescription for prescription in prescriptions}
+
+    stmt_all_items = (
+        select(PrescriptionItem)
+        .where(PrescriptionItem.prescription_id.in_(prescription_ids))
+        .order_by(PrescriptionItem.prescription_id, PrescriptionItem.drug_id, PrescriptionItem.id)
+    )
+    all_items = list((await session.execute(stmt_all_items)).scalars().all())
+    items_by_prescription: dict[int, list[PrescriptionItem]] = {}
+    for item in all_items:
+        items_by_prescription.setdefault(item.prescription_id, []).append(item)
+
+    requested_set = set(requested_uuid_objs)
+    for prescription_id, items in items_by_prescription.items():
+        full_set = {item.uuid for item in items}
+        if not full_set.issubset(requested_set):
+            prescription = prescriptions_by_id.get(prescription_id)
+            raise ValueError(
+                "处方退费必须包含整张处方所有项目: "
+                f"{prescription.prescription_code if prescription else prescription_id}"
+            )
+
+    refunded_items = []
+    refunded_prescriptions = []
+    for prescription in prescriptions:
+        current_state = normalize_drug_state(prescription.drug_state)
+        target_state = ensure_drug_transition(current_state, DrugState.REFUNDED)
+        if target_state == DrugState.REFUNDED and current_state == DrugState.DISPENSED:
+            for item in items_by_prescription.get(prescription.id, []):
+                stmt = update(DrugInfo).where(DrugInfo.id == item.drug_id).values(
+                    stock=DrugInfo.stock + item.drug_number
+                )
+                await session.execute(stmt)
+
+        prescription.drug_state = target_state.value
+        session.add(prescription)
+        refunded_prescriptions.append({
+            "uuid": str(prescription.uuid),
+            "prescription_code": prescription.prescription_code,
+            "drug_state": prescription.drug_state,
+        })
+        for item in items_by_prescription.get(prescription.id, []):
+            refunded_items.append({"type": "药品", "id": str(item.uuid), "state": prescription.drug_state})
+
+    await session.flush()
+    return {"refunded_items": refunded_items, "refunded_prescriptions": refunded_prescriptions}
+
+
+def _prescription_item_payload(
+    item: PrescriptionItem,
+    prescription: Prescription | None,
+    drug: DrugInfo | None,
+    *,
+    requested: bool = False,
+) -> dict:
+    return {
+        "uuid": str(item.uuid),
+        "prescription_id": item.prescription_id,
+        "prescription_uuid": str(prescription.uuid) if prescription else None,
+        "register_uuid": str(prescription.register_uuid) if prescription else None,
+        "drug_state": prescription.drug_state if prescription else None,
+        "drug_id": item.drug_id,
+        "drug_uuid": str(drug.uuid) if drug else None,
+        "drug_number": item.drug_number,
+        "price": str(drug.price) if drug else "0.00",
+        "requested": requested,
+    }

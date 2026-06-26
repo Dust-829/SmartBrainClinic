@@ -51,28 +51,18 @@ async def start_billing_refund_consumer():
         try:
             print(f"📥 [Medical Worker] Received refund message: {message}", flush=True)
             items = message.get("items", [])
-            for item in items:
-                item_type = item.get("type")
-                item_id = item.get("id")
-                
-                if item_type in ["检查", "检验", "处置"]:
-                    print(f"⚙️ [Medical Worker] Processing refund for {item_type} ID {item_id}...", flush=True)
-                    async with session_factory() as session:
-                        try:
-                            if item_type == "检查":
-                                await medical_service.update_check_state(session, item_id, "已退费")
-                            elif item_type == "检验":
-                                await medical_service.update_inspection_state(session, item_id, "已退费")
-                            elif item_type == "处置":
-                                await medical_service.update_disposal_state(session, item_id, "已退费")
-                            
-                            await session.commit()
-                            print(f"✅ [Medical Worker] Updated {item_type} ID {item_id} state to '已退费'", flush=True)
-                        except Exception as inner_e:
-                            await session.rollback()
-                            print(f"❌ [Medical Worker] Failed to update {item_type} ID {item_id} state for refund: {inner_e}", flush=True)
-                            raise inner_e
+            medical_items = [item for item in items if item.get("type") in ["检查", "检验", "处置"]]
+            if medical_items:
+                print(f"⚙️ [Medical Worker] Processing refund for {len(medical_items)} medical item(s)...", flush=True)
+                async with session_factory() as session:
+                    try:
+                        await medical_service.refund_items(session, medical_items)
+                        await session.commit()
+                        print("✅ [Medical Worker] Refunded medical items", flush=True)
+                    except Exception as inner_e:
+                        await session.rollback()
+                        print(f"❌ [Medical Worker] Failed to refund medical items: {inner_e}", flush=True)
+                        raise inner_e
         except Exception as e:
             print(f"⚠️ [Medical Worker] Error processing refund message: {e}", flush=True)
             raise e
-

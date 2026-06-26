@@ -28,6 +28,13 @@ class DisposalRequestCreate(BaseModel):
     register_uuid: uuid_pkg.UUID
     medical_technology_id: int
 
+class RefundItem(BaseModel):
+    type: str
+    id: str
+
+class RefundItemsRequest(BaseModel):
+    items: list[RefundItem]
+
 class MedicalRecordConfirm(BaseModel):
     readme: str
     present: str
@@ -171,6 +178,16 @@ async def update_disposal_state(uuid: str, state: str, session: AsyncSession = D
         raise HTTPException(status_code=404, detail="处置单不存在")
     return success({"uuid": str(disposal.uuid), "disposal_state": disposal.disposal_state})
 
+@router.post("/refund-items", summary="内部原子退费医技项目")
+async def refund_items(data: RefundItemsRequest, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.refund_items(session, [item.model_dump() for item in data.items])
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/record/draft/{register_uuid}", summary="获取AI预装载病历草稿")
 async def get_medical_record_draft(register_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
@@ -270,4 +287,3 @@ async def get_requests_batch(data: BatchRequestsInput, session: AsyncSession = D
         return success(ret)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-

@@ -1,5 +1,5 @@
 import uuid as uuid_pkg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..services import billing_service as svc
@@ -20,19 +20,30 @@ class BillPayCreate(BaseModel):
     register_uuid: uuid_pkg.UUID
     item_ids: List[BillItem]
     pay_method: str = "微信"
+    idempotency_key: str = None
 
 @router.post("/pay", summary="合并缴费")
-async def create_bill(data: BillPayCreate, session: AsyncSession = Depends(get_session)):
+async def create_bill(
+    data: BillPayCreate,
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: str = Header(default=None, alias="Idempotency-Key"),
+):
     try:
-        result = await svc.create_bill(session, data.model_dump())
+        payload = data.model_dump()
+        payload["idempotency_key"] = payload.get("idempotency_key") or idempotency_key
+        result = await svc.create_bill(session, payload)
         return created(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.put("/{bill_code}/refund", summary="执行账单退费")
-async def refund_bill(bill_code: str, session: AsyncSession = Depends(get_session)):
+async def refund_bill(
+    bill_code: str,
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: str = Header(default=None, alias="Idempotency-Key"),
+):
     try:
-        result = await svc.refund_bill(session, bill_code)
+        result = await svc.refund_bill(session, bill_code, idempotency_key=idempotency_key)
         return success(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

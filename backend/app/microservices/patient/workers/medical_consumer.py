@@ -6,6 +6,7 @@ from app.common.mq import RabbitMQClient
 from app.microservices.patient.database import session_factory
 from app.microservices.patient.models.patient import Register
 from app.microservices.patient.config import settings
+from app.common.state_machine import ensure_visit_transition
 from sqlalchemy import select
 
 logger = logging.getLogger("patient.medical_consumer")
@@ -27,7 +28,8 @@ async def process_medical_record_confirmed(msg_data: dict):
                 logger.error(f"Register not found: {register_uuid_str}")
                 return
                 
-            register.visit_state = visit_state
+            target_state = ensure_visit_transition(register.visit_state, visit_state)
+            register.visit_state = int(target_state)
             session.add(register)
             await session.commit()
             logger.info(f"Successfully updated register {register_uuid_str} state to {visit_state} via MQ")

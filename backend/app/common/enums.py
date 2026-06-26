@@ -30,3 +30,9 @@ class DrugState(str, Enum):
     PAID = "已缴费"
     DISPENSED = "已发药"
     REFUNDED = "已退费"
+
+class BillState(str, Enum):
+    PAID = "已收费"
+    REFUNDING = "退费中"
+    REFUND_FAILED = "退费失败"
+    REFUNDED = "已退费"

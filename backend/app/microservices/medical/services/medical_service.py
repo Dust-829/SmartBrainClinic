@@ -7,6 +7,12 @@ from app.common.enums import CheckState, InspectionState, DisposalState
 from app.common.ai_client import AIClient
 from app.common.ai_embedding import get_embedding
 from app.common.clients import PatientClient, AuthClient
+from app.common.state_machine import (
+    ensure_check_transition,
+    ensure_disposal_transition,
+    ensure_inspection_transition,
+    normalize_check_state,
+)
 from ..models.medical import Disease, MedicalRecordDisease
 from sqlalchemy import delete
 from datetime import datetime
@@ -170,10 +176,8 @@ async def update_check_state(session: AsyncSession, check_uuid: str, state: str)
     result = await session.execute(stmt)
     check = result.scalar_one_or_none()
     if check:
-        # 状态机防脏写/防篡改：如果已经退费，禁止再被改写为已执行等其他状态
-        if check.check_state in (CheckState.REFUNDED, CheckState.REFUNDED.value) and state not in (CheckState.REFUNDED, CheckState.REFUNDED.value):
-            raise ValueError(f"当前检查单状态为'{check.check_state}'，禁止流转至'{state}'！")
-        check.check_state = state
+        target_state = ensure_check_transition(check.check_state, state)
+        check.check_state = target_state.value
         session.add(check)
         await session.flush()
     return check
@@ -183,9 +187,8 @@ async def update_inspection_state(session: AsyncSession, inspection_uuid: str, s
     result = await session.execute(stmt)
     inspection = result.scalar_one_or_none()
     if inspection:
-        if inspection.inspection_state in (InspectionState.REFUNDED, InspectionState.REFUNDED.value) and state not in (InspectionState.REFUNDED, InspectionState.REFUNDED.value):
-            raise ValueError(f"当前检验单状态为'{inspection.inspection_state}'，禁止流转至'{state}'！")
-        inspection.inspection_state = state
+        target_state = ensure_inspection_transition(inspection.inspection_state, state)
+        inspection.inspection_state = target_state.value
         session.add(inspection)
         await session.flush()
     return inspection
@@ -195,12 +198,100 @@ async def update_disposal_state(session: AsyncSession, disposal_uuid: str, state
     result = await session.execute(stmt)
     disposal = result.scalar_one_or_none()
     if disposal:
-        if disposal.disposal_state in (DisposalState.REFUNDED, DisposalState.REFUNDED.value) and state not in (DisposalState.REFUNDED, DisposalState.REFUNDED.value):
-            raise ValueError(f"当前处置单状态为'{disposal.disposal_state}'，禁止流转至'{state}'！")
-        disposal.disposal_state = state
+        target_state = ensure_disposal_transition(disposal.disposal_state, state)
+        disposal.disposal_state = target_state.value
         session.add(disposal)
         await session.flush()
     return disposal
+
+
+async def refund_items(session: AsyncSession, items: list[dict]) -> dict:
+    check_uuids, inspection_uuids, disposal_uuids = [], [], []
+
+    for item in items:
+        item_type = item.get("type")
+        item_id = item.get("id")
+        if item_type == "检查":
+            check_uuids.append(item_id)
+        elif item_type == "检验":
+            inspection_uuids.append(item_id)
+        elif item_type == "处置":
+            disposal_uuids.append(item_id)
+        else:
+            raise ValueError(f"不支持的医技退费项目类型: {item_type}")
+
+    refunded_items = []
+    refunded_items.extend(
+        await _refund_medical_rows(
+            session,
+            CheckRequest,
+            CheckRequest.check_state,
+            check_uuids,
+            CheckState.REFUNDED,
+            ensure_check_transition,
+            "检查",
+        )
+    )
+    refunded_items.extend(
+        await _refund_medical_rows(
+            session,
+            InspectionRequest,
+            InspectionRequest.inspection_state,
+            inspection_uuids,
+            InspectionState.REFUNDED,
+            ensure_inspection_transition,
+            "检验",
+        )
+    )
+    refunded_items.extend(
+        await _refund_medical_rows(
+            session,
+            DisposalRequest,
+            DisposalRequest.disposal_state,
+            disposal_uuids,
+            DisposalState.REFUNDED,
+            ensure_disposal_transition,
+            "处置",
+        )
+    )
+    await session.flush()
+    return {"refunded_items": refunded_items}
+
+
+async def _refund_medical_rows(
+    session: AsyncSession,
+    model,
+    state_column,
+    item_uuids: list[str],
+    target_state,
+    ensure_transition,
+    item_type: str,
+) -> list[dict]:
+    if not item_uuids:
+        return []
+
+    uuid_objs = sorted({uuid_pkg.UUID(str(item_uuid)) for item_uuid in item_uuids})
+    stmt = (
+        select(model)
+        .where(model.uuid.in_(uuid_objs))
+        .order_by(model.uuid)
+        .with_for_update()
+    )
+    rows = list((await session.execute(stmt)).scalars().all())
+    rows_by_uuid = {row.uuid: row for row in rows}
+    missing = [str(item_uuid) for item_uuid in uuid_objs if item_uuid not in rows_by_uuid]
+    if missing:
+        raise ValueError(f"退费失败：未找到{item_type}项目 {', '.join(missing)}")
+
+    refunded = []
+    for row in rows:
+        current_state = getattr(row, state_column.key)
+        new_state = ensure_transition(current_state, target_state)
+        setattr(row, state_column.key, new_state.value)
+        session.add(row)
+        refunded.append({"type": item_type, "id": str(row.uuid), "state": new_state.value})
+    return refunded
+
 
 async def get_check_request_by_uuid(session: AsyncSession, check_uuid: str) -> CheckRequest:
     result = await session.execute(select(CheckRequest).where(CheckRequest.uuid == uuid_pkg.UUID(check_uuid)))
@@ -340,12 +431,13 @@ async def input_check_result(
     """
     影像科录入检查结果，自动进行 AI 推理并扭转状态
     """
-    result = await session.execute(select(CheckRequest).where(CheckRequest.uuid == uuid_pkg.UUID(check_uuid)))
+    stmt = select(CheckRequest).where(CheckRequest.uuid == uuid_pkg.UUID(check_uuid)).with_for_update()
+    result = await session.execute(stmt)
     check = result.scalar_one_or_none()
     if not check:
         raise ValueError("检查单不存在")
         
-    if check.check_state != CheckState.PAID:
+    if normalize_check_state(check.check_state) != CheckState.PAID:
         raise ValueError(f"当前检查单状态为 '{check.check_state}'，必须为 '{CheckState.PAID.value}' 状态才能执行录入")
 
     ai_prob = None
@@ -365,7 +457,8 @@ async def input_check_result(
         final_result += f"【医生出具的结论】\n{check_result}"
         
     check.check_result = final_result.strip()
-    check.check_state = CheckState.EXECUTED
+    target_state = ensure_check_transition(check.check_state, CheckState.EXECUTED)
+    check.check_state = target_state.value
     check.inputcheck_employee_uuid = inputcheck_employee_uuid
 
     check.check_time = datetime.now()

@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 from sqlalchemy import select, update
 from app.common.enums import VisitState
+from app.common.state_machine import ensure_visit_transition
 from ..database import session_factory
 from ..models.patient import Register, SchedulingActual
 
@@ -23,7 +24,8 @@ async def sweep_zombie_slots():
                 zombies = result.scalars().all()
                 
                 for zombie in zombies:
-                    zombie.visit_state = VisitState.CANCELLED
+                    target_state = ensure_visit_transition(zombie.visit_state, VisitState.CANCELLED)
+                    zombie.visit_state = int(target_state)
                     session.add(zombie)
                     
                     if zombie.scheduling_time_slot_id:

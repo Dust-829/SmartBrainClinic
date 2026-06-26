@@ -8,6 +8,8 @@ from ..models.patient import Patient, Register, SchedulingActual, SchedulingTime
 from .internal_client import AuthClient
 from .ai_scheduling import run_ai_scheduling
 from app.common.enums import VisitState
+from app.common.idempotency import begin_idempotency, complete_idempotency
+from app.common.state_machine import ensure_visit_transition
 from app.microservices.patient.ws_manager import manager as ws_manager
 
 from app.common.ai_embedding import get_embedding
@@ -688,10 +690,29 @@ async def create_online_register(session: AsyncSession, data: dict) -> dict:
         "qr_code_url": f"weixin://wxpay/bizpayurl?pr=simulated_online_reg_{register.uuid}"
     }
 
-async def confirm_online_payment(session: AsyncSession, register_uuid: uuid_pkg.UUID, pay_method: str, amount: float) -> dict:
+async def confirm_online_payment(
+    session: AsyncSession,
+    register_uuid: uuid_pkg.UUID,
+    pay_method: str,
+    amount: float,
+    idempotency_key: Optional[str] = None,
+) -> dict:
     """
     线上模拟支付确认 (第二阶段：正式扣源激活与病历初稿预加载)
     """
+    idem = await begin_idempotency(
+        session,
+        scope="patient.confirm_online_payment",
+        idempotency_key=idempotency_key,
+        request_payload={
+            "register_uuid": str(register_uuid),
+            "pay_method": pay_method,
+            "amount": str(Decimal(str(amount))),
+        },
+    )
+    if idem and idem.is_replay:
+        return idem.response or {}
+
     register = await get_register_by_uuid(session, register_uuid)
     if not register:
         raise ValueError("挂号单不存在")
@@ -707,7 +728,8 @@ async def confirm_online_payment(session: AsyncSession, register_uuid: uuid_pkg.
         raise ValueError("排班记录已失效")
 
     # 2. 更新挂号单状态为 1 (已挂号)
-    register.visit_state = VisitState.REGISTERED
+    target_state = ensure_visit_transition(register.visit_state, VisitState.REGISTERED)
+    register.visit_state = int(target_state)
     register.regist_method = pay_method
     session.add(register)
     
@@ -722,17 +744,19 @@ async def confirm_online_payment(session: AsyncSession, register_uuid: uuid_pkg.
     )
     session.add(outbox_event)
 
-    # 统一提交本地事务（挂号单状态变更 + 发件箱事件）
-    await session.commit()
-
-
-    return {
+    result = {
         "register_uuid": str(register.uuid),
         "visit_state": register.visit_state,
         "visit_state_text": "已挂号",
         "queue_number": schedule.registered_count,
         "transaction_id": f"{'WX' if pay_method == '微信' else 'ALI'}{datetime.now().strftime('%Y%m%d%H%M%S')}{register.id}"
     }
+    await complete_idempotency(session, idem, result)
+
+    # 统一提交本地事务（挂号单状态变更 + 发件箱事件 + 幂等记录）
+    await session.commit()
+
+    return result
 
 async def update_visit_state(session: AsyncSession, register_uuid: uuid_pkg.UUID, visit_state: int) -> dict:
     """
@@ -742,19 +766,8 @@ async def update_visit_state(session: AsyncSession, register_uuid: uuid_pkg.UUID
     if not register:
         raise ValueError("挂号单不存在")
     
-    current = register.visit_state
-    VALID_TRANSITIONS = {
-        VisitState.UNPAID:      [VisitState.REGISTERED],
-        VisitState.REGISTERED:  [VisitState.RECEPTION, VisitState.CANCELLED],
-        VisitState.RECEPTION:   [VisitState.FINISHED],
-        VisitState.FINISHED:    [],
-        VisitState.CANCELLED:   [],
-    }
-    
-    if visit_state not in VALID_TRANSITIONS.get(current, []):
-        raise ValueError(f"不允许从 '{_STATE_MAP.get(current, '未知')}' 变更为 '{_STATE_MAP.get(visit_state, '未知')}'")
-        
-    register.visit_state = visit_state
+    target_state = ensure_visit_transition(register.visit_state, visit_state)
+    register.visit_state = int(target_state)
     session.add(register)
     await session.flush()
     
@@ -834,7 +847,8 @@ async def cancel_register(session: AsyncSession, register_uuid: uuid_pkg.UUID) -
         raise ValueError("退号失败：该单据状态已变更或正在处理中！")
         
     # 更新挂号单状态
-    register.visit_state = VisitState.CANCELLED
+    target_state = ensure_visit_transition(register.visit_state, VisitState.CANCELLED)
+    register.visit_state = int(target_state)
     session.add(register)
         
     # 原子恢复号源
