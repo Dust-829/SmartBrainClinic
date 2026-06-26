@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.medical import MedicalRecord, CheckRequest, InspectionRequest, DisposalRequest, MedicalTechnology
 from .ai_image_inference import analyze_brain_image
 from app.common.enums import CheckState, InspectionState, DisposalState
+from app.common.ai_client import AIClient
 from app.common.ai_embedding import get_embedding
 from app.common.clients import PatientClient, AuthClient
 from ..models.medical import Disease, MedicalRecordDisease
@@ -60,29 +61,20 @@ async def recommend_tech_ai(tech_name: str, available_techs: list[dict]) -> str 
     """
     
     try:
-        import httpx
-        payload = {
-            "model": settings.LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
-            "max_tokens": 50
-        }
-        headers = {
-            "Authorization": f"Bearer {settings.LLM_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{settings.LLM_API_BASE.rstrip('/')}/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=10.0
-            )
-            if resp.status_code == 200:
-                result = resp.json()["choices"][0]["message"]["content"].strip()
-                for tech in available_techs:
-                    if tech["uuid"] in result:
-                        return tech["uuid"]
+        result = await AIClient(
+            api_key=settings.LLM_API_KEY,
+            api_base=settings.LLM_API_BASE,
+        ).chat_completion(
+            model=settings.LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=50,
+            timeout=10.0,
+        )
+        if result:
+            for tech in available_techs:
+                if tech["uuid"] in result:
+                    return tech["uuid"]
         return None
     except Exception as e:
         print(f"AI Tech Recommendation Failed: {e}")
@@ -280,9 +272,11 @@ async def confirm_medical_record_draft(
     
     # 匹配 ICD-10 疾病字典 (使用 PGVector 的余弦距离进行语义匹配)
     # 取相似度最高（距离最近）的前 3 个疾病
-    stmt = select(Disease).where(Disease.delmark == 1, Disease.disease_vector.is_not(None)).order_by(Disease.disease_vector.cosine_distance(diag_vec)).limit(3)
-    disease_res = await session.execute(stmt)
-    matched_diseases = disease_res.scalars().all()
+    matched_diseases = []
+    if diag_vec:
+        stmt = select(Disease).where(Disease.delmark == 1, Disease.disease_vector.is_not(None)).order_by(Disease.disease_vector.cosine_distance(diag_vec)).limit(3)
+        disease_res = await session.execute(stmt)
+        matched_diseases = disease_res.scalars().all()
     
     # 如果数据库中没有带 vector 的疾病，则回退到基础字符串匹配 (防御性逻辑)
     if not matched_diseases:
@@ -393,6 +387,8 @@ async def search_similar_records(session: AsyncSession, query_text: str, top_k: 
     """
 
     query_vec = await get_embedding(query_text)
+    if not query_vec:
+        return []
     
     # 使用 PGVector 进行余弦距离搜索 ( <=> 在部分 pgvector 版本是 cosine distance, 或者 <-> 是 L2 distance)
     # 我们这里使用 cosine_distance

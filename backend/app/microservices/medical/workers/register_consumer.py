@@ -5,6 +5,7 @@ from app.common.mq import RabbitMQClient
 from app.microservices.medical.models.medical import MedicalRecord
 from app.microservices.medical.services.ai_draft import run_ai_medical_draft
 from app.common.ai_embedding import get_embedding
+from app.common.ai_schema import unwrap_ai_data
 from app.microservices.medical.config import settings
 from app.microservices.medical.database import session_factory
 from sqlalchemy import select
@@ -35,12 +36,13 @@ async def process_register_paid(msg_data: dict):
             return
 
     # 使用专用的病历初稿生成引擎
-    draft = await run_ai_medical_draft(
+    draft_result = await run_ai_medical_draft(
         conversation_json=symptoms,  # symptoms 字段现在存储的是对话历史 JSON
         api_key=settings.LLM_API_KEY,
         api_base=settings.LLM_API_BASE,
         model=settings.LLM_MODEL
     )
+    draft = unwrap_ai_data(draft_result)
 
     readme = draft.get("readme", "未详细说明")
     present = draft.get("present", "未详细说明")

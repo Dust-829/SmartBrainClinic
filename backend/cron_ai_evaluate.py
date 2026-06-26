@@ -12,6 +12,7 @@ import httpx
 
 from app.microservices.patient.config import settings as patient_settings
 from app.microservices.patient.models.patient import PatientFeedback
+from app.common.ai_client import AIClient
 from app.common.clients import BaseClient
 
 async def run_nightly_batch():
@@ -55,32 +56,22 @@ async def run_nightly_batch():
             f"{combined_text}"
         )
         
-        payload = {
-            "model": patient_settings.LLM_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {patient_settings.LLM_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
         adjustment = 0.0
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{patient_settings.LLM_API_BASE.rstrip('/')}/chat/completions",
-                    json=payload, headers=headers, timeout=15.0
-                )
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"].strip()
-                    try:
-                        adjustment = float(content)
-                    except ValueError:
-                        print(f"⚠️ AI returned non-float: {content}, defaulting to 0.0")
-                else:
-                    print(f"❌ LLM API failed: {resp.text}")
+            content = await AIClient(
+                api_key=patient_settings.LLM_API_KEY,
+                api_base=patient_settings.LLM_API_BASE,
+            ).chat_completion(
+                model=patient_settings.LLM_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                timeout=15.0,
+            )
+            if content:
+                try:
+                    adjustment = float(content)
+                except ValueError:
+                    print(f"⚠️ AI returned non-float: {content}, defaulting to 0.0")
         except Exception as e:
             print(f"❌ LLM Request failed: {e}")
             

@@ -61,6 +61,9 @@ async def _retrieve_patient_context(
 
     register_uuids = [r["uuid"] for r in registers]
     query_vec = await get_embedding(question)
+    if not query_vec:
+        logger.warning("[Agent RAG] Embedding unavailable; patient context retrieval skipped.")
+        return ""
     reg_uuids_parsed = [uuid_pkg.UUID(u) for u in register_uuids]
 
     stmt = select(MedicalRecord).where(

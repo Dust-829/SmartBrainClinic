@@ -11,6 +11,7 @@ from app.common.enums import VisitState
 from app.microservices.patient.ws_manager import manager as ws_manager
 
 from app.common.ai_embedding import get_embedding
+from app.common.ai_schema import unwrap_ai_data
 import asyncio
 import json
 from ..models.patient import OutboxEvent
@@ -868,7 +869,8 @@ async def ai_schedule(session: AsyncSession, employee_uuid: uuid_pkg.UUID, promp
         raise ValueError("医生不存在")
     
     # 解析排班微调意图
-    res = await run_ai_scheduling(prompt, str(employee_uuid))
+    ai_res = await run_ai_scheduling(prompt, str(employee_uuid))
+    res = unwrap_ai_data(ai_res)
     actions = res.get("actions", [])
     llm_text_rule = res.get("llm_text_rule", "")
     

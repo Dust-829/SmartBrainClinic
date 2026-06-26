@@ -7,8 +7,11 @@ AI 病历初稿生成引擎 (Medical 微服务专用)
 
 import json
 import logging
-import httpx
 from typing import Dict, Any
+from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
+from app.common.ai_client import AIClient
+from app.common.ai_schema import AISource, MedicalDraftData, build_ai_result
+from app.common.ai_validator import AIResultValidator
 logger = logging.getLogger("medical.ai_draft")
 
 SYSTEM_PROMPT = """你是一个专业的电子病历初稿生成AI。你将收到一段患者与AI分诊助手的历史对话记录。
@@ -53,6 +56,7 @@ async def run_ai_medical_draft(
         dict with keys: readme, present, history, allergy, proposal, cure
     """
     from app.microservices.medical.config import settings
+    started_at = start_ai_timer()
     api_key = api_key or settings.LLM_API_KEY
     api_base = api_base or settings.LLM_API_BASE
     model = model or getattr(settings, "LLM_MODEL", "deepseek-ai/DeepSeek-V4-Flash")
@@ -81,70 +85,112 @@ async def run_ai_medical_draft(
     # 如果没有有效对话或对话无实质内容，直接返回空白初稿
     if not messages or not isinstance(messages, list):
         logger.info("📝 [AI Draft] No valid conversation history, returning blank draft")
-        return default_draft
+        data = MedicalDraftData(**default_draft).model_dump(mode="json")
+        validation = AIResultValidator.validate_medical_draft(data)
+        result = build_ai_result(
+            data,
+            source=AISource.FALLBACK,
+            model="no-conversation",
+            confidence=0.0,
+            warnings=["no_valid_conversation", *validation.warnings],
+            validated=validation.is_valid,
+            validator_messages=list(validation.messages),
+        )
+        await record_ai_audit(
+            module_name="medical.draft",
+            input_text=conversation_json,
+            result=result,
+            latency_ms=elapsed_ms(started_at),
+        )
+        return result
 
     user_texts = [m.get("content", "") for m in messages if m.get("role") == "user"]
     if not user_texts or all(not t.strip() for t in user_texts):
         logger.info("📝 [AI Draft] No user messages in conversation, returning blank draft")
-        return default_draft
+        data = MedicalDraftData(**default_draft).model_dump(mode="json")
+        validation = AIResultValidator.validate_medical_draft(data)
+        result = build_ai_result(
+            data,
+            source=AISource.FALLBACK,
+            model="no-user-message",
+            confidence=0.0,
+            warnings=["no_user_message", *validation.warnings],
+            validated=validation.is_valid,
+            validator_messages=list(validation.messages),
+        )
+        await record_ai_audit(
+            module_name="medical.draft",
+            input_text=conversation_json,
+            result=result,
+            latency_ms=elapsed_ms(started_at),
+        )
+        return result
 
     # 1. 尝试真实大模型
     if api_key and api_key.strip():
         logger.info("🤖 [AI Draft] Invoking LLM to generate medical record draft...")
         try:
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-
             # 将对话历史格式化为可读文本
             conversation_text = ""
             for msg in messages:
                 role_label = "患者" if msg.get("role") == "user" else "AI分诊助手"
                 conversation_text += f"{role_label}：{msg.get('content', '')}\n"
 
-            payload = {
-                "model": model,
-                "messages": [
+            data = await AIClient(api_key=api_key, api_base=api_base).chat_json(
+                model=model,
+                messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": f"以下是患者与AI分诊助手的对话记录：\n\n{conversation_text}\n\n请根据以上对话生成病历初稿。"}
                 ],
-                "temperature": 0.1
-            }
-
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{api_base.rstrip('/')}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=10.0
+                temperature=0.1,
+                timeout=10.0,
+            )
+            if data:
+                # 确保所有必要字段存在
+                for key in default_draft:
+                    if key not in data or not data[key]:
+                        data[key] = default_draft[key]
+                data = MedicalDraftData(**data).model_dump(mode="json")
+                validation = AIResultValidator.validate_medical_draft(data)
+                
+                logger.info(f"✅ [AI Draft] LLM draft generated successfully")
+                result = build_ai_result(
+                    data,
+                    source=AISource.LLM,
+                    model=model,
+                    confidence=0.8,
+                    **validation.as_result_kwargs(),
                 )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    content = result["choices"][0]["message"]["content"].strip()
-                    # 去除可能的 markdown 包裹
-                    if content.startswith("```"):
-                        content = content.split("```")[1]
-                        if content.startswith("json"):
-                            content = content[4:]
-                        content = content.strip("` \n")
-
-                    data = json.loads(content)
-                    # 确保所有必要字段存在
-                    for key in default_draft:
-                        if key not in data or not data[key]:
-                            data[key] = default_draft[key]
-                    
-                    logger.info(f"✅ [AI Draft] LLM draft generated successfully")
-                    return data
-                else:
-                    logger.error(f"❌ [AI Draft] LLM HTTP error {resp.status_code}: {resp.text}")
+                await record_ai_audit(
+                    module_name="medical.draft",
+                    input_text=conversation_json,
+                    result=result,
+                    latency_ms=elapsed_ms(started_at),
+                )
+                return result
         except Exception as e:
             logger.error(f"⚠️ [AI Draft] LLM invocation failed: {e}. Falling back to extraction...")
 
     # 2. 离线提取引擎（Mock / 降级）
     logger.info("🔌 [AI Draft] Running offline extraction engine...")
-    return _extract_from_conversation(messages, default_draft)
+    data = MedicalDraftData(**_extract_from_conversation(messages, default_draft)).model_dump(mode="json")
+    validation = AIResultValidator.validate_medical_draft(data)
+    result = build_ai_result(
+        data,
+        source=AISource.FALLBACK,
+        model="rule-draft-extractor",
+        confidence=0.5,
+        warnings=["using_rule_based_draft_extractor", *validation.warnings],
+        validated=validation.is_valid,
+        validator_messages=list(validation.messages),
+    )
+    await record_ai_audit(
+        module_name="medical.draft",
+        input_text=conversation_json,
+        result=result,
+        latency_ms=elapsed_ms(started_at),
+    )
+    return result
 
 
 def _extract_from_conversation(messages: list, default_draft: dict) -> dict:

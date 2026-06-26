@@ -63,7 +63,7 @@ async def gateway_proxy(service: str, path: str, request: Request):
                 params=request.query_params,
                 content=body,
                 headers=headers,
-                timeout=30.0
+                timeout=60.0
             )
             # 构造并返回响应
             return Response(

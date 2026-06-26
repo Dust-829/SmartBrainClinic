@@ -21,6 +21,9 @@ async def process_vector_sync(payload: dict):
     
     try:
         vector = await get_embedding(expertise)
+        if not vector:
+            logger.warning(f"⚠️ [MQ Worker] Embedding unavailable for employee {employee_uuid}; vector update skipped")
+            return
         
         # AsyncSession generation
         # get_session() is a generator, so we iterate it

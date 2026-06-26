@@ -4,9 +4,12 @@ AI 智能处方推荐解析引擎
 
 import json
 import logging
-import httpx
 from typing import List
 from ..config import settings
+from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
+from app.common.ai_client import AIClient
+from app.common.ai_schema import AISource, PrescriptionRecommendationData, build_ai_result
+from app.common.ai_validator import AIResultValidator
 
 logger = logging.getLogger("pharmacy.ai_prescription")
 
@@ -16,7 +19,7 @@ async def run_ai_prescription(
     api_key: str = None,
     api_base: str = None,
     model: str = None,
-) -> List[dict]:
+) -> dict:
     """
     进行 AI 智能处方推荐。
     如果配置了 api_key，则发起真实的 Siliconflow DeepSeek API 请求；
@@ -25,6 +28,7 @@ async def run_ai_prescription(
     api_key = api_key or settings.LLM_API_KEY
     api_base = api_base or settings.LLM_API_BASE
     model = model or settings.LLM_MODEL
+    started_at = start_ai_timer()
     
     # 提取病历核心字段
     diagnosis = medical_record.get("diagnosis") or ""
@@ -37,11 +41,6 @@ async def run_ai_prescription(
     if api_key and api_key.strip():
         logger.info("🤖 [AI Prescription] Invoking real LLM Chat Completion API...")
         try:
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            
             system_prompt = (
                 "You are an expert hospital clinical pharmacist AI.\n"
                 "Recommend a list of medications from the provided available drug list based on the patient's medical record.\n"
@@ -71,37 +70,46 @@ async def run_ai_prescription(
                 f"{json.dumps(available_drugs, ensure_ascii=False)}\n"
             )
             
-            payload = {
-                "model": model,
-                "messages": [
+            recommendations = await AIClient(api_key=api_key, api_base=api_base).chat_json(
+                model=model,
+                messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content}
                 ],
-                "temperature": 0.2
-            }
-            
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{api_base.rstrip('/')}/chat/completions",
-                    json=payload,
-                    headers=headers,
-                    timeout=8.0
+                temperature=0.2,
+                timeout=8.0,
+            )
+            if isinstance(recommendations, list):
+                recommendations = [
+                    PrescriptionRecommendationData(**item).model_dump(mode="json")
+                    for item in recommendations
+                ]
+                validation = AIResultValidator.validate_prescription(
+                    recommendations,
+                    patient_allergy=allergy,
                 )
-                if resp.status_code == 200:
-                    result = resp.json()
-                    content = result["choices"][0]["message"]["content"].strip()
-                    if content.startswith("```"):
-                        content = content.split("```")[1]
-                        if content.startswith("json"):
-                            content = content[4:]
-                        content = content.strip("` \n")
-                    
-                    recommendations = json.loads(content)
-                    if isinstance(recommendations, list):
-                        logger.info(f"✅ [AI Prescription] Real LLM prescription succeeded: {recommendations}")
-                        return recommendations
-                else:
-                    logger.error(f"❌ [AI Prescription] LLM HTTP error {resp.status_code}: {resp.text}")
+                logger.info(f"✅ [AI Prescription] Real LLM prescription succeeded: {recommendations}")
+                result = build_ai_result(
+                    recommendations,
+                    source=AISource.LLM,
+                    model=model,
+                    confidence=0.75,
+                    **validation.as_result_kwargs(),
+                )
+                await record_ai_audit(
+                    module_name="pharmacy.prescription",
+                    input_text={
+                        "diagnosis": diagnosis,
+                        "readme": readme,
+                        "present": present,
+                        "history": history,
+                        "allergy": allergy,
+                        "available_drug_count": len(available_drugs),
+                    },
+                    result=result,
+                    latency_ms=elapsed_ms(started_at),
+                )
+                return result
         except Exception as e:
             logger.error(f"⚠️ [AI Prescription] Real LLM invocation failed: {e}. Falling back to offline engine...")
 
@@ -206,4 +214,34 @@ async def run_ai_prescription(
             "allergy_check": "安全"
         })
         
-    return recommendations
+    recommendations = [
+        PrescriptionRecommendationData(**item).model_dump(mode="json")
+        for item in recommendations
+    ]
+    validation = AIResultValidator.validate_prescription(
+        recommendations,
+        patient_allergy=allergy,
+    )
+    result = build_ai_result(
+        recommendations,
+        source=AISource.RULE,
+        model="rule-prescription-engine",
+        confidence=0.6,
+        warnings=["using_rule_based_prescription_engine", *validation.warnings],
+        validated=validation.is_valid,
+        validator_messages=list(validation.messages),
+    )
+    await record_ai_audit(
+        module_name="pharmacy.prescription",
+        input_text={
+            "diagnosis": diagnosis,
+            "readme": readme,
+            "present": present,
+            "history": history,
+            "allergy": allergy,
+            "available_drug_count": len(available_drugs),
+        },
+        result=result,
+        latency_ms=elapsed_ms(started_at),
+    )
+    return result

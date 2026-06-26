@@ -10,10 +10,11 @@ class BaseMicroserviceSettings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     
     # AI/LLM 大模型配置
-    LLM_API_KEY: str = "sk-wqfehktkatxtixynbkrnjovthhzmporaxwwufzxnfhwxbpsa"
+    LLM_API_KEY: str = ""
     LLM_API_BASE: str = "https://api.siliconflow.cn/v1"
     LLM_MODEL: str = "deepseek-ai/DeepSeek-V4-Pro"
     LLM_EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    AI_ALLOW_MOCK_FALLBACK: bool = True
     
     # 基础数据库配置 (各服务可覆盖)
     DB_HOST: str = "localhost"

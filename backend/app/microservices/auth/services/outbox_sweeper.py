@@ -26,12 +26,16 @@ async def sweep_outbox_events():
                 result = await session.execute(stmt)
                 events = result.scalars().all()
                 
+                sent_count = 0
                 for event in events:
                     try:
                         payload_dict = json.loads(event.payload)
-                        await mq_client.publish(event.topic, payload_dict)
+                        published = await mq_client.publish(event.topic, payload_dict)
+                        if not published:
+                            raise RuntimeError("RabbitMQ publish returned False")
                         # 发送成功，更新状态
                         event.status = "sent"
+                        sent_count += 1
                         session.add(event)
                     except Exception as pub_err:
                         logger.error(f"⚠️ [Auth Outbox Sweeper] Failed to publish event {event.uuid}: {pub_err}")
@@ -43,7 +47,7 @@ async def sweep_outbox_events():
                         
                 if events:
                     await session.commit()
-                    logger.info(f"📤 [Auth Outbox Sweeper] Successfully processed and sent {len(events)} events.")
+                    logger.info(f"📤 [Auth Outbox Sweeper] Successfully sent {sent_count}/{len(events)} events.")
                     
         except Exception as e:
             logger.error(f"⚠️ [Auth Outbox Sweeper] Error during outbox sweep: {e}", exc_info=True)

@@ -10,7 +10,14 @@ from .workers.medical_consumer import start_medical_consumer
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.common.nacos_client import nacos_manager
-    nacos_manager.register_service(settings.SERVICE_NAME, "127.0.0.1", settings.SERVICE_PORT)
+    import os, socket
+    service_host = os.getenv("SERVICE_HOST")
+    if not service_host:
+        try:
+            service_host = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            service_host = "127.0.0.1"
+    nacos_manager.register_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
     # Startup
     task = asyncio.create_task(sweep_zombie_slots())
     outbox_task = asyncio.create_task(sweep_outbox_events())
@@ -20,7 +27,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
     outbox_task.cancel()
     medical_consumer_task.cancel()
-    nacos_manager.deregister_service(settings.SERVICE_NAME, "127.0.0.1", settings.SERVICE_PORT)
+    nacos_manager.deregister_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
 
 app = FastAPI(title="Patient Service", version="1.0.0", lifespan=lifespan)
 app.include_router(router)
