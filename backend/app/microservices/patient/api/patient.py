@@ -223,6 +223,28 @@ async def update_register_state(uuid: uuid_pkg.UUID, visit_state: int, session: 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.put("/register/{uuid}/start-reception", summary="开始接诊")
+async def start_reception(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.start_reception(session, uuid)
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/register/{uuid}/finish", summary="结束就诊")
+async def finish_visit(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.finish_visit(session, uuid)
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.put("/register/{uuid}/cancel", summary="退号")
 async def cancel_register(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
@@ -268,6 +290,17 @@ async def get_doctor_queue(employee_uuid: uuid_pkg.UUID, session: AsyncSession =
     try:
         queue = await svc.get_doctor_queue(session, employee_uuid)
         return success(queue)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/doctor/{employee_uuid}/queue/call-next", summary="叫下一位候诊患者")
+async def call_next_patient(employee_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.call_next_patient(session, employee_uuid)
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

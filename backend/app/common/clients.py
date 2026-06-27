@@ -54,6 +54,18 @@ class BaseClient:
             return None
 
     @staticmethod
+    async def get_required(url: str, params: dict = None):
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code == 200:
+                return resp.json()["data"]
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except Exception:
+                detail = resp.text
+            raise ValueError(f"下游服务调用失败 {resp.status_code}: {detail}")
+
+    @staticmethod
     async def put(url: str, params: dict = None):
         async with httpx.AsyncClient() as client:
             resp = await client.put(url, params=params)
@@ -285,6 +297,9 @@ class PharmacyClient:
 class BillingClient:
     @staticmethod
     async def get_bills_by_register(register_uuid: uuid_pkg.UUID):
-        url = f"{BaseClient.get_url('bill')}/register/{register_uuid}"
-        res = await BaseClient.get(url)
+        base_url = BaseClient.get_url("billing").rstrip("/")
+        if base_url.endswith("/billing"):
+            base_url = f"{base_url.rsplit('/', 1)[0]}/bill"
+        url = f"{base_url}/register/{register_uuid}"
+        res = await BaseClient.get_required(url)
         return res if res is not None else []

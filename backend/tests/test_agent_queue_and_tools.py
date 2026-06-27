@@ -36,9 +36,11 @@ class FakeRowsResult:
 def test_doctor_queue_filters_by_schedule_date_not_register_creation_date():
     source = Path("app/microservices/patient/services/patient_service.py").read_text(encoding="utf-8")
 
-    assert "select(Register, Patient, SchedulingActual)" in source
+    assert "select(Register, Patient, SchedulingActual, SchedulingTimeSlot)" in source
     assert ".join(SchedulingActual, Register.scheduling_actual_id == SchedulingActual.id)" in source
+    assert ".outerjoin(SchedulingTimeSlot, Register.scheduling_time_slot_id == SchedulingTimeSlot.id)" in source
     assert "SchedulingActual.schedule_date == date.today()" in source
+    assert "SchedulingTimeSlot.time_range.asc().nullslast()" in source
     assert "func.date(Register.visit_date)" not in source
 
 

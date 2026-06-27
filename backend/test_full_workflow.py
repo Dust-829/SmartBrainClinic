@@ -436,6 +436,24 @@ def wait_for_auto_medical_draft(api: E2EClient, register_uuid: str, expected_hin
     return holder["draft"]
 
 
+def register_state(api: E2EClient, register_uuid: str) -> int:
+    register = api.request("GET", f"{PATIENT_URL}/register/{register_uuid}")
+    return int(register["visit_state"])
+
+
+def start_reception(api: E2EClient, register_uuid: str) -> None:
+    result = api.request("PUT", f"{PATIENT_URL}/register/{register_uuid}/start-reception")
+    if int(result.get("visit_state")) != 2:
+        raise AssertionError(f"Register should enter reception, got {result}")
+
+
+def wait_for_register_state(api: E2EClient, register_uuid: str, expected_state: int, description: str) -> None:
+    wait_until(
+        description,
+        lambda: register_state(api, register_uuid) == expected_state,
+    )
+
+
 def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
     run_id = uuid.uuid4().hex[:10]
     symptoms = "心悸两天，活动后加重，既往有高血压史，想咨询应该挂哪个科。"
@@ -549,6 +567,7 @@ def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
         },
     )
     wait_for_auto_medical_draft(api, register_uuid, "心悸")
+    start_reception(api, register_uuid)
     api.request(
         "PUT",
         f"{MEDICAL_URL}/record/draft/{register_uuid}/confirm",
@@ -563,6 +582,7 @@ def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
             "cure": "休息观察",
         },
     )
+    wait_for_register_state(api, register_uuid, 3, "AI guided visit finished after draft confirmation")
     return {"register_uuid": register_uuid, "doctor_uuid": recommended_doctor_uuid, "seed": seed}
 
 
@@ -658,6 +678,7 @@ def create_base_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
             "amount": float(Decimal(str(register["regist_money"]))),
         },
     )
+    start_reception(api, register_uuid)
     api.request(
         "PUT",
         f"{MEDICAL_URL}/record/draft/{register_uuid}/confirm",
@@ -672,6 +693,7 @@ def create_base_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
             "cure": "rest and observation",
         },
     )
+    wait_for_register_state(api, register_uuid, 3, "base visit finished after draft confirmation")
     return {"register_uuid": register_uuid, "doctor_uuid": doctor_uuid, "seed": seed}
 
 
@@ -848,8 +870,8 @@ def run_registration_payment_order_refund_happy_path(api: E2EClient, visit: dict
     seed = visit["seed"]
 
     register = api.request("GET", f"{PATIENT_URL}/register/{register_uuid}")
-    if str(register.get("visit_state")) != "1":
-        raise AssertionError(f"Register should be active after registration payment, got {register.get('visit_state')}")
+    if int(register.get("visit_state")) not in (1, 2, 3):
+        raise AssertionError(f"Register should be billable after registration payment, got {register.get('visit_state')}")
 
     check_uuid = create_check(api, register_uuid, seed.tech_id)
     prescription = create_prescription(api, register_uuid, seed.drug_id)

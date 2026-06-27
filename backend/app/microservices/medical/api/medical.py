@@ -1,4 +1,5 @@
 import uuid as uuid_pkg
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
@@ -50,11 +51,19 @@ class CheckResultInput(BaseModel):
     check_result: str = None
     inputcheck_employee_uuid: uuid_pkg.UUID
 
+
+class InspectionResultInput(BaseModel):
+    test_results: Any = None
+    input_employee_uuid: uuid_pkg.UUID
+
+
+class DisposalResultInput(BaseModel):
+    disposal_result: str = None
+
+
 class SearchSimilarRequest(BaseModel):
     query_text: str
     top_k: int = 5
-
-from typing import Optional
 
 class AIAssistantRequest(BaseModel):
     patient_uuid: Optional[uuid_pkg.UUID] = None
@@ -151,7 +160,7 @@ async def get_inspection_request(uuid: str, session: AsyncSession = Depends(get_
     if not check:
         raise HTTPException(status_code=404, detail="检验单不存在")
     tech = await session.get(MedicalTechnology, check.medical_technology_id)
-    return success({"uuid": str(check.uuid), "register_uuid": str(check.register_uuid), "inspection_state": check.inspection_state, "medical_technology_id": check.medical_technology_id, "medical_technology_uuid": str(tech.uuid) if tech else None})
+    return success({"uuid": str(check.uuid), "register_uuid": str(check.register_uuid), "inspection_state": check.inspection_state, "medical_technology_id": check.medical_technology_id, "medical_technology_uuid": str(tech.uuid) if tech else None, "test_results": check.test_results})
 
 @router.get("/disposal/{uuid}", summary="获取处置单明细")
 async def get_disposal_request(uuid: str, session: AsyncSession = Depends(get_session)):
@@ -159,7 +168,7 @@ async def get_disposal_request(uuid: str, session: AsyncSession = Depends(get_se
     if not check:
         raise HTTPException(status_code=404, detail="处置单不存在")
     tech = await session.get(MedicalTechnology, check.medical_technology_id)
-    return success({"uuid": str(check.uuid), "register_uuid": str(check.register_uuid), "disposal_state": check.disposal_state, "medical_technology_id": check.medical_technology_id, "medical_technology_uuid": str(tech.uuid) if tech else None})
+    return success({"uuid": str(check.uuid), "register_uuid": str(check.register_uuid), "disposal_state": check.disposal_state, "medical_technology_id": check.medical_technology_id, "medical_technology_uuid": str(tech.uuid) if tech else None, "disposal_result": check.disposal_result})
 
 @router.put("/check/{uuid}/state", summary="更新检查单状态")
 async def update_check_state(uuid: str, state: str, session: AsyncSession = Depends(get_session)):
@@ -246,6 +255,37 @@ async def input_check_result(uuid: str, data: CheckResultInput, session: AsyncSe
             inputcheck_employee_uuid=data.inputcheck_employee_uuid,
             image_path=data.image_path,
             check_result=data.check_result
+        )
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/inspection/{uuid}/result", summary="录入检验结果")
+async def input_inspection_result(uuid: str, data: InspectionResultInput, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.input_inspection_result(
+            session=session,
+            inspection_uuid=uuid,
+            input_employee_uuid=data.input_employee_uuid,
+            test_results=data.test_results,
+        )
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/disposal/{uuid}/result", summary="录入处置结果")
+async def input_disposal_result(uuid: str, data: DisposalResultInput, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.input_disposal_result(
+            session=session,
+            disposal_uuid=uuid,
+            disposal_result=data.disposal_result,
         )
         return success(result)
     except ValueError as e:
