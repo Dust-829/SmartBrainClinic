@@ -1,4 +1,5 @@
 import uuid as uuid_pkg
+from dataclasses import dataclass
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.medical import MedicalRecord, CheckRequest, InspectionRequest, DisposalRequest, MedicalTechnology
@@ -23,6 +24,15 @@ import json
 from ..models.medical import OutboxEvent
 from app.microservices.medical.database import session_factory
 from sqlalchemy import select
+
+MIN_SIMILAR_CASE_SCORE = 35.0
+
+
+@dataclass(frozen=True)
+class SimilarRecordMatch:
+    record: MedicalRecord
+    similarity_score: float
+    cosine_distance: float
 
 
 async def create_medical_record(session: AsyncSession, data: dict) -> MedicalRecord:
@@ -474,28 +484,64 @@ async def input_check_result(
         "check_result": check.check_result
     }
 
-async def search_similar_records(session: AsyncSession, query_text: str, top_k: int = 5) -> List[MedicalRecord]:
+async def search_similar_record_matches(
+    session: AsyncSession,
+    query_text: str,
+    top_k: int = 5,
+    min_similarity_score: float = MIN_SIMILAR_CASE_SCORE,
+) -> list[SimilarRecordMatch]:
     """
-    根据给定的病历描述，使用向量搜索找出最相似的历史真实病历
+    根据给定的病历描述，使用向量搜索找出最相似的历史真实病历，并返回证据质量分。
     """
 
     query_vec = await get_embedding(query_text)
     if not query_vec:
         return []
-    
+
+    distance_col = MedicalRecord.dialog_vector.cosine_distance(query_vec).label("cosine_distance")
     # 使用 PGVector 进行余弦距离搜索 ( <=> 在部分 pgvector 版本是 cosine distance, 或者 <-> 是 L2 distance)
     # 我们这里使用 cosine_distance
-    stmt = select(MedicalRecord).where(
+    stmt = select(MedicalRecord, distance_col).where(
         MedicalRecord.dialog_vector.is_not(None),
         MedicalRecord.is_doctor_confirmed == True
     ).order_by(
-        MedicalRecord.dialog_vector.cosine_distance(query_vec)
+        distance_col
     ).limit(top_k)
-    
-    result = await session.execute(stmt)
-    return result.scalars().all()
 
-async def ai_assistant_query(session: AsyncSession, patient_uuid: str, question: str, employee_uuid: str = None, top_k: int = 5) -> str:
+    result = await session.execute(stmt)
+    matches: list[SimilarRecordMatch] = []
+    for record, distance in result.all():
+        cosine_distance = float(distance)
+        similarity_score = max(0.0, (1.0 - cosine_distance) * 100.0)
+        if similarity_score < min_similarity_score:
+            continue
+        matches.append(
+            SimilarRecordMatch(
+                record=record,
+                similarity_score=round(similarity_score, 1),
+                cosine_distance=round(cosine_distance, 4),
+            )
+        )
+    return matches
+
+
+async def search_similar_records(session: AsyncSession, query_text: str, top_k: int = 5) -> List[MedicalRecord]:
+    """
+    根据给定的病历描述，使用向量搜索找出最相似的历史真实病历。
+    保留旧返回结构，供已有调用方兼容使用。
+    """
+
+    matches = await search_similar_record_matches(session, query_text, top_k=top_k)
+    return [match.record for match in matches]
+
+async def ai_assistant_query(
+    session: AsyncSession,
+    patient_uuid: str,
+    question: str,
+    employee_uuid: str = None,
+    top_k: int = 5,
+    confirm_action: bool = False,
+) -> str:
     """
     LangGraph Agent 驱动的医生智能助理。
     
@@ -506,7 +552,14 @@ async def ai_assistant_query(session: AsyncSession, patient_uuid: str, question:
     
     函数签名保持不变，API 层零改动。
     """
-    return await build_and_run_agent(session, patient_uuid, question, employee_uuid, top_k)
+    return await build_and_run_agent(
+        session,
+        patient_uuid,
+        question,
+        employee_uuid,
+        top_k,
+        confirm_action=confirm_action,
+    )
 
 async def get_requests_batch(session: AsyncSession, check_uuids: list[str], inspection_uuids: list[str], disposal_uuids: list[str]) -> dict:
     ret = {"checks": {}, "inspections": {}, "disposals": {}}

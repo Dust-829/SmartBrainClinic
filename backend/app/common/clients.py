@@ -173,7 +173,7 @@ class PatientClient:
             "employee_uuid": employee_uuid,
             "prompt": prompt
         }
-        return await BaseClient.post(url, json_data=payload)
+        return await BaseClient.post_required(url, json_data=payload)
 
 
 class MedicalClient:

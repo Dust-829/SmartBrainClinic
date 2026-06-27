@@ -184,6 +184,41 @@ async def fail_idempotency(
     )
 
 
+async def has_active_processing_request(
+    session: AsyncSession,
+    *,
+    scope: str,
+    request_payload: Any,
+    exclude_idempotency_key: str,
+    processing_timeout_seconds: int = 300,
+) -> bool:
+    request_hash = _request_hash(request_payload)
+    rows = (
+        await session.execute(
+            text(
+                """
+                SELECT updated_at
+                FROM idempotency_record
+                WHERE scope = :scope
+                  AND request_hash = :request_hash
+                  AND status = 'processing'
+                  AND idempotency_key <> :exclude_idempotency_key
+                FOR UPDATE
+                """
+            ),
+            {
+                "scope": scope,
+                "request_hash": request_hash,
+                "exclude_idempotency_key": exclude_idempotency_key,
+            },
+        )
+    ).mappings().all()
+    return any(
+        not _is_processing_stale(row["updated_at"], processing_timeout_seconds)
+        for row in rows
+    )
+
+
 def _request_hash(payload: Any) -> str:
     body = _json_dump(payload)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()

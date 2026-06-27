@@ -3,6 +3,7 @@ from datetime import datetime, date, timedelta
 from decimal import Decimal
 from typing import Optional, List
 from sqlalchemy import select, update, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.patient import Patient, Register, SchedulingActual, SchedulingTimeSlot, SchedulingRule, PatientFeedback, OutboxEvent, SchedulingApplication, ScheduleDisruption
 from .internal_client import AuthClient
@@ -1123,27 +1124,26 @@ async def get_doctor_queue(session: AsyncSession, employee_uuid: uuid_pkg.UUID) 
     获取指定医生的当天候诊队列（已挂号、接诊中）
     """
     stmt = (
-        select(Register, Patient)
+        select(Register, Patient, SchedulingActual)
         .join(Patient, Register.patient_id == Patient.id)
+        .join(SchedulingActual, Register.scheduling_actual_id == SchedulingActual.id)
         .where(
             Register.employee_uuid == employee_uuid,
-            func.date(Register.visit_date) == date.today(),
+            SchedulingActual.schedule_date == date.today(),
             Register.visit_state.in_([VisitState.REGISTERED, VisitState.RECEPTION])
         )
-        .order_by(Register.visit_state.desc(), Register.visit_date)
+        .order_by(Register.visit_state.desc(), SchedulingActual.noon, Register.visit_date)
     )
     res = await session.execute(stmt)
     rows = res.all()
     
     results = []
-    for reg, pat in rows:
+    for reg, pat, actual in rows:
         clinic_room_name = "未指定诊室"
-        if reg.scheduling_actual_id:
-            actual = await session.get(SchedulingActual, reg.scheduling_actual_id)
-            if actual and actual.clinic_room_uuid:
-                room_info = await AuthClient.get_clinic_room(str(actual.clinic_room_uuid))
-                if room_info and room_info.get("room_name"):
-                    clinic_room_name = room_info["room_name"]
+        if actual.clinic_room_uuid:
+            room_info = await AuthClient.get_clinic_room(str(actual.clinic_room_uuid))
+            if room_info and room_info.get("room_name"):
+                clinic_room_name = room_info["room_name"]
 
         results.append({
             "register_uuid": str(reg.uuid),
@@ -1171,14 +1171,38 @@ async def create_patient_feedback(session: AsyncSession, data: dict) -> dict:
 
 
 async def create_scheduling_application(session: AsyncSession, employee_uuid: uuid_pkg.UUID, prompt: str) -> dict:
+    normalized_prompt = " ".join(str(prompt or "").split())
+    if not normalized_prompt:
+        raise ValueError("排班申请内容不能为空")
+
+    existing_stmt = (
+        select(SchedulingApplication)
+        .where(
+            SchedulingApplication.employee_uuid == employee_uuid,
+            SchedulingApplication.prompt == normalized_prompt,
+            SchedulingApplication.status == "pending",
+        )
+        .order_by(SchedulingApplication.created_at.desc())
+    )
+    existing = (await session.execute(existing_stmt)).scalars().first()
+    if existing:
+        return {"uuid": str(existing.uuid), "status": existing.status, "deduplicated": True}
+
     app = SchedulingApplication(
         employee_uuid=employee_uuid,
-        prompt=prompt,
+        prompt=normalized_prompt,
         status="pending"
     )
     session.add(app)
-    await session.flush()
-    return {"uuid": str(app.uuid), "status": "pending"}
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        existing = (await session.execute(existing_stmt)).scalars().first()
+        if existing:
+            return {"uuid": str(existing.uuid), "status": existing.status, "deduplicated": True}
+        raise
+    return {"uuid": str(app.uuid), "status": "pending", "deduplicated": False}
 
 async def get_pending_scheduling_applications(session: AsyncSession) -> list:
     stmt = select(SchedulingApplication).where(SchedulingApplication.status == "pending").order_by(SchedulingApplication.created_at.desc())

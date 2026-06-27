@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.clients import BaseClient
 from app.common.clients import PatientClient
 
-def create_agent_tools(session: AsyncSession, patient_uuid: str = None, employee_uuid: str = None):
+def create_agent_tools(
+    session: AsyncSession,
+    patient_uuid: str = None,
+    employee_uuid: str = None,
+    confirm_action: bool = False,
+):
     """
     工具工厂：根据当前请求的数据库 session 和上下文信息，
     生成一组绑定了运行时依赖的工具实例。
@@ -26,23 +31,24 @@ def create_agent_tools(session: AsyncSession, patient_uuid: str = None, employee
     async def search_similar_cases(query: str) -> str:
         """在全院历史病历库中，根据描述语义检索最相似的已确诊病历案例。适用于医生想参考类似病例时调用。"""
         # 复用底层的 Service 方法，消除代码冗余
-        from app.microservices.medical.services.medical_service import search_similar_records
+        from app.microservices.medical.services.medical_service import search_similar_record_matches
 
-        records = await search_similar_records(session, query, top_k=5)
+        matches = await search_similar_record_matches(session, query, top_k=5)
 
-        if not records:
-            return "未找到相似病历记录。"
+        if not matches:
+            return "未找到相似度达到最低阈值的已确认病历记录。"
 
         parts = []
-        for idx, rec in enumerate(records):
+        for idx, match in enumerate(matches):
+            rec = match.record
             parts.append(
-                f"【相似病例 {idx+1}】\n"
+                f"【相似病例 {idx+1} | 病历UUID: {rec.uuid} | 相似度: {match.similarity_score}】\n"
                 f"主诉: {rec.readme}\n"
                 f"现病史: {rec.present}\n"
                 f"诊断: {rec.diagnosis}\n"
                 f"处置: {rec.cure}"
             )
-        return "\n\n".join(parts)
+        return "\n\n".join(parts) + "\n\n以上相似病例仅供医生参考，不能替代当前患者的独立诊断。"
 
     @tool
     async def submit_scheduling_application(prompt: str) -> str:
@@ -51,9 +57,26 @@ def create_agent_tools(session: AsyncSession, patient_uuid: str = None, employee
         if not employee_uuid:
             return "错误：无法识别当前医生身份，无法提交排班申请。"
 
+        normalized_prompt = " ".join(str(prompt or "").split())
+        if not normalized_prompt:
+            return "错误：排班申请内容为空，无法提交。"
+
+        if not confirm_action:
+            return (
+                f"待确认排班申请：{normalized_prompt}\n"
+                "当前仅生成申请预览，尚未提交给管理员。"
+                "请医生确认后，再以 confirm_action=true 重新提交。"
+            )
+
         try:
-            await PatientClient.submit_scheduling_application(str(employee_uuid), prompt)
-            return f"已成功为您向管理员提交排班申请，申请内容：'{prompt}'。请等待管理员审核。"
+            result = await PatientClient.submit_scheduling_application(str(employee_uuid), normalized_prompt)
+            if not result or result.get("status") != "pending":
+                return f"提交排班申请失败：下游服务未返回有效申请结果。"
+            dedupe_note = "系统检测到相同待审批申请，已复用原申请，未重复创建。" if result.get("deduplicated") else "已创建新的待审批申请。"
+            return (
+                f"已成功为您向管理员提交排班申请，申请内容：'{normalized_prompt}'。"
+                f"{dedupe_note}申请编号：{result.get('uuid')}。请等待管理员审核。"
+            )
         except Exception as e:
             return f"提交排班申请失败：{e}"
 

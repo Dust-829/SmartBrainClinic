@@ -23,7 +23,9 @@ import uuid as uuid_pkg
 import traceback
 import logging
 from typing import Optional
+from app.common.ai_audit import elapsed_ms, record_ai_audit, start_ai_timer
 from app.common.ai_embedding import get_embedding
+from app.common.ai_schema import AISource, build_ai_result
 from app.common.clients import PatientClient
 from app.microservices.medical.models.medical import MedicalRecord
 
@@ -93,7 +95,7 @@ async def _retrieve_patient_context(
     return "\n\n".join(context_parts)
 
 
-def _build_system_prompt(patient_context: str) -> str:
+def _build_system_prompt(patient_context: str, confirm_action: bool = False) -> str:
     """构建系统提示词"""
     from datetime import date
     today_str = date.today().strftime("%Y-%m-%d")
@@ -109,7 +111,11 @@ def _build_system_prompt(patient_context: str) -> str:
         "工作原则：\n"
         "- 当医生询问患者病情时，优先参考已提供的历史病历上下文\n"
         "- 当需要查找其他科室或其他患者的类似病例时，调用 search_similar_cases\n"
+        "- 引用相似病例时必须说明病历UUID或病例编号、相似度，并提示仅供医生参考\n"
         "- 当医生要求调整排班时，务必调用 submit_scheduling_application\n"
+        f"- 当前排班申请确认状态 confirm_action={str(confirm_action).lower()}。"
+        "如果为 false，submit_scheduling_application 只会生成待确认预览，不会提交；"
+        "如果为 true，表示医生已经确认本轮申请，允许正式提交。\n"
         "- 遇到相对日期（如“明天”、“下周一”）时，请结合今天日期计算出具体日期再提交。\n"
         "- 你可以在一次对话中连续调用多个工具来完成复杂的组合任务\n"
         "- 始终用中文回答，保持专业、严谨的医疗用语\n"
@@ -138,12 +144,87 @@ def _should_continue(state: AgentState) -> str:
     return END
 
 
+def _extract_agent_tool_context(messages: list) -> dict:
+    tool_calls = []
+    tool_results = []
+    for message in messages:
+        for call in getattr(message, "tool_calls", []) or []:
+            tool_calls.append(
+                {
+                    "id": call.get("id"),
+                    "name": call.get("name"),
+                    "args": call.get("args"),
+                }
+            )
+
+        if getattr(message, "type", None) == "tool":
+            tool_results.append(
+                {
+                    "name": getattr(message, "name", None),
+                    "tool_call_id": getattr(message, "tool_call_id", None),
+                    "content": str(getattr(message, "content", ""))[:500],
+                }
+            )
+
+    return {
+        "message_count": len(messages),
+        "tool_calls": tool_calls,
+        "tool_results": tool_results,
+    }
+
+
+async def _record_agent_audit(
+    *,
+    question: str,
+    answer: str,
+    patient_uuid: Optional[str],
+    employee_uuid: Optional[str],
+    top_k: int,
+    confirm_action: bool,
+    messages: list,
+    started_at: float,
+    validated: bool,
+    warnings: list[str] | None = None,
+    validator_messages: list[str] | None = None,
+) -> None:
+    tool_context = _extract_agent_tool_context(messages)
+    result = build_ai_result(
+        {
+            "answer": answer,
+            "tool_call_count": len(tool_context["tool_calls"]),
+        },
+        source=AISource.LLM if validated else AISource.FALLBACK,
+        model=settings.LLM_MODEL,
+        warnings=warnings or [],
+        validated=validated,
+        validator_messages=validator_messages or [],
+    )
+    await record_ai_audit(
+        module_name="medical.agent",
+        input_text={
+            "question": question,
+            "patient_uuid": patient_uuid,
+            "employee_uuid": employee_uuid,
+        },
+        result=result,
+        context={
+            "patient_uuid": patient_uuid,
+            "employee_uuid": employee_uuid,
+            "top_k": top_k,
+            "confirm_action": confirm_action,
+            **tool_context,
+        },
+        latency_ms=elapsed_ms(started_at),
+    )
+
+
 async def build_and_run_agent(
     session: AsyncSession,
     patient_uuid: Optional[str],
     question: str,
     employee_uuid: Optional[str] = None,
     top_k: int = 5,
+    confirm_action: bool = False,
 ) -> str:
     """
     构建并运行医生智能助理 Agent
@@ -155,62 +236,96 @@ async def build_and_run_agent(
     4. 构建 LangGraph 状态图（Agent 节点 ↔ Tool 节点 循环）
     5. 执行 Agent 并返回最终回答
     """
-    # ── 1. RAG 预检索 ──────────────────────────────────────
-    patient_context = await _retrieve_patient_context(
-        session, patient_uuid, question, top_k
-    )
-
-    # ── 2. 创建工具集 ──────────────────────────────────────
-    tools = create_agent_tools(session, patient_uuid, employee_uuid)
-
-    # ── 3. 初始化 LLM 并绑定工具 ───────────────────────────
-    llm = ChatOpenAI(
-        model=settings.LLM_MODEL,
-        api_key=settings.LLM_API_KEY,
-        base_url=settings.LLM_API_BASE,
-        temperature=0.2,
-        request_timeout=120,
-    )
-    llm_with_tools = llm.bind_tools(tools)
-
-    # ── 4. 定义 Agent 节点 ─────────────────────────────────
-    async def agent_node(state: AgentState):
-        """Agent 推理节点：将当前消息列表送入 LLM，获取回复（可能包含 tool_calls）"""
-        response = await llm_with_tools.ainvoke(state["messages"])
-        return {"messages": [response]}
-
-    # ── 5. 构建 LangGraph 状态图 ───────────────────────────
-    graph = StateGraph(AgentState)
-
-    graph.add_node("agent", agent_node)
-    graph.add_node("tools", ToolNode(tools))
-
-    graph.set_entry_point("agent")
-    graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")  # 工具执行完毕 → 回到 Agent 继续推理
-
-    app = graph.compile()
-
-    # ── 6. 构建初始消息并执行 ──────────────────────────────
-    system_prompt = _build_system_prompt(patient_context)
-    initial_state = {
-        "messages": [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"医生的话: {question}"),
-        ]
-    }
+    started_at = start_ai_timer()
+    final_messages: list = []
 
     try:
+        # ── 1. RAG 预检索 ──────────────────────────────────────
+        patient_context = await _retrieve_patient_context(
+            session, patient_uuid, question, top_k
+        )
+
+        # ── 2. 创建工具集 ──────────────────────────────────────
+        tools = create_agent_tools(
+            session,
+            patient_uuid,
+            employee_uuid,
+            confirm_action=confirm_action,
+        )
+
+        # ── 3. 初始化 LLM 并绑定工具 ───────────────────────────
+        llm = ChatOpenAI(
+            model=settings.LLM_MODEL,
+            api_key=settings.LLM_API_KEY,
+            base_url=settings.LLM_API_BASE,
+            temperature=0.2,
+            request_timeout=120,
+        )
+        llm_with_tools = llm.bind_tools(tools)
+
+        # ── 4. 定义 Agent 节点 ─────────────────────────────────
+        async def agent_node(state: AgentState):
+            """Agent 推理节点：将当前消息列表送入 LLM，获取回复（可能包含 tool_calls）"""
+            response = await llm_with_tools.ainvoke(state["messages"])
+            return {"messages": [response]}
+
+        # ── 5. 构建 LangGraph 状态图 ───────────────────────────
+        graph = StateGraph(AgentState)
+
+        graph.add_node("agent", agent_node)
+        graph.add_node("tools", ToolNode(tools))
+
+        graph.set_entry_point("agent")
+        graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
+        graph.add_edge("tools", "agent")  # 工具执行完毕 → 回到 Agent 继续推理
+
+        app = graph.compile()
+
+        # ── 6. 构建初始消息并执行 ──────────────────────────────
+        system_prompt = _build_system_prompt(patient_context, confirm_action=confirm_action)
+        initial_state = {
+            "messages": [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=f"医生的话: {question}"),
+            ]
+        }
+
         # recursion_limit 防止 Agent 陷入无限工具调用循环（最多 10 轮）
         final_state = await app.ainvoke(
             initial_state,
             config={"recursion_limit": 10}
         )
-        last_message = final_state["messages"][-1]
+        final_messages = final_state["messages"]
+        last_message = final_messages[-1]
         answer = last_message.content or "抱歉，系统未能理解您的意图。"
+        await _record_agent_audit(
+            question=question,
+            answer=answer,
+            patient_uuid=patient_uuid,
+            employee_uuid=employee_uuid,
+            top_k=top_k,
+            confirm_action=confirm_action,
+            messages=final_messages,
+            started_at=started_at,
+            validated=True,
+        )
         logger.info(f"✅ [Agent] 执行完成，共 {len(final_state['messages'])} 轮消息")
         return answer
     except Exception as e:
         traceback.print_exc()
         logger.error(f"❌ [Agent] 执行出错: {e}")
-        return f"智能助理执行出错: {str(e)}"
+        answer = f"智能助理执行出错: {str(e)}"
+        await _record_agent_audit(
+            question=question,
+            answer=answer,
+            patient_uuid=patient_uuid,
+            employee_uuid=employee_uuid,
+            top_k=top_k,
+            confirm_action=confirm_action,
+            messages=final_messages,
+            started_at=started_at,
+            validated=False,
+            warnings=["agent_execution_failed"],
+            validator_messages=[str(e)],
+        )
+        return answer

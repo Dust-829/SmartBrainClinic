@@ -61,6 +61,7 @@ class AIAssistantRequest(BaseModel):
     employee_uuid : Optional[uuid_pkg.UUID] = None
     question: str
     top_k: int = 5
+    confirm_action: bool = False
 
 @router.post("/record/ai-assistant", summary="AI医生辅助查询(RAG)")
 async def ai_assistant(data: AIAssistantRequest, session: AsyncSession = Depends(get_session)):
@@ -70,7 +71,8 @@ async def ai_assistant(data: AIAssistantRequest, session: AsyncSession = Depends
             patient_uuid=data.patient_uuid,
             question=data.question,
             employee_uuid=data.employee_uuid,
-            top_k=data.top_k
+            top_k=data.top_k,
+            confirm_action=data.confirm_action,
         )
         return success({"answer": answer})
     except Exception as e:
@@ -79,15 +81,17 @@ async def ai_assistant(data: AIAssistantRequest, session: AsyncSession = Depends
 @router.post("/record/search-similar", summary="AI相似病历召回")
 async def search_similar(data: SearchSimilarRequest, session: AsyncSession = Depends(get_session)):
     try:
-        records = await svc.search_similar_records(session, data.query_text, data.top_k)
+        matches = await svc.search_similar_record_matches(session, data.query_text, data.top_k)
         results = [
             {
-                "uuid": str(r.uuid),
-                "register_uuid": str(r.register_uuid),
-                "present": r.present,
-                "history": r.history,
-                "diagnosis": r.diagnosis
-            } for r in records
+                "uuid": str(match.record.uuid),
+                "register_uuid": str(match.record.register_uuid),
+                "present": match.record.present,
+                "history": match.record.history,
+                "diagnosis": match.record.diagnosis,
+                "similarity_score": match.similarity_score,
+                "cosine_distance": match.cosine_distance,
+            } for match in matches
         ]
         return success(results)
     except Exception as e:

@@ -1,10 +1,16 @@
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from decimal import Decimal
 import asyncio
 import random
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from ..models.bill import BillingItemChargeLock, OutpatientBill, OutpatientBillDetail
+from ..models.bill import (
+    BillingItemChargeLock,
+    BillingRefundSagaStep,
+    OutpatientBill,
+    OutpatientBillDetail,
+)
 from .internal_client import PatientClient, MedicalClient, PharmacyClient
 import uuid as uuid_pkg
 from app.common.clients import AuthClient
@@ -15,7 +21,12 @@ from app.common.enums import (
     BillState,
     VisitState,
 )
-from app.common.idempotency import begin_idempotency, complete_idempotency, fail_idempotency
+from app.common.idempotency import (
+    begin_idempotency,
+    complete_idempotency,
+    fail_idempotency,
+    has_active_processing_request,
+)
 from app.common.state_machine import (
     ensure_bill_transition,
 )
@@ -299,12 +310,126 @@ def _split_refund_details(details: list[OutpatientBillDetail]) -> tuple[list[dic
     return medical_items, drug_item_uuids
 
 
-async def _refund_downstream_items(details: list[OutpatientBillDetail]) -> None:
+async def _refund_downstream_items(
+    session: AsyncSession,
+    bill_code: str,
+    details: list[OutpatientBillDetail],
+) -> None:
     medical_items, drug_item_uuids = _split_refund_details(details)
     if medical_items:
-        await MedicalClient.refund_items(medical_items)
+        await _run_refund_step(
+            session,
+            bill_code=bill_code,
+            step_name="medical",
+            request_payload={"items": medical_items},
+            operation=lambda: MedicalClient.refund_items(medical_items),
+        )
     if drug_item_uuids:
-        await PharmacyClient.refund_items(drug_item_uuids)
+        await _run_refund_step(
+            session,
+            bill_code=bill_code,
+            step_name="pharmacy",
+            request_payload={"item_uuids": drug_item_uuids},
+            operation=lambda: PharmacyClient.refund_items(drug_item_uuids),
+        )
+
+
+async def _run_refund_step(
+    session: AsyncSession,
+    *,
+    bill_code: str,
+    step_name: str,
+    request_payload: dict,
+    operation: Callable[[], Awaitable[dict]],
+) -> dict:
+    if await _get_refund_step_status(session, bill_code, step_name) == "succeeded":
+        return {"step_name": step_name, "status": "succeeded", "skipped": True}
+
+    await _record_refund_step(
+        session,
+        bill_code=bill_code,
+        step_name=step_name,
+        status="pending",
+        request_payload=request_payload,
+    )
+    await session.commit()
+
+    try:
+        response = await operation()
+    except Exception as exc:
+        await _record_refund_step(
+            session,
+            bill_code=bill_code,
+            step_name=step_name,
+            status="failed",
+            request_payload=request_payload,
+            error_message=str(exc),
+        )
+        await session.commit()
+        raise
+
+    await _record_refund_step(
+        session,
+        bill_code=bill_code,
+        step_name=step_name,
+        status="succeeded",
+        request_payload=request_payload,
+        response_payload=response or {},
+    )
+    await session.commit()
+    return response or {}
+
+
+async def _get_refund_step_status(
+    session: AsyncSession,
+    bill_code: str,
+    step_name: str,
+) -> str | None:
+    stmt = select(BillingRefundSagaStep.status).where(
+        BillingRefundSagaStep.bill_code == bill_code,
+        BillingRefundSagaStep.step_name == step_name,
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _record_refund_step(
+    session: AsyncSession,
+    *,
+    bill_code: str,
+    step_name: str,
+    status: str,
+    request_payload: dict | None = None,
+    response_payload: dict | None = None,
+    error_message: str | None = None,
+) -> None:
+    now = datetime.now()
+    stmt = pg_insert(BillingRefundSagaStep).values(
+        bill_code=bill_code,
+        step_name=step_name,
+        status=status,
+        request_payload=_json_dump(request_payload),
+        response_payload=_json_dump(response_payload),
+        error_message=error_message,
+        created_at=now,
+        updated_at=now,
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_billing_refund_saga_step",
+        set_={
+            "status": status,
+            "request_payload": _json_dump(request_payload),
+            "response_payload": _json_dump(response_payload),
+            "error_message": error_message,
+            "updated_at": now,
+        },
+    )
+    await session.execute(stmt)
+
+
+def _json_dump(value) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
 async def _mark_refund_failed(session: AsyncSession, bill_code: str, idem) -> None:
@@ -317,6 +442,27 @@ async def _mark_refund_failed(session: AsyncSession, bill_code: str, idem) -> No
         session.add(bill)
     await fail_idempotency(session, idem)
     await session.commit()
+
+
+async def _ensure_refund_request_can_continue(
+    session: AsyncSession,
+    bill: OutpatientBill,
+    bill_code: str,
+    idem,
+) -> None:
+    if bill.bill_state == BillState.REFUNDED.value:
+        raise ValueError("该单据已经是已退费状态，请勿重复操作")
+
+    if bill.bill_state == BillState.REFUNDING.value:
+        has_other_refund = await has_active_processing_request(
+            session,
+            scope="billing.refund_bill",
+            request_payload={"bill_code": bill_code},
+            exclude_idempotency_key=idem.key,
+        )
+        if has_other_refund:
+            raise ValueError("该单据正在退费中，请勿重复提交退费请求")
+
 
 async def refund_bill(session: AsyncSession, bill_code: str, idempotency_key: str = None) -> dict:
     """
@@ -340,8 +486,7 @@ async def refund_bill(session: AsyncSession, bill_code: str, idempotency_key: st
     if not bill:
         raise ValueError("收费单不存在")
         
-    if bill.bill_state == BillState.REFUNDED.value:
-        raise ValueError("该单据已经是已退费状态，请勿重复操作")
+    await _ensure_refund_request_can_continue(session, bill, bill_code, idem)
     
     # 查找关联明细，后续同步调用下游原子退费接口
     stmt_detail = select(OutpatientBillDetail).where(OutpatientBillDetail.bill_id == bill.id)
@@ -356,7 +501,7 @@ async def refund_bill(session: AsyncSession, bill_code: str, idempotency_key: st
     await session.commit()
 
     try:
-        await _refund_downstream_items(details)
+        await _refund_downstream_items(session, bill_code, details)
     except Exception as exc:
         await _mark_refund_failed(session, bill_code, idem)
         raise ValueError(f"退费下游处理失败: {exc}") from exc
