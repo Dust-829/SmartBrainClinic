@@ -152,7 +152,16 @@ async def get_check_request(uuid: str, session: AsyncSession = Depends(get_sessi
         raise HTTPException(status_code=404, detail="检查单不存在")
     
     tech = await session.get(MedicalTechnology, check.medical_technology_id)
-    return success({"uuid": str(check.uuid), "register_uuid": str(check.register_uuid), "check_state": check.check_state, "medical_technology_id": check.medical_technology_id, "medical_technology_uuid": str(tech.uuid) if tech else None})
+    return success({
+        "uuid": str(check.uuid),
+        "register_uuid": str(check.register_uuid),
+        "check_state": check.check_state,
+        "medical_technology_id": check.medical_technology_id,
+        "medical_technology_uuid": str(tech.uuid) if tech else None,
+        "check_result": check.check_result,
+        "image_path": check.image_path,
+        "ai_tumor_prob": str(check.ai_tumor_prob) if check.ai_tumor_prob is not None else None,
+    })
 
 @router.get("/inspection/{uuid}", summary="获取检验单明细")
 async def get_inspection_request(uuid: str, session: AsyncSession = Depends(get_session)):

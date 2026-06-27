@@ -454,7 +454,7 @@ def wait_for_register_state(api: E2EClient, register_uuid: str, expected_state: 
     )
 
 
-def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
+def create_ai_guided_registration(api: E2EClient, seed: SeedData, *, run_prefix: str = "AI") -> dict[str, Any]:
     run_id = uuid.uuid4().hex[:10]
     symptoms = "心悸两天，活动后加重，既往有高血压史，想咨询应该挂哪个科。"
     triage = api.request(
@@ -477,12 +477,12 @@ def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
         f"{AUTH_URL}/employee",
         expected=(200, 201),
         json={
-            "realname": f"E2E AI Doctor {run_id}",
+            "realname": f"E2E {run_prefix} Doctor {run_id}",
             "password": "123456",
             "dept_code": dept_code,
             "regist_level_code": "E2E_LEVEL",
             "gender": "男",
-            "expertise": f"{TRIAGE_DEPARTMENTS[dept_code]}, 心悸, 高血压, 门诊 e2e",
+            "expertise": f"{TRIAGE_DEPARTMENTS[dept_code]}, 心悸, 高血压, 门诊 e2e, {run_prefix}",
             "ai_eval_score": 4.8,
         },
     )
@@ -535,9 +535,9 @@ def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
         PATIENT_URL,
         expected=(200, 201),
         json={
-            "real_name": f"E2E AI Patient {run_id}",
+            "real_name": f"E2E {run_prefix} Patient {run_id}",
             "gender": "男",
-            "card_number": f"E2EAI{run_id}",
+            "card_number": f"E2E{run_prefix[:4]}{run_id}",
             "birthdate": "1988-03-15",
             "home_address": "E2E AI workflow address",
         },
@@ -568,6 +568,21 @@ def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
     )
     wait_for_auto_medical_draft(api, register_uuid, "心悸")
     start_reception(api, register_uuid)
+    return {
+        "register_uuid": register_uuid,
+        "doctor_uuid": recommended_doctor_uuid,
+        "seed": seed,
+        "run_id": run_id,
+        "symptoms": symptoms,
+        "triage_data": triage_data,
+    }
+
+
+def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
+    visit = create_ai_guided_registration(api, seed, run_prefix="AI")
+    register_uuid = visit["register_uuid"]
+    triage_data = visit["triage_data"]
+    symptoms = visit["symptoms"]
     api.request(
         "PUT",
         f"{MEDICAL_URL}/record/draft/{register_uuid}/confirm",
@@ -583,7 +598,7 @@ def create_ai_guided_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
         },
     )
     wait_for_register_state(api, register_uuid, 3, "AI guided visit finished after draft confirmation")
-    return {"register_uuid": register_uuid, "doctor_uuid": recommended_doctor_uuid, "seed": seed}
+    return {"register_uuid": register_uuid, "doctor_uuid": visit["doctor_uuid"], "seed": seed}
 
 
 def create_base_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
@@ -782,6 +797,10 @@ def check_state(api: E2EClient, check_uuid: str) -> str:
     return api.request("GET", f"{MEDICAL_URL}/check/{check_uuid}")["check_state"]
 
 
+def check_detail(api: E2EClient, check_uuid: str) -> dict[str, Any]:
+    return api.request("GET", f"{MEDICAL_URL}/check/{check_uuid}")
+
+
 def drug_state(api: E2EClient, item_uuid: str) -> str:
     return api.request("GET", f"{PHARMACY_URL}/prescription-item/{item_uuid}")["drug_state"]
 
@@ -863,6 +882,144 @@ def run_agent_scheduling_confirmation_flow(api: E2EClient, visit: dict[str, Any]
     final_rows = asyncio.run(list_pending_scheduling_applications(doctor_uuid, application_prompt))
     if len(final_rows) != len(before_rows) + 1:
         raise AssertionError("Repeated confirmed Agent scheduling request should be deduplicated")
+
+
+def run_realistic_outpatient_chain(api: E2EClient, seed: SeedData) -> None:
+    visit = create_ai_guided_registration(api, seed, run_prefix="LINE")
+    register_uuid = visit["register_uuid"]
+    doctor_uuid = visit["doctor_uuid"]
+    stock_before = asyncio.run(get_drug_stock(seed.drug_id))
+
+    check_uuid = create_check(api, register_uuid, seed.tech_id)
+    if check_state(api, check_uuid) != "未缴费":
+        raise AssertionError("Linear chain check request should start as unpaid")
+
+    check_bill = pay_bill(
+        api,
+        register_uuid,
+        [{"type": "检查", "id": check_uuid}],
+        idempotency_key=f"linear-check-pay-{check_uuid}",
+    )
+    wait_until("linear chain check paid", lambda: check_state(api, check_uuid) == "已缴费")
+
+    api.request(
+        "PUT",
+        f"{MEDICAL_URL}/check/{check_uuid}/result",
+        json={
+            "check_result": "E2E linear chain: cranial CT shows no acute abnormality.",
+            "inputcheck_employee_uuid": doctor_uuid,
+        },
+    )
+    detail = check_detail(api, check_uuid)
+    if detail["check_state"] != "已执行":
+        raise AssertionError(f"Doctor should see executed check result, got {detail}")
+    if "no acute abnormality" not in (detail.get("check_result") or ""):
+        raise AssertionError(f"Doctor check result detail is missing expected conclusion: {detail}")
+
+    api.expect_failure(
+        "PUT",
+        f"{BILL_URL}/{check_bill['bill_code']}/refund",
+        headers={"Idempotency-Key": f"linear-executed-check-refund-{check_bill['bill_code']}"},
+    )
+    assert_bill_state(api, register_uuid, check_bill["bill_code"], "退费失败")
+
+    guard_check_uuid = create_check(api, register_uuid, seed.tech_id)
+    duplicate_payload = {
+        "register_uuid": register_uuid,
+        "item_ids": [{"type": "检查", "id": guard_check_uuid}],
+        "pay_method": "微信",
+    }
+    api.expect_failure("POST", f"{BILL_URL}/pay", json=duplicate_payload)
+
+    def attempt_duplicate_pay(idempotency_key: str) -> httpx.Response:
+        with httpx.Client(timeout=REQUEST_TIMEOUT) as client:
+            return client.post(
+                f"{BILL_URL}/pay",
+                json={**duplicate_payload, "idempotency_key": idempotency_key},
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(
+            executor.map(
+                attempt_duplicate_pay,
+                [f"linear-race-a-{guard_check_uuid}", f"linear-race-b-{guard_check_uuid}"],
+            )
+        )
+    successes = [response for response in responses if response.status_code in (200, 201)]
+    failures = [response for response in responses if response.status_code == 400]
+    if len(successes) != 1 or len(failures) != 1:
+        summary = [(response.status_code, response.text) for response in responses]
+        raise AssertionError(f"Linear chain duplicate payment guard failed: {summary}")
+    if asyncio.run(count_bill_details_for_item("检查", guard_check_uuid)) != 1:
+        raise AssertionError("Linear chain duplicate payment guard should create exactly one check bill detail")
+    wait_until("linear duplicate guard check paid", lambda: check_state(api, guard_check_uuid) == "已缴费")
+
+    api.request(
+        "PUT",
+        f"{MEDICAL_URL}/record/draft/{register_uuid}/confirm",
+        json={
+            "readme": "心悸",
+            "present": visit["triage_data"].get("symptom_summary") or visit["symptoms"],
+            "history": "既往高血压史，已完成颅脑 CT 检查。",
+            "physique": "生命体征平稳，检查结果未见急性异常。",
+            "diagnosis": "心悸待查",
+            "allergy": "无",
+            "proposal": "结合检查结果开具对症药物，门诊随诊。",
+            "cure": "口服药物治疗并观察症状变化。",
+        },
+    )
+    wait_for_register_state(api, register_uuid, 3, "linear chain visit finished after doctor confirmation")
+
+    prescription = create_prescription(api, register_uuid, seed.drug_id, numbers=[1, 2])
+    if drug_state(api, prescription["item_uuid"]) != "开立":
+        raise AssertionError("Linear chain prescription should start as prescribed")
+
+    prescription_bill = pay_bill(
+        api,
+        register_uuid,
+        [{"type": "药品", "id": prescription["item_uuids"][0]}],
+        idempotency_key=f"linear-prescription-pay-{prescription['prescription_uuid']}",
+    )
+    for item_uuid in prescription["item_uuids"]:
+        detail_count = asyncio.run(count_bill_details_for_item("药品", item_uuid))
+        if detail_count != 1:
+            raise AssertionError(f"Linear chain should charge full prescription item {item_uuid}, got {detail_count}")
+    wait_until("linear prescription paid", lambda: drug_state(api, prescription["item_uuid"]) == "已缴费")
+    assert_bill_state(api, register_uuid, prescription_bill["bill_code"], "已收费")
+
+    dispense_key = f"linear-dispense-{prescription['prescription_uuid']}"
+    dispensed = api.request(
+        "PUT",
+        f"{PHARMACY_URL}/prescription/{prescription['prescription_uuid']}/dispense",
+        headers={"Idempotency-Key": dispense_key},
+    )
+    dispense_replay = api.request(
+        "PUT",
+        f"{PHARMACY_URL}/prescription/{prescription['prescription_uuid']}/dispense",
+        headers={"Idempotency-Key": dispense_key},
+    )
+    if dispense_replay["prescription_uuid"] != dispensed["prescription_uuid"]:
+        raise AssertionError("Linear chain dispense replay did not return the original dispense")
+    wait_until("linear prescription dispensed", lambda: drug_state(api, prescription["item_uuid"]) == "已发药")
+
+    return_key = f"linear-return-{prescription['prescription_uuid']}"
+    returned = api.request(
+        "PUT",
+        f"{PHARMACY_URL}/prescription/{prescription['prescription_uuid']}/return",
+        headers={"Idempotency-Key": return_key},
+    )
+    return_replay = api.request(
+        "PUT",
+        f"{PHARMACY_URL}/prescription/{prescription['prescription_uuid']}/return",
+        headers={"Idempotency-Key": return_key},
+    )
+    if return_replay["prescription_uuid"] != returned["prescription_uuid"]:
+        raise AssertionError("Linear chain return replay did not return the original return")
+    wait_until("linear prescription returned", lambda: drug_state(api, prescription["item_uuid"]) == "已退费")
+
+    stock_after = asyncio.run(get_drug_stock(seed.drug_id))
+    if stock_after != stock_before:
+        raise AssertionError(f"Linear chain drug stock should be restored to {stock_before}, got {stock_after}")
 
 
 def run_registration_payment_order_refund_happy_path(api: E2EClient, visit: dict[str, Any]) -> None:
@@ -1214,6 +1371,8 @@ def main() -> None:
     api = E2EClient()
     try:
         check_health(api)
+        run_realistic_outpatient_chain(api, seed)
+
         visit = create_ai_guided_visit(api, seed)
         stock_before = asyncio.run(get_drug_stock(seed.drug_id))
 

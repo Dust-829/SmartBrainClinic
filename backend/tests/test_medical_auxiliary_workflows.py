@@ -19,6 +19,14 @@ def run_isolated_python(code: str) -> dict:
     return json.loads(result.stdout)
 
 
+def test_check_detail_api_exposes_result_fields():
+    source = Path("app/microservices/medical/api/medical.py").read_text(encoding="utf-8")
+
+    assert '"check_result": check.check_result' in source
+    assert '"image_path": check.image_path' in source
+    assert '"ai_tumor_prob": str(check.ai_tumor_prob)' in source
+
+
 def test_medical_order_rejects_unpaid_register():
     data = run_isolated_python(
         """
