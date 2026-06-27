@@ -2,12 +2,13 @@ import uuid as uuid_pkg
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from typing import Optional, List
-from sqlalchemy import select, update, func
+from sqlalchemy import and_, case, or_, select, update, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.patient import Patient, Register, SchedulingActual, SchedulingTimeSlot, SchedulingRule, PatientFeedback, OutboxEvent, SchedulingApplication, ScheduleDisruption
 from .internal_client import AuthClient
 from .ai_scheduling import run_ai_scheduling
-from app.common.enums import VisitState
+from app.common.enums import BillState, VisitState
 from app.common.idempotency import begin_idempotency, complete_idempotency
 from app.common.state_machine import ensure_visit_transition
 from app.microservices.patient.ws_manager import manager as ws_manager
@@ -88,6 +89,45 @@ _STATE_MAP = {
     VisitState.CANCELLED: "已退号"
 }
 
+
+def _ensure_schedule_matches_employee(schedule: SchedulingActual, employee_uuid: uuid_pkg.UUID) -> None:
+    if str(schedule.employee_uuid) != str(employee_uuid):
+        raise ValueError("所选号源不属于当前医生，请重新选择医生对应的排班")
+
+
+def _queue_noon_order():
+    return case(
+        (SchedulingActual.noon == "上午", 0),
+        (SchedulingActual.noon == "下午", 1),
+        else_=2,
+    )
+
+
+def _queue_state_order():
+    return case(
+        (Register.visit_state == VisitState.RECEPTION, 0),
+        else_=1,
+    )
+
+
+def _broadcast_queue_event(scheduling_actual_id: Optional[int], event_type: str, **payload) -> None:
+    if not scheduling_actual_id:
+        return
+    message = {"type": event_type, **payload}
+    try:
+        asyncio.create_task(
+            ws_manager.broadcast(
+                scheduling_actual_id,
+                json.dumps(message, ensure_ascii=False),
+            )
+        )
+    except RuntimeError:
+        pass
+
+
+def _broadcast_queue_update(scheduling_actual_id: Optional[int]) -> None:
+    _broadcast_queue_event(scheduling_actual_id, "queue_updated")
+
 def _gen_case_number() -> str:
     now = datetime.now()
     import random
@@ -145,6 +185,7 @@ async def create_register(session: AsyncSession, data: dict) -> dict:
         schedule = await session.get(SchedulingActual, time_slot.scheduling_actual_id)
         if not schedule:
             raise ValueError("实际排班记录不存在")
+        _ensure_schedule_matches_employee(schedule, data["employee_uuid"])
     else:
         # 线下挂号或兼容老接口：自动分配最早可用的空闲时段
         schedule_id = data.get("scheduling_actual_id")
@@ -154,6 +195,7 @@ async def create_register(session: AsyncSession, data: dict) -> dict:
         schedule = await session.get(SchedulingActual, schedule_id)
         if not schedule:
             raise ValueError("实际排班记录不存在")
+        _ensure_schedule_matches_employee(schedule, data["employee_uuid"])
             
         # 使用 skip_locked=True 允许高并发抢号时自动跳过其他事务正在锁定的号段，寻找下一个空闲号段
         stmt_ts_auto = (
@@ -240,6 +282,7 @@ async def create_register(session: AsyncSession, data: dict) -> dict:
     )
     session.add(outbox_event)
     await session.commit()
+    _broadcast_queue_update(register.scheduling_actual_id)
 
     return {
         "uuid": str(register.uuid),
@@ -600,6 +643,7 @@ async def create_online_register(session: AsyncSession, data: dict) -> dict:
         schedule = await session.get(SchedulingActual, time_slot.scheduling_actual_id)
         if not schedule:
             raise ValueError("实际排班记录不存在")
+        _ensure_schedule_matches_employee(schedule, data["employee_uuid"])
     else:
         schedule_id = data.get("scheduling_actual_id")
         if not schedule_id:
@@ -608,6 +652,7 @@ async def create_online_register(session: AsyncSession, data: dict) -> dict:
         schedule = await session.get(SchedulingActual, schedule_id)
         if not schedule:
             raise ValueError("实际排班记录不存在")
+        _ensure_schedule_matches_employee(schedule, data["employee_uuid"])
             
         stmt_ts_auto = (
             select(SchedulingTimeSlot)
@@ -755,6 +800,7 @@ async def confirm_online_payment(
 
     # 统一提交本地事务（挂号单状态变更 + 发件箱事件 + 幂等记录）
     await session.commit()
+    _broadcast_queue_update(register.scheduling_actual_id)
 
     return result
 
@@ -762,29 +808,82 @@ async def update_visit_state(session: AsyncSession, register_uuid: uuid_pkg.UUID
     """
     更新挂号单状态
     """
-    register = await get_register_by_uuid(session, register_uuid)
+    return await _transition_visit_state(session, register_uuid, visit_state)
+
+
+async def start_reception(session: AsyncSession, register_uuid: uuid_pkg.UUID) -> dict:
+    return await _transition_visit_state(session, register_uuid, VisitState.RECEPTION)
+
+
+async def finish_visit(session: AsyncSession, register_uuid: uuid_pkg.UUID) -> dict:
+    return await _transition_visit_state(session, register_uuid, VisitState.FINISHED)
+
+
+async def _transition_visit_state(session: AsyncSession, register_uuid: uuid_pkg.UUID, visit_state: int | VisitState) -> dict:
+    stmt = select(Register).where(Register.uuid == register_uuid).with_for_update()
+    res = await session.execute(stmt)
+    register = res.scalar_one_or_none()
     if not register:
         raise ValueError("挂号单不存在")
-    
+
     target_state = ensure_visit_transition(register.visit_state, visit_state)
     register.visit_state = int(target_state)
     session.add(register)
     await session.flush()
-    
+
     # 状态发生变化（接诊、结束等），触发同排班房间的队列广播
-    try:
-        import asyncio
-        asyncio.create_task(
-            ws_manager.broadcast(register.scheduling_actual_id, json.dumps({"type": "queue_updated"}))
-        )
-    except Exception as e:
-        pass # 广播失败不影响主流程
-    
+    _broadcast_queue_update(register.scheduling_actual_id)
+
     return {
         "uuid": str(register.uuid),
         "visit_state": register.visit_state,
         "visit_state_text": _STATE_MAP.get(register.visit_state, "未知")
     }
+
+
+async def call_next_patient(session: AsyncSession, employee_uuid: uuid_pkg.UUID) -> dict:
+    stmt = (
+        select(Register, Patient, SchedulingActual, SchedulingTimeSlot)
+        .join(Patient, Register.patient_id == Patient.id)
+        .join(SchedulingActual, Register.scheduling_actual_id == SchedulingActual.id)
+        .outerjoin(SchedulingTimeSlot, Register.scheduling_time_slot_id == SchedulingTimeSlot.id)
+        .where(
+            Register.employee_uuid == employee_uuid,
+            SchedulingActual.schedule_date == date.today(),
+            Register.visit_state == VisitState.REGISTERED,
+        )
+        .order_by(
+            _queue_noon_order(),
+            SchedulingTimeSlot.time_range.asc().nullslast(),
+            Register.visit_date,
+        )
+        .limit(1)
+    )
+    row = (await session.execute(stmt)).first()
+    if not row:
+        return {"called": False, "message": "今日暂无待叫号患者"}
+
+    register, patient, actual, slot = row
+    result = {
+        "called": True,
+        "register_uuid": str(register.uuid),
+        "patient_uuid": str(patient.uuid),
+        "patient_name": patient.real_name,
+        "patient_case_number": patient.case_number,
+        "visit_state": register.visit_state,
+        "visit_state_text": _STATE_MAP.get(register.visit_state, "未知"),
+        "time_range": slot.time_range if slot else None,
+        "clinic_room_uuid": str(actual.clinic_room_uuid) if actual.clinic_room_uuid else None,
+    }
+    _broadcast_queue_event(
+        register.scheduling_actual_id,
+        "queue_called",
+        register_uuid=str(register.uuid),
+        patient_uuid=str(patient.uuid),
+        patient_name=patient.real_name,
+        time_range=slot.time_range if slot else None,
+    )
+    return result
 
 async def get_queue_status(session: AsyncSession, register_uuid: uuid_pkg.UUID) -> dict:
     """
@@ -797,14 +896,43 @@ async def get_queue_status(session: AsyncSession, register_uuid: uuid_pkg.UUID) 
     if register.visit_state not in [VisitState.REGISTERED, VisitState.RECEPTION]:
         return {"ahead_of_you": 0, "status": register.visit_state}
         
-    # 查询同排班、状态为待接诊或接诊中、且挂号ID小于当前挂号ID的患者数量
-    stmt = select(func.count()).where(
-        Register.scheduling_actual_id == register.scheduling_actual_id,
-        Register.visit_state.in_([VisitState.REGISTERED, VisitState.RECEPTION]),
-        Register.id < register.id
-    )
-    result = await session.execute(stmt)
-    ahead = result.scalar() or 0
+    if register.visit_state == VisitState.RECEPTION:
+        ahead = 0
+    else:
+        current_slot = None
+        if register.scheduling_time_slot_id:
+            current_slot = await session.get(SchedulingTimeSlot, register.scheduling_time_slot_id)
+
+        if current_slot:
+            ahead_condition = or_(
+                SchedulingTimeSlot.time_range < current_slot.time_range,
+                and_(
+                    SchedulingTimeSlot.time_range == current_slot.time_range,
+                    Register.id < register.id,
+                ),
+            )
+            stmt = (
+                select(func.count())
+                .select_from(Register)
+                .join(
+                    SchedulingTimeSlot,
+                    Register.scheduling_time_slot_id == SchedulingTimeSlot.id,
+                )
+                .where(
+                    Register.scheduling_actual_id == register.scheduling_actual_id,
+                    Register.visit_state.in_([VisitState.REGISTERED, VisitState.RECEPTION]),
+                    ahead_condition,
+                )
+            )
+        else:
+            stmt = select(func.count()).where(
+                Register.scheduling_actual_id == register.scheduling_actual_id,
+                Register.visit_state.in_([VisitState.REGISTERED, VisitState.RECEPTION]),
+                Register.id < register.id,
+            )
+
+        result = await session.execute(stmt)
+        ahead = result.scalar() or 0
     # 查询诊室信息
     clinic_room_name = None
     clinic_room_location = None
@@ -837,8 +965,13 @@ async def cancel_register(session: AsyncSession, register_uuid: uuid_pkg.UUID) -
         
     from app.common.clients import BillingClient
     bills = await BillingClient.get_bills_by_register(register_uuid)
-    if any(b.get("bill_state") == "已收费" for b in bills):
-        raise ValueError("该挂号单下存在未退费账单，请先完成退费操作后再退号")
+    blocking_bills = [
+        b for b in bills
+        if b.get("bill_state") != BillState.REFUNDED.value
+    ]
+    if blocking_bills:
+        states = "、".join(sorted({str(b.get("bill_state")) for b in blocking_bills}))
+        raise ValueError(f"该挂号单下存在未完成退费账单（{states}），请先完成退费操作后再退号")
         
     if register.visit_state in [VisitState.RECEPTION, VisitState.FINISHED]:
         raise ValueError("该患者已在看诊或已结束看诊，无法退号！")
@@ -866,6 +999,7 @@ async def cancel_register(session: AsyncSession, register_uuid: uuid_pkg.UUID) -
     )
     await session.execute(stmt)
     await session.flush()
+    _broadcast_queue_update(register.scheduling_actual_id)
     
     return {
         "register_uuid": str(register.uuid),
@@ -1123,27 +1257,32 @@ async def get_doctor_queue(session: AsyncSession, employee_uuid: uuid_pkg.UUID) 
     获取指定医生的当天候诊队列（已挂号、接诊中）
     """
     stmt = (
-        select(Register, Patient)
+        select(Register, Patient, SchedulingActual, SchedulingTimeSlot)
         .join(Patient, Register.patient_id == Patient.id)
+        .join(SchedulingActual, Register.scheduling_actual_id == SchedulingActual.id)
+        .outerjoin(SchedulingTimeSlot, Register.scheduling_time_slot_id == SchedulingTimeSlot.id)
         .where(
             Register.employee_uuid == employee_uuid,
-            func.date(Register.visit_date) == date.today(),
+            SchedulingActual.schedule_date == date.today(),
             Register.visit_state.in_([VisitState.REGISTERED, VisitState.RECEPTION])
         )
-        .order_by(Register.visit_state.desc(), Register.visit_date)
+        .order_by(
+            _queue_state_order(),
+            _queue_noon_order(),
+            SchedulingTimeSlot.time_range.asc().nullslast(),
+            Register.visit_date,
+        )
     )
     res = await session.execute(stmt)
     rows = res.all()
     
     results = []
-    for reg, pat in rows:
+    for reg, pat, actual, slot in rows:
         clinic_room_name = "未指定诊室"
-        if reg.scheduling_actual_id:
-            actual = await session.get(SchedulingActual, reg.scheduling_actual_id)
-            if actual and actual.clinic_room_uuid:
-                room_info = await AuthClient.get_clinic_room(str(actual.clinic_room_uuid))
-                if room_info and room_info.get("room_name"):
-                    clinic_room_name = room_info["room_name"]
+        if actual.clinic_room_uuid:
+            room_info = await AuthClient.get_clinic_room(str(actual.clinic_room_uuid))
+            if room_info and room_info.get("room_name"):
+                clinic_room_name = room_info["room_name"]
 
         results.append({
             "register_uuid": str(reg.uuid),
@@ -1155,6 +1294,7 @@ async def get_doctor_queue(session: AsyncSession, employee_uuid: uuid_pkg.UUID) 
             "visit_state": reg.visit_state,
             "visit_state_text": _STATE_MAP.get(reg.visit_state, "未知"),
             "visit_date": reg.visit_date.isoformat(),
+            "time_range": slot.time_range if slot else None,
             "clinic_room_name": clinic_room_name
         })
     return results
@@ -1171,14 +1311,38 @@ async def create_patient_feedback(session: AsyncSession, data: dict) -> dict:
 
 
 async def create_scheduling_application(session: AsyncSession, employee_uuid: uuid_pkg.UUID, prompt: str) -> dict:
+    normalized_prompt = " ".join(str(prompt or "").split())
+    if not normalized_prompt:
+        raise ValueError("排班申请内容不能为空")
+
+    existing_stmt = (
+        select(SchedulingApplication)
+        .where(
+            SchedulingApplication.employee_uuid == employee_uuid,
+            SchedulingApplication.prompt == normalized_prompt,
+            SchedulingApplication.status == "pending",
+        )
+        .order_by(SchedulingApplication.created_at.desc())
+    )
+    existing = (await session.execute(existing_stmt)).scalars().first()
+    if existing:
+        return {"uuid": str(existing.uuid), "status": existing.status, "deduplicated": True}
+
     app = SchedulingApplication(
         employee_uuid=employee_uuid,
-        prompt=prompt,
+        prompt=normalized_prompt,
         status="pending"
     )
     session.add(app)
-    await session.flush()
-    return {"uuid": str(app.uuid), "status": "pending"}
+    try:
+        await session.flush()
+    except IntegrityError:
+        await session.rollback()
+        existing = (await session.execute(existing_stmt)).scalars().first()
+        if existing:
+            return {"uuid": str(existing.uuid), "status": existing.status, "deduplicated": True}
+        raise
+    return {"uuid": str(app.uuid), "status": "pending", "deduplicated": False}
 
 async def get_pending_scheduling_applications(session: AsyncSession) -> list:
     stmt = select(SchedulingApplication).where(SchedulingApplication.status == "pending").order_by(SchedulingApplication.created_at.desc())

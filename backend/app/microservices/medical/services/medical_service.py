@@ -1,5 +1,6 @@
 import uuid as uuid_pkg
-from typing import List
+from dataclasses import dataclass
+from typing import Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.medical import MedicalRecord, CheckRequest, InspectionRequest, DisposalRequest, MedicalTechnology
 from .ai_image_inference import analyze_brain_image
@@ -12,6 +13,8 @@ from app.common.state_machine import (
     ensure_disposal_transition,
     ensure_inspection_transition,
     normalize_check_state,
+    normalize_disposal_state,
+    normalize_inspection_state,
 )
 from ..models.medical import Disease, MedicalRecordDisease
 from sqlalchemy import delete
@@ -23,6 +26,40 @@ import json
 from ..models.medical import OutboxEvent
 from app.microservices.medical.database import session_factory
 from sqlalchemy import select
+
+MIN_SIMILAR_CASE_SCORE = 35.0
+
+
+def _normalize_visit_state_value(state: Any) -> int | None:
+    try:
+        return int(state)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _ensure_register_allows_medical_order(register_uuid: uuid_pkg.UUID) -> dict:
+    reg = await PatientClient.get_register(register_uuid)
+    if not reg:
+        raise ValueError("挂号记录不存在")
+
+    visit_state = _normalize_visit_state_value(reg.get("visit_state"))
+    if visit_state in (int(VisitState.UNPAID), int(VisitState.CANCELLED)):
+        state_map = {
+            int(VisitState.UNPAID): "待支付",
+            int(VisitState.REGISTERED): "已挂号",
+            int(VisitState.RECEPTION): "接诊中",
+            int(VisitState.FINISHED): "已结束",
+            int(VisitState.CANCELLED): "已退号",
+        }
+        raise ValueError(f"挂号单当前状态为 '{state_map.get(visit_state, '未知')}'，无法开立医技项目")
+    return reg
+
+
+@dataclass(frozen=True)
+class SimilarRecordMatch:
+    record: MedicalRecord
+    similarity_score: float
+    cosine_distance: float
 
 
 async def create_medical_record(session: AsyncSession, data: dict) -> MedicalRecord:
@@ -118,9 +155,7 @@ async def assign_tech_to_check_task(check_uuid: str, tech_name: str):
                 print(f"Error updating check request tech: {e}")
 
 async def create_check_request(session: AsyncSession, data: dict, background_tasks=None) -> CheckRequest:
-    reg = await PatientClient.get_register(data["register_uuid"])
-    if not reg:
-        raise ValueError("挂号记录不存在")
+    await _ensure_register_allows_medical_order(data["register_uuid"])
     
     tech_stmt = select(MedicalTechnology).where(MedicalTechnology.id == data["medical_technology_id"])
     tech_res = await session.execute(tech_stmt)
@@ -144,9 +179,7 @@ async def create_check_request(session: AsyncSession, data: dict, background_tas
     return check
 
 async def create_inspection_request(session: AsyncSession, data: dict) -> InspectionRequest:
-    reg = await PatientClient.get_register(data["register_uuid"])
-    if not reg:
-        raise ValueError("挂号记录不存在")
+    await _ensure_register_allows_medical_order(data["register_uuid"])
     
     inspection = InspectionRequest(
         register_uuid=uuid_pkg.UUID(str(data["register_uuid"])),
@@ -158,9 +191,7 @@ async def create_inspection_request(session: AsyncSession, data: dict) -> Inspec
     return inspection
 
 async def create_disposal_request(session: AsyncSession, data: dict) -> DisposalRequest:
-    reg = await PatientClient.get_register(data["register_uuid"])
-    if not reg:
-        raise ValueError("挂号记录不存在")
+    await _ensure_register_allows_medical_order(data["register_uuid"])
     
     disposal = DisposalRequest(
         register_uuid=uuid_pkg.UUID(str(data["register_uuid"])),
@@ -474,28 +505,127 @@ async def input_check_result(
         "check_result": check.check_result
     }
 
-async def search_similar_records(session: AsyncSession, query_text: str, top_k: int = 5) -> List[MedicalRecord]:
+
+async def input_inspection_result(
+    session: AsyncSession,
+    inspection_uuid: str,
+    input_employee_uuid: uuid_pkg.UUID,
+    test_results: Any = None,
+) -> dict:
+    stmt = select(InspectionRequest).where(InspectionRequest.uuid == uuid_pkg.UUID(inspection_uuid)).with_for_update()
+    result = await session.execute(stmt)
+    inspection = result.scalar_one_or_none()
+    if not inspection:
+        raise ValueError("检验单不存在")
+
+    if normalize_inspection_state(inspection.inspection_state) != InspectionState.PAID:
+        raise ValueError(
+            f"当前检验单状态为 '{inspection.inspection_state}'，必须为 '{InspectionState.PAID.value}' 状态才能执行录入"
+        )
+
+    inspection.test_results = test_results
+    inspection.input_employee_uuid = input_employee_uuid
+    inspection.inspection_time = datetime.now()
+    target_state = ensure_inspection_transition(inspection.inspection_state, InspectionState.EXECUTED)
+    inspection.inspection_state = target_state.value
+    session.add(inspection)
+    await session.flush()
+
+    return {
+        "id": inspection.id,
+        "inspection_state": inspection.inspection_state,
+        "test_results": inspection.test_results,
+        "input_employee_uuid": str(inspection.input_employee_uuid) if inspection.input_employee_uuid else None,
+    }
+
+
+async def input_disposal_result(
+    session: AsyncSession,
+    disposal_uuid: str,
+    disposal_result: str = None,
+) -> dict:
+    stmt = select(DisposalRequest).where(DisposalRequest.uuid == uuid_pkg.UUID(disposal_uuid)).with_for_update()
+    result = await session.execute(stmt)
+    disposal = result.scalar_one_or_none()
+    if not disposal:
+        raise ValueError("处置单不存在")
+
+    if normalize_disposal_state(disposal.disposal_state) != DisposalState.PAID:
+        raise ValueError(
+            f"当前处置单状态为 '{disposal.disposal_state}'，必须为 '{DisposalState.PAID.value}' 状态才能执行录入"
+        )
+
+    disposal.disposal_result = disposal_result
+    disposal.disposal_time = datetime.now()
+    target_state = ensure_disposal_transition(disposal.disposal_state, DisposalState.EXECUTED)
+    disposal.disposal_state = target_state.value
+    session.add(disposal)
+    await session.flush()
+
+    return {
+        "id": disposal.id,
+        "disposal_state": disposal.disposal_state,
+        "disposal_result": disposal.disposal_result,
+    }
+
+async def search_similar_record_matches(
+    session: AsyncSession,
+    query_text: str,
+    top_k: int = 5,
+    min_similarity_score: float = MIN_SIMILAR_CASE_SCORE,
+) -> list[SimilarRecordMatch]:
     """
-    根据给定的病历描述，使用向量搜索找出最相似的历史真实病历
+    根据给定的病历描述，使用向量搜索找出最相似的历史真实病历，并返回证据质量分。
     """
 
     query_vec = await get_embedding(query_text)
     if not query_vec:
         return []
-    
+
+    distance_col = MedicalRecord.dialog_vector.cosine_distance(query_vec).label("cosine_distance")
     # 使用 PGVector 进行余弦距离搜索 ( <=> 在部分 pgvector 版本是 cosine distance, 或者 <-> 是 L2 distance)
     # 我们这里使用 cosine_distance
-    stmt = select(MedicalRecord).where(
+    stmt = select(MedicalRecord, distance_col).where(
         MedicalRecord.dialog_vector.is_not(None),
         MedicalRecord.is_doctor_confirmed == True
     ).order_by(
-        MedicalRecord.dialog_vector.cosine_distance(query_vec)
+        distance_col
     ).limit(top_k)
-    
-    result = await session.execute(stmt)
-    return result.scalars().all()
 
-async def ai_assistant_query(session: AsyncSession, patient_uuid: str, question: str, employee_uuid: str = None, top_k: int = 5) -> str:
+    result = await session.execute(stmt)
+    matches: list[SimilarRecordMatch] = []
+    for record, distance in result.all():
+        cosine_distance = float(distance)
+        similarity_score = max(0.0, (1.0 - cosine_distance) * 100.0)
+        if similarity_score < min_similarity_score:
+            continue
+        matches.append(
+            SimilarRecordMatch(
+                record=record,
+                similarity_score=round(similarity_score, 1),
+                cosine_distance=round(cosine_distance, 4),
+            )
+        )
+    return matches
+
+
+async def search_similar_records(session: AsyncSession, query_text: str, top_k: int = 5) -> List[MedicalRecord]:
+    """
+    根据给定的病历描述，使用向量搜索找出最相似的历史真实病历。
+    保留旧返回结构，供已有调用方兼容使用。
+    """
+
+    matches = await search_similar_record_matches(session, query_text, top_k=top_k)
+    return [match.record for match in matches]
+
+async def ai_assistant_query(
+    session: AsyncSession,
+    patient_uuid: str,
+    question: str,
+    employee_uuid: str = None,
+    top_k: int = 5,
+    confirm_action: bool = False,
+) -> str:
     """
     LangGraph Agent 驱动的医生智能助理。
     
@@ -506,7 +636,14 @@ async def ai_assistant_query(session: AsyncSession, patient_uuid: str, question:
     
     函数签名保持不变，API 层零改动。
     """
-    return await build_and_run_agent(session, patient_uuid, question, employee_uuid, top_k)
+    return await build_and_run_agent(
+        session,
+        patient_uuid,
+        question,
+        employee_uuid,
+        top_k,
+        confirm_action=confirm_action,
+    )
 
 async def get_requests_batch(session: AsyncSession, check_uuids: list[str], inspection_uuids: list[str], disposal_uuids: list[str]) -> dict:
     ret = {"checks": {}, "inspections": {}, "disposals": {}}

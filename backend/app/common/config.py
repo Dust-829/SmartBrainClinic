@@ -15,6 +15,11 @@ class BaseMicroserviceSettings(BaseSettings):
     LLM_MODEL: str = "deepseek-ai/DeepSeek-V4-Pro"
     LLM_EMBEDDING_MODEL: str = "BAAI/bge-m3"
     AI_ALLOW_MOCK_FALLBACK: bool = True
+    AI_SECOND_REVIEW_ENABLED: bool = True
+    AI_SECOND_REVIEW_MODE: str = "risk_only"
+    AI_SECOND_REVIEW_MODEL: str = "deepseek-ai/DeepSeek-V4-Pro"
+    ADMIN_API_TOKEN: str = ""
+    AI_AUDIT_ADMIN_TOKEN: str = ""
     
     # 基础数据库配置 (各服务可覆盖)
     DB_HOST: str = "localhost"

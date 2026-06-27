@@ -41,6 +41,22 @@ class BillingItemChargeLock(SQLModel, table=True):
     bill_code: str = Field(max_length=64, nullable=False)
     created_at: Optional[datetime] = Field(default_factory=datetime.now)
 
+class BillingRefundSagaStep(SQLModel, table=True):
+    __tablename__ = "billing_refund_saga_step"
+    __table_args__ = (
+        UniqueConstraint("bill_code", "step_name", name="uq_billing_refund_saga_step"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bill_code: str = Field(max_length=64, nullable=False, index=True)
+    step_name: str = Field(max_length=64, nullable=False)
+    status: str = Field(default="pending", max_length=32, nullable=False, index=True)
+    request_payload: Optional[str] = Field(default=None, sa_column=Column(Text))
+    response_payload: Optional[str] = Field(default=None, sa_column=Column(Text))
+    error_message: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: Optional[datetime] = Field(default_factory=datetime.now)
+    updated_at: Optional[datetime] = Field(default_factory=datetime.now)
+
 class OutboxEvent(SQLModel, table=True):
     __tablename__ = "outbox_event"
     id: Optional[int] = Field(default=None, primary_key=True)

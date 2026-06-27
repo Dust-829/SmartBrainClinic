@@ -4,9 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..services import patient_service as svc
 from app.common.response import success, created
+from app.common.ai_audit import query_ai_audit_logs
+from app.common.security import require_ai_audit_admin
 from pydantic import BaseModel
 from typing import Optional
-from datetime import date
+from datetime import date, datetime
 from ..config import settings
 from ..services.ai_triage import run_ai_triage, DEPT_LIST
 
@@ -127,6 +129,34 @@ async def list_departments():
     return success(DEPT_LIST)
 
 
+@router.get(
+    "/admin/ai-audits",
+    summary="查询AI审计日志",
+    dependencies=[Depends(require_ai_audit_admin)],
+)
+async def list_ai_audits(
+    module_name: Optional[str] = None,
+    source: Optional[str] = None,
+    validated: Optional[bool] = None,
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
+    limit: int = 50,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+):
+    logs = await query_ai_audit_logs(
+        session,
+        module_name=module_name,
+        source=source,
+        validated=validated,
+        created_from=created_from,
+        created_to=created_to,
+        limit=limit,
+        offset=offset,
+    )
+    return success(logs)
+
+
 @router.post("/recommend-doctors", summary="智能医生推荐")
 async def recommend_doctors(data: DoctorRecommendRequest, session: AsyncSession = Depends(get_session)):
     try:
@@ -193,6 +223,28 @@ async def update_register_state(uuid: uuid_pkg.UUID, visit_state: int, session: 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.put("/register/{uuid}/start-reception", summary="开始接诊")
+async def start_reception(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.start_reception(session, uuid)
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/register/{uuid}/finish", summary="结束就诊")
+async def finish_visit(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.finish_visit(session, uuid)
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.put("/register/{uuid}/cancel", summary="退号")
 async def cancel_register(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
@@ -238,6 +290,17 @@ async def get_doctor_queue(employee_uuid: uuid_pkg.UUID, session: AsyncSession =
     try:
         queue = await svc.get_doctor_queue(session, employee_uuid)
         return success(queue)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/doctor/{employee_uuid}/queue/call-next", summary="叫下一位候诊患者")
+async def call_next_patient(employee_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.call_next_patient(session, employee_uuid)
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
