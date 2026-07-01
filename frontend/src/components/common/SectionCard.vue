@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 defineProps<{
   title: string
   subtitle?: string
@@ -22,9 +22,10 @@ defineProps<{
 
 <style scoped>
 .section-card {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--patient-border, #e2e8f0);
+  border-radius: var(--patient-radius, 8px);
+  background: var(--patient-surface, #ffffff);
+  box-shadow: var(--patient-shadow, none);
 }
 
 .section-card__header {
@@ -32,19 +33,21 @@ defineProps<{
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 20px 0;
+  padding: 20px 20px 0;
 }
 
 .section-card__header h3 {
   margin: 0;
-  font-size: 16px;
-  color: #0f172a;
+  color: var(--patient-text, #0f172a);
+  font-size: 18px;
+  line-height: 1.3;
+  letter-spacing: 0;
 }
 
 .section-card__header p {
   margin: 6px 0 0;
+  color: var(--patient-text-muted, #64748b);
   font-size: 13px;
-  color: #64748b;
 }
 
 .section-card__body {

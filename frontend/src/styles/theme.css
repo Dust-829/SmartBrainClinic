@@ -1,4 +1,26 @@
-﻿:root {
+:root {
+  --patient-primary: #087cf0;
+  --patient-primary-strong: #0569d8;
+  --patient-primary-soft: #eaf4ff;
+  --patient-teal: #0abdb7;
+  --patient-teal-soft: #e8fbfa;
+  --patient-text: #14213a;
+  --patient-text-muted: #66758b;
+  --patient-border: #dce8f4;
+  --patient-page-bg: #f4f8fd;
+  --patient-surface: #ffffff;
+  --patient-surface-muted: #f5f8fc;
+  --patient-header-gradient: linear-gradient(135deg, #0573ff 0%, #1597ff 62%, #22b8ee 100%);
+  --patient-page-width: 430px;
+  --patient-page-gutter: 18px;
+  --patient-control-height: 44px;
+  --patient-nav-height: 76px;
+  --patient-auth-header-height: 270px;
+  --patient-radius: 8px;
+  --patient-shadow: 0 10px 28px rgba(31, 92, 153, 0.09);
+  --patient-page-shadow: 0 24px 70px rgba(27, 57, 94, 0.16);
+  --patient-z-nav: 20;
+
   color: #0f172a;
   background: #ffffff;
   line-height: 1.5;
@@ -11,4 +33,39 @@
 a {
   color: inherit;
   text-decoration: none;
+}
+
+.patient-layout {
+  --el-color-primary: var(--patient-primary);
+  --el-color-primary-light-3: #48a0f5;
+  --el-color-primary-light-5: #7ebcf8;
+  --el-color-primary-light-7: #b5dafa;
+  --el-color-primary-light-8: #d2e9fc;
+  --el-color-primary-light-9: #eaf4ff;
+  --el-color-primary-dark-2: var(--patient-primary-strong);
+}
+
+.patient-layout .el-input__wrapper,
+.patient-layout .el-textarea__inner,
+.patient-layout .el-segmented {
+  border-radius: var(--patient-radius);
+}
+
+.patient-layout .el-input__wrapper {
+  min-height: var(--patient-control-height);
+}
+
+.patient-layout .el-button {
+  min-height: var(--patient-control-height);
+  border-radius: var(--patient-radius);
+  font-weight: 700;
+}
+
+.patient-layout .el-form-item__label {
+  color: var(--patient-text);
+  font-weight: 700;
+}
+
+.patient-layout .el-dialog {
+  border-radius: var(--patient-radius);
 }
