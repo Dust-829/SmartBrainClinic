@@ -1,4 +1,4 @@
-﻿# SmartBrainClinic
+# SmartBrainClinic
 
 智慧云脑诊疗平台项目仓库。
 
@@ -9,7 +9,7 @@
 当前仓库的主实现已经确定为 **Python FastAPI 微服务后端**，不是 Java / Spring Boot。
 
 - 后端主目录：`backend/`
-- 前端目录：`frontend/`，目前尚未初始化正式 Vue 3 工程
+- 前端目录：`frontend/`，当前已是可运行的 Vue 3 + Vite 工程，患者端第一阶段主链路已落地
 - 文档目录：`docs/`
 - 旧 `services/` 目录仅为早期占位，不是当前运行实现
 
@@ -144,5 +144,5 @@ Swagger 文档入口：
 ## 重要文档
 
 - [项目规划](docs/项目规划.md)
-- [后端架构说明](docs/后端架构说明.md)
+- [项目结构说明](docs/项目结构说明.md)
 - [GitHub 协作规范](docs/GitHub协作规范.md)
