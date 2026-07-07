@@ -2,13 +2,13 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
-import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
-const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 
-const patientName = computed(() => flow.patient?.real_name || flow.loginDraft.realName || '\u5f20\u4e09')
-const visitNumber = computed(() => flow.patient?.case_number || '\u6682\u672a\u5efa\u6863')
+const patientName = computed(() => session.patient?.real_name || session.loginDraft.realName || '\u5f20\u4e09')
+const visitNumber = computed(() => session.patient?.case_number || '\u6682\u672a\u5efa\u6863')
 
 const features = [
   {

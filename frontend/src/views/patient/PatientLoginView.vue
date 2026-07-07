@@ -6,15 +6,17 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import PatientAuthHeader from '@/components/patient/PatientAuthHeader.vue'
 import { patientApi } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 
 const form = reactive({
-  real_name: flow.loginDraft.realName,
-  card_number: flow.loginDraft.cardNumber,
+  real_name: session.loginDraft.realName,
+  card_number: session.loginDraft.cardNumber,
 })
 
 const rules: FormRules = {
@@ -37,7 +39,7 @@ async function login() {
       ElMessage.warning('姓名与证件号不匹配')
       return
     }
-    flow.setPatient(patient)
+    session.login(patient)
     flow.resetAfterPatient()
     ElMessage.success('登录成功')
     router.push('/patient/home')
@@ -47,7 +49,7 @@ async function login() {
 }
 
 function goRegister() {
-  flow.setLoginDraft({ realName: form.real_name, cardNumber: form.card_number })
+  session.setLoginDraft({ realName: form.real_name, cardNumber: form.card_number })
   router.push('/patient/register')
 }
 

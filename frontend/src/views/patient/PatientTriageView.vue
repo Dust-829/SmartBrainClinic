@@ -5,9 +5,11 @@ import { ElMessage } from 'element-plus'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
 import { patientApi, type TriageMessage } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const input = ref('')
 const submitting = ref(false)
 
@@ -29,26 +31,46 @@ const departmentNames: Record<string, string> = {
 }
 
 const patientLine = computed(() => {
-  if (!flow.patient) return '未登录患者'
-  return `${flow.patient.real_name} | ${flow.patient.gender} | ${formatAge(flow.patient.birthdate)}`
+  if (!session.patient) return '未登录患者'
+  return `${session.patient.real_name} | ${session.patient.gender} | ${formatAge(session.patient.birthdate)}`
 })
 
 const recommendedDepartment = computed(() => {
   const code = triage.value?.recommended_dept_code
   if (!code) return '待确认'
-  const name = departmentNames[code]
-  return name || code
+  return departmentNames[code] || code
 })
 
 const aiSourceLabel = computed(() => {
-  if (!flow.triageResult) return '未调用'
-  if (flow.triageResult.source === 'llm') return `真实大模型 · ${flow.triageResult.model || 'LLM'}`
-  if (flow.triageResult.source === 'mock') return '离线规则兜底 · mock-triage'
+  if (!flow.triageResult) return '未生成'
+  if (flow.triageResult.source === 'llm') return `真实大模型 · ${flow.triageResult.model || 'DeepSeek'}`
+  if (flow.triageResult.source === 'rule') return `规则校验 · ${flow.triageResult.model || 'rule'}`
+  if (flow.triageResult.source === 'fallback') return `安全校验结果 · ${flow.triageResult.model || 'fallback'}`
+  if (flow.triageResult.source === 'mock') return '模拟分诊结果'
   return flow.triageResult.source || '未知来源'
 })
 
+const confidenceLabel = computed(() => {
+  const confidence = flow.triageResult?.confidence
+  if (typeof confidence !== 'number') return '暂无'
+  return `${Math.round(confidence * 100)}%`
+})
+
+const validationLabel = computed(() => {
+  if (!flow.triageResult) return '未校验'
+  return flow.triageResult.validated === false ? '需人工确认' : '已通过安全校验'
+})
+
+const resultWarnings = computed(() => {
+  const warnings = flow.triageResult?.warnings || []
+  const validatorMessages = flow.triageResult?.validator_messages || []
+  return [...warnings, ...validatorMessages].filter(Boolean)
+})
+
 onMounted(() => {
-  if (!flow.patient) router.replace('/patient')
+  if (!session.patient) {
+    router.replace('/patient/login')
+  }
 })
 
 async function send(content = input.value) {
@@ -58,11 +80,14 @@ async function send(content = input.value) {
   const nextMessages: TriageMessage[] = [...messages.value, { role: 'user', content: normalized }]
   input.value = ''
   submitting.value = true
+
   try {
     const response = await patientApi.triage(nextMessages)
     const result = response.data.data
     const assistantReply = result.data.reply || '已完成本轮分诊。'
     flow.setTriage([...nextMessages, { role: 'assistant', content: assistantReply }], result)
+  } catch {
+    input.value = normalized
   } finally {
     submitting.value = false
   }
@@ -88,6 +113,7 @@ function formatAge(birthdate?: string) {
   if (!birthdate) return '年龄未知'
   const birth = new Date(`${birthdate}T00:00:00`)
   if (Number.isNaN(birth.getTime())) return '年龄未知'
+
   const today = new Date()
   let age = today.getFullYear() - birth.getFullYear()
   const monthDiff = today.getMonth() - birth.getMonth()
@@ -105,21 +131,21 @@ function formatAge(birthdate?: string) {
       @back="goBack"
     />
 
-    <div class="triage-chat__notice">AI 回复仅供参考，所有回复内容不构成诊疗行为建议。</div>
+    <div class="triage-chat__notice">AI 回复仅供参考，最终诊疗请以医生判断为准。</div>
 
     <section class="triage-chat__patient">
       <strong>{{ patientLine }}</strong>
-      <span>智能分诊将根据症状推荐就诊科室</span>
+      <span>系统将根据症状描述推荐合适科室</span>
     </section>
 
     <section class="triage-chat__hero">
-      <h2>说说哪里不舒服~</h2>
-      <p>我来帮你找科室、找医生</p>
+      <h2>说说哪里不舒服</h2>
+      <p>我来帮您快速确定就诊方向</p>
     </section>
 
     <main class="triage-chat__body">
       <section class="triage-chat__assistant-card">
-        <p>hi，请简单描述一下病情，我会为您推荐合适的就诊科室，比如您可以说</p>
+        <p>请简单描述主要不适、持续时间、伴随症状和既往病史，系统会结合真实 AI 模型给出就诊建议。</p>
         <button v-for="example in examples" :key="example" type="button" @click="useExample(example)">
           <span>{{ example }}</span>
           <strong>›</strong>
@@ -143,6 +169,17 @@ function formatAge(birthdate?: string) {
           <span>AI 来源</span>
           <strong>{{ aiSourceLabel }}</strong>
         </div>
+        <div class="triage-chat__result-row">
+          <span>可信度</span>
+          <strong>{{ confidenceLabel }}</strong>
+        </div>
+        <div class="triage-chat__result-row">
+          <span>安全校验</span>
+          <strong>{{ validationLabel }}</strong>
+        </div>
+        <p v-if="resultWarnings.length" class="triage-chat__warning">
+          {{ resultWarnings.join('；') }}
+        </p>
         <el-button type="primary" size="large" @click="goNext">查看推荐医生</el-button>
       </section>
     </main>
@@ -185,7 +222,7 @@ function formatAge(birthdate?: string) {
 }
 
 .triage-chat__patient strong {
-  color: #4b5563;
+  color: #475569;
   font-size: 17px;
 }
 
@@ -195,7 +232,7 @@ function formatAge(birthdate?: string) {
 }
 
 .triage-chat__hero {
-  padding: 32px 24px 28px;
+  padding: 28px 24px 24px;
 }
 
 .triage-chat__hero h2,
@@ -207,7 +244,6 @@ function formatAge(birthdate?: string) {
   color: #1e2a5a;
   font-size: 24px;
   line-height: 1.25;
-  letter-spacing: 0;
 }
 
 .triage-chat__hero p {
@@ -235,8 +271,8 @@ function formatAge(birthdate?: string) {
 .triage-chat__assistant-card p {
   margin: 0;
   color: #3f3f46;
-  font-size: 17px;
-  line-height: 1.55;
+  font-size: 16px;
+  line-height: 1.6;
 }
 
 .triage-chat__assistant-card button {
@@ -317,6 +353,17 @@ function formatAge(birthdate?: string) {
 
 .triage-chat__result strong {
   color: #0f172a;
+}
+
+.triage-chat__warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .triage-chat__composer {

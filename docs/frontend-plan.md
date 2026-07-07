@@ -1,377 +1,444 @@
 # 前端实施计划
 
-本文档是智慧云脑诊疗平台的前端专项计划，用于记录前端结构、患者端主链路、设计规则、真实接口边界和阶段进度。总业务范围以 `docs/项目规划.md` 为准。
+更新时间：2026-07-07。
 
-更新时间：2026-07-01。
+本文档用于维护智慧云脑诊疗平台前端专项计划，重点记录三端前端结构、路由边界、会话状态拆分、真实接口接入策略、阶段计划和当前执行切片。总业务范围以 `docs/项目规划.md` 为准。
 
-## 1. 前端建设原则
+## 1. 当前前端方向
 
-- 只接真实后端接口，不写大面积本地假业务。
-- 先完成患者端主链路，再推进医生端和管理员端。
+前端已经明确转为“三端独立”方案：
+- 患者端独立登录、独立首页、独立主链路。
+- 医生端独立登录、独立工作台、独立业务流程。
+- 管理员端独立登录、独立控制台、独立管理流程。
+
+这里的独立，指产品体验、路由入口、会话状态和守卫边界独立；当前仍保持一个 `frontend/` 工程，不拆成三个仓库。
+
+## 2. 建设原则
+
+- 只接真实后端接口，不用大面积前端假业务填流程。
+- 患者端继续优先推进，但结构必须按三端独立方式收口。
 - 患者端移动端优先，医生端和管理员端桌面端优先。
-- 三端共用请求层、状态层、主题变量和基础组件，但业务页面风格要区分。
-- 前端不暴露后端内部编码，例如科室代码 `SJWK` 只用于接口参数，患者界面展示“神经外科”。
-- AI 结果必须标明来源，区分真实 LLM、规则、mock、fallback。
-- 医生推荐、排班和号源选择必须来自真实医生、真实排班和真实号源。
-
-## 2. 技术栈与目录
-
-- Vue 3
-- Vite
-- Vue Router
-- Pinia
-- Axios
-- Element Plus
-
-```text
-frontend/
-  src/
-    api/                统一接口调用
-    stores/             Pinia 状态管理
-    router/             路由配置
-    layouts/            patient / doctor / admin 三套布局
-    views/
-      patient/          患者端页面
-      doctor/           医生端页面
-      admin/            管理员端页面
-    components/
-      common/           公共组件
-      patient/          患者端组件
-    styles/             全局样式与主题
-```
+- 三端可以共享请求层、基础组件、主题变量和工具函数，但不能再共享一个产品级角色切换入口。
+- 患者端不展示后端内部编码，例如 `SJWK` 只用于接口参数，不直接给患者显示。
+- AI 结果必须能区分来源，不能把规则兜底或 mock 伪装成真实大模型能力。
+- 路由守卫和会话状态按端拆开，不允许跨端串用登录态。
 
 ## 3. 当前工程状态
 
 已完成：
-
 - Vue 3 + Vite 工程初始化。
 - `Vue Router`、`Pinia`、`Axios`、`Element Plus` 接入。
-- 三套基础布局已完成：
+- 三套基础布局已存在：
   - `frontend/src/layouts/PatientLayout.vue`
   - `frontend/src/layouts/DoctorLayout.vue`
   - `frontend/src/layouts/AdminLayout.vue`
-- 全局角色切换按钮已提升到 `frontend/src/App.vue`，本轮暂不修改该按钮。
-- 公共请求层：`frontend/src/api/http.ts`。
-- 患者端接口层：`frontend/src/api/patient.ts`。
-- 基础全局状态：`frontend/src/stores/app.ts`。
-- 患者流程状态：`frontend/src/stores/patientFlow.ts`。
-- 开发服务地址：`http://localhost:5173`。
+- 公共请求层已存在：`frontend/src/api/http.ts`
+- 患者端主流程状态已存在：`frontend/src/stores/patientFlow.ts`
+- 产品级全局三端切换入口已移除，不再在 `App.vue` 顶部保留角色切换按钮。
 
-## 4. 三端页面边界
+当前遗留：
+- 医生端工作台仍以占位骨架为主，未完成真实数据联动。
+- 管理员端目前只有登录占位页和控制台骨架，尚未开始真实业务面联动。
+- 患者链路已完成登录态拆分与守卫接管，但后续仍需要按小步持续回归验证。
+
+最近已完成回顾：
+- 已移除产品级全局三端切换入口，`App.vue` 不再承担角色切换职责。
+- 已补齐 `patientSession`、`doctorSession`、`adminSession` 三套独立 session store，并统一挂到共享 `pinia` 实例。
+- 已把患者登录页、注册页和患者端主要业务页的身份读取从 `patientFlow` 迁到 `patientSession`。
+- 已清理 `patientFlow` 的剩余登录态兼容出口，使其回到纯业务 flow store。
+- 已完成路由 `role` / `requiresAuth` meta、通用登录态判定工具和全局前置守卫。
+- 已新增 `/doctor/login`、`/admin/login` 占位页，并把 `/doctor`、`/admin` 默认入口收口到各自登录页。
+- 已显式收口医生业务首页为 `/doctor/workbench`，管理员首页为 `/admin/console`。
+- 已把患者端默认入口切到首页，当前 `/patient` 为患者首页入口，`/patient/login` 为独立登录页。
+
+## 4. 三端结构目标
 
 ### 4.1 患者端
 
-定位：移动端优先，承担患者自助操作主链路。
-
-当前页面：
-
-- 登录页：`/patient`
-- 注册建档页：`/patient/register`
-- 患者端首页：`/patient/home`
-- 挂号入口 / 选择病种页：`/patient/departments`
-- AI 问诊页：`/patient/triage`
-- 医生推荐页：`/patient/doctors`
-- 挂号确认页：`/patient/confirm-register`
-- 在线支付页：`/patient/payment`
-- 候诊状态页：`/patient/queue`
-- 挂号记录页：`/patient/registers`
-- 个人中心页：`/patient/profile`
+当前路由：
+- `/patient`
+- `/patient/login`
+- `/patient/register`
+- `/patient/home`
+- `/patient/departments`
+- `/patient/triage`
+- `/patient/doctors`
+- `/patient/confirm-register`
+- `/patient/payment`
+- `/patient/queue`
+- `/patient/registers`
+- `/patient/profile`
 
 患者端主链路：
 
 ```text
-登录 / 注册建档
--> 患者端首页
--> 按科室挂号
--> 可选 AI 问诊，或手动选择科室
+患者首页
+-> 登录 / 注册建档
+-> 返回患者首页
+-> AI 问诊或按科室挂号
 -> 医生推荐
--> 选择日期
--> 选择上午 / 下午
--> 选择具体时间
--> 线上预挂号锁号
--> 模拟支付
+-> 选择日期 / 午别 / 具体时间
+-> 线上预挂号
+-> 支付
 -> 候诊状态
--> 挂号记录查询
+-> 历史挂号 / 个人中心
 ```
 
 ### 4.2 医生端
 
-定位：桌面端双栏工作台，左侧传统 HIS 业务区，右侧 AI 辅助区。
+目标入口：
+- `/doctor/login`
+- `/doctor/workbench`
+- `/doctor/queue`
+- `/doctor/encounter/:registerId`
+- `/doctor/records`
 
-当前状态：仅保留基础占位页，未开始业务铺设。
+医生端最小闭环：
 
-第一版目标模块：今日候诊队列、叫号、接诊、病历草稿审核、检查检验开立、结果查看、处方确认。
+```text
+医生登录
+-> 工作台
+-> 今日候诊列表
+-> 接诊详情
+-> 查看 AI 问诊摘要
+-> 医生确认病历 / 检查 / 处方
+```
 
 ### 4.3 管理员端
 
-定位：桌面端管理后台。
-
-当前状态：仅保留基础占位页，未开始业务铺设。
-
-第一版目标模块：医生与科室查看、排班生成、AI 排班微调、排班审批、排班规则干预、AI 审计日志。
-
-## 5. 患者端接口映射
-
-### 5.1 登录注册
-
-- `POST /api/v1/patient`：患者注册建档。
-- `GET /api/v1/patient/card/{card_number}`：按证件号查询已建档患者，用于当前轻量登录。
-
-规则：
-
-- `/patient` 为患者登录页。
-- 登录使用姓名 + 证件号查询真实患者档案。
-- `/patient/register` 使用真实接口建档。
-- 注册成功后直接进入患者已登录流程。
-- 身份证输入自动匹配出生日期，并校验证件出生日期合法性。
-
-### 5.2 AI 问诊与医生推荐
-
-- `POST /api/v1/patient/triage`：AI 分诊。
-- `GET /api/v1/patient/departments`：科室列表。
-- `POST /api/v1/patient/recommend-doctors`：医生推荐。
-- `GET /api/v1/patient/schedules?employee_uuid={uuid}`：医生可用排班。
-
-规则：
-
-- 患者进入挂号入口时弹出智能分诊提示，可选择“帮我”进入 AI 问诊，也可“暂不需要”手动选择科室。
-- 手动选择科室后直接调用医生推荐接口，不强制经过 AI 问诊。
-- AI 分诊结果展示中文科室名，不展示内部科室代码。
-- AI 分诊结果展示 `source`、`model`、`confidence`，避免 mock 结果被误认为真实大模型。
-- 医生推荐必须来自真实接口和真实排班。
-
-### 5.3 挂号、支付、候诊、记录
-
-- `POST /api/v1/patient/online-register`：线上预挂号锁号。
-- `POST /api/v1/patient/online-register/pay`：线上支付模拟。
-- `GET /api/v1/patient/register/{uuid}`：挂号详情。
-- `GET /api/v1/patient/register/{register_uuid}/queue-status`：候诊状态。
-- `GET /api/v1/patient/{patient_uuid}/registers/detail`：历史挂号详情。
-
-规则：
-
-- 底层 `scheduling_time_slot` 继续用于锁号、队列排序和候诊计算。
-- 患者端不展示全部底层 time slot。
-- 挂号确认页按“日期 -> 上午 / 下午 -> 具体时间”分步选择。
-- 每个时间段展示剩余号源。
-- 患者确认具体时间后，使用对应 `scheduling_time_slot_uuid` 锁号。
-- 挂号记录页独立为 `/patient/registers`，未登录时不请求历史接口。
-
-## 6. 患者端设计规则
-
-### 6.1 首页
-
-![患者端首页概念图](assets/patient-home-concept.png)
-
-- `/patient/home` 是登录后的患者首页，只承载就诊信息、核心入口和状态提醒。
-- 首页不单独放“智能分诊”按钮，智能分诊只作为按科室挂号的辅助步骤。
-- 首页保留：就诊码、按科室挂号、候诊状态、历史挂号、报告查询、医院信息。
-
-### 6.2 页面风格
-
-![患者端页面设计总览](assets/patient-pages-concept-board.png)
-
-患者端页面统一为蓝白医疗移动端风格：
-
-- 蓝色医疗渐变头部。
-- 白色圆角卡片。
-- 浅蓝提示条。
-- 圆形图标。
-- 小程序式底部导航。
-- 中文文本留足空间，避免门诊号、医生信息、时间段和余号重叠。
-
-### 6.3 当前设计整改项
-
-本轮暂不修改全局角色切换按钮。已先处理其他确定问题：
-
-- 患者端主链路页面已纳入沉浸式布局名单，避免业务页再出现旧的通用患者端头部。
-- 科室选择页按钮文案和 `aria-label` 已修正为中文语义。
-- 首页已清理废弃的 `.patient-home-tabs` 样式，统一只使用 `PatientBottomNav.vue`。
-
-后续待做：
-
-- 统一 `/patient/departments`、`/patient/triage`、`/patient/doctors`、`/patient/confirm-register`、`/patient/payment`、`/patient/queue` 的视觉细节。
-- 补齐报告查询、医院信息等未接真实接口的页面边界，未接接口前不做大面积假业务。
-- 重新评估三端分离后的角色入口方式，但本轮不调整现有全局按钮。
-
-
-### 6.4 impeccable 使用规则
-
-- 本机可通过 `C:\Users\Twilight\.codex\skills\impeccable\SKILL.md` 使用 impeccable 技能。
-- 此前仓库未安装 `.claude/skills/impeccable/` 项目脚本，因此 `node .claude/skills/impeccable/scripts/context.mjs` 曾会失败；现已安装项目级 `impeccable`。
-- 项目级脚本不可用时才回退到用户级技能说明、`PRODUCT.md`、本文档和现有患者端组件。
-- 当前只安装 `impeccable`，不把与本项目前端无关的学术、邮箱、GitHub 等 skill 放入仓库。
-
-## 7. 阶段计划
-
-### 阶段 0：工程初始化（已完成）
-
-- 初始化 Vue 3 + Vite 工程。
-- 接入 Router、Pinia、Axios、Element Plus。
-- 建立三套基础布局。
-- 建立统一请求层和基础状态管理。
-- 构建通过，开发服务可访问。
-
-### 阶段 1：患者端主链路（进行中）
-
-已完成：登录、注册、首页、按科室挂号入口、AI 问诊、医生推荐、挂号确认、在线支付、候诊状态、挂号记录、个人中心。
-
-待完成：患者端主链路视觉统一、演示数据固化、报告查询和医院信息的真实接口边界。
-
-### 阶段 2：医生端最小工作台（待启动）
-
-完成标准：医生端可以基于真实挂号单完成叫号、接诊、病历确认、检查开立、结果查看和处方确认。
-
-### 阶段 3：管理员端基础后台（待启动）
-
-完成标准：管理员端可以完成基础资料查看、排班生成、排班审批和 AI 审计查看。
-
-### 阶段 4：体验收口与联调（待启动）
-
-- 统一错误提示、空状态、加载状态。
-- 统一业务状态标签。
-- 补移动端适配细节。
-- 固定演示数据和演示路径。
-- 清理重复组件和重复请求逻辑。
-
-## 8. 当前真实差距
-
-1. 登录注册只是轻量患者入口，还不是完整账号权限体系。
-2. AI 分诊当前未配置 key 时是 mock 兜底，需要在页面和答辩中明确说明。
-3. 医生端和管理员端仍是占位页，尚未接真实业务。
-4. 报告查询、医院信息入口尚未完整展开。
-5. 演示数据仍需固化，避免每次手工生成排班。
-6. 患者端主链路页面风格还需继续统一。
-
-## 9. 前端进度记录
-
-### 2026-06-30：阶段 0 完成
-
-- 完成 Vue 3 + Vite 工程初始化。
-- 接入 Vue Router、Pinia、Axios、Element Plus。
-- 搭建患者端、医生端、管理员端三套布局。
-- 建立公共请求层和基础状态管理。
-- 验证 `npm run build` 通过。
-- 验证 `http://localhost:5173` 可访问。
-
-### 2026-06-30：患者端第一阶段启动
-
-- 将患者端占位首页拆分为真实业务页面和路由。
-- 新增患者端主链路页面：注册、挂号入口、AI 问诊、医生推荐、确认挂号、支付、候诊。
-- 新增 `frontend/src/stores/patientFlow.ts` 保存患者端流程状态。
-- 扩展 `frontend/src/api/patient.ts` 覆盖患者端第一阶段接口。
-
-### 2026-06-30：注册 Network Error 修复配合
-
-- 前端注册请求确认走 `http://localhost:8000/api/v1/patient`。
-- 问题根因在后端 Gateway CORS，已在总规划中记录后端修复。
-- 前端补充证件号 18 位限制，避免超过数据库字段长度。
-
-### 2026-06-30：AI 来源和科室显示修正
-
-- AI 问诊结果新增 AI 来源展示。
-- 如果后端返回 `source: mock`，页面显示离线规则兜底。
-- 患者端科室展示改为中文名，不展示 `SJWK` 等内部编码。
-
-### 2026-06-30：医生推荐为空问题处理
-
-- 确认推荐为空不是前端渲染问题，而是后端无有效未来排班。
-- 生成 2026-06-30 至 2026-07-07 排班后，推荐接口可返回医生。
-- 后续需要把演示排班数据固化为脚本或初始化流程。
-
-### 2026-06-30：登录注册体验调整
-
-- `/patient` 改为患者登录页。
-- 原主链路入口移动到 `/patient/home`。
-- 登录使用 `GET /api/v1/patient/card/{card_number}`。
-- 注册成功后进入患者已登录流程。
-- 注册页保留返回按钮，注册按钮文案简化为“注册”。
-- 身份证输入自动匹配出生日期，并校验证件出生日期合法性。
-
-### 2026-06-30：挂号时间选择方案调整
-
-- 明确患者端不展示全部细粒度 time slot。
-- 已将挂号确认页改为“日期 -> 午别 -> 具体时间”的分步选择。
-- 时间段数量收敛，并显示每个时间段剩余号源。
-- 底层 time slot 继续用于锁号和队列排序。
-
-### 2026-06-30：患者端挂号入口交互调整
-
-- `/patient/home` 已从进度卡片改为移动端首页。
-- `/patient/departments` 作为按科室挂号入口。
-- 首次进入挂号入口弹出“智能分诊”提示。
-- 手动选择科室会写入患者流程状态，并直接复用真实医生推荐接口。
-
-### 2026-06-30：患者端首页和页面设计稿补充
-
-- 已新增患者端首页概念图：`docs/assets/patient-home-concept.png`。
-- 已生成患者端页面设计总览图：`docs/assets/patient-pages-concept-board.png`。
-- 已确认智能分诊不作为首页独立入口，只集成在按科室挂号流程中。
-
-### 2026-06-30：挂号记录独立页
-
-- 底部导航第二项固定为“挂号记录”。
-- 新增 `/patient/registers` 和 `PatientRegisterHistoryView.vue`。
-- 未登录时只显示登录/注册引导，不请求挂号历史接口。
-- 已登录时使用 `patient.uuid` 请求真实历史挂号接口。
-- 首页“历史挂号”和个人中心“挂号记录”均跳转到 `/patient/registers`。
-
-### 2026-07-01：患者端设计检查后的非角色按钮整改
-
-- 本轮暂不修改全局角色切换按钮。
-- 患者端后续业务页加入 `PatientLayout` 沉浸式路由名单。
-- 修正科室选择页返回、返回首页、更多操作的中文可访问标签。
-- 清理 `PatientHomeView.vue` 中已废弃的 `.patient-home-tabs` 样式。
-- 后续继续统一科室选择、AI 问诊、医生推荐、挂号确认、支付、候诊页面视觉。
-
-
-### 2026-07-01：挂号入口提示与设计工具记录
-
-- 明确按科室挂号入口应按计划弹出“智能分诊”提示，患者可选择“帮我”进入 AI 问诊，也可选择“暂不需要”手动挂号。
-- 安装项目级 `impeccable` 到 `.claude/skills/impeccable/`，`context.mjs` 已能读取 `PRODUCT.md` 和患者端目标路径。
-- 新增 `.agents/AGENTS.md`，沉淀后续 agent 协作时必须遵守的项目约束和工具注意事项。
-
-
-### 2026-07-01：挂号入口自动弹窗和科室列表修复
-
-- 从首页点击“按科室挂号”时，进入 `/patient/departments?askAi=1`，页面挂载后自动弹出“智能分诊”提示。
-- 智能分诊提示不再等待科室接口加载完成，避免接口慢或失败时弹窗不出现。
-- 科室列表加载增加兼容映射，支持 `code/name` 和 `dept_code/dept_name`，并增加错误态与“重新加载”。
-- 继续坚持真实接口原则：科室接口失败时显示错误，不用前端假科室填充页面。
-
-
-### 2026-07-01：智能分诊提示触发规则收口
-
-- 按科室挂号页的自动弹窗改为“本次挂号流程首次进入时提示一次”。
-- 从 AI 问诊返回按科室挂号页时，不再重复弹出智能分诊提示。
-- 挂号页顶部浅蓝提示条改为直接进入 `/patient/triage`，不再先弹确认框。
-
-
-### 2026-07-01：挂号到缴费链路返回按钮补齐
-
-- 从按科室挂号到缴费成功链路补齐“返回上一级”入口。
-- 医生推荐页返回目标改为明确业务上一级：AI 问诊进入则回 AI 问诊，手动选科进入则回按科室挂号。
-- 确认挂号、线上支付、候诊状态页新增返回入口。
-
-### 2026-07-01：挂号链路顶部导航统一
-
-- 新增共享组件 `PatientFlowHeader.vue`，统一蓝色流程头部、圆形返回按钮和一键首页按钮。
-- 按科室挂号、智能分诊、医生推荐、确认挂号、线上支付、候诊状态六个页面全部接入共享头部。
-- 左侧返回按钮严格返回业务上一级，右侧首页按钮固定进入 `/patient/home`，不依赖浏览器历史。
-- 确认挂号、线上支付和候诊状态页改为与医生推荐页一致的蓝色头部和正文上叠布局。
-- 360px 及以下窄屏仅显示首页图标，避免标题、副标题和导航按钮互相遮挡。
+目标入口：
+- `/admin/login`
+- `/admin/console`
+- `/admin/doctors`
+- `/admin/schedules`
+- `/admin/audit`
+
+管理员端最小闭环：
+
+```text
+管理员登录
+-> 控制台
+-> 医生 / 科室查看
+-> 排班生成与审批
+-> AI 审计查看
+```
+
+## 5. 会话与守卫拆分目标
+
+建议形成三套独立 session store：
+- `patientSession`
+- `doctorSession`
+- `adminSession`
+
+要求：
+- 三端各自维护登录态、身份对象和默认落地页。
+- 未登录访问业务页时，跳回本端登录页，而不是跳去别的端。
+- `patientFlow` 只保留患者业务流程状态，不再兼管会话状态。
+- 后续全局守卫按路由 `role` 和 `requiresAuth` 做判断。
+- 当前患者端入口语义为：`/patient` 打开首页，`/patient/login` 打开登录页。
+
+## 6. 真实接口接入边界
+
+### 6.1 患者端
+
+继续优先使用现有真实接口：
+- `POST /api/v1/patient`
+- `GET /api/v1/patient/card/{card_number}`
+- `POST /api/v1/patient/triage`
+- `GET /api/v1/patient/departments`
+- `POST /api/v1/patient/recommend-doctors`
+- `POST /api/v1/patient/online-register`
+- `POST /api/v1/patient/online-register/pay`
+- `GET /api/v1/patient/register/{uuid}`
+- `GET /api/v1/patient/register/{register_uuid}/queue-status`
+- `GET /api/v1/patient/{patient_uuid}/registers/detail`
+
+### 6.2 医生端
+
+医生端优先围绕真实挂号、候诊、病历、检查、处方相关接口搭建最小工作台，不补大面积假流程。
+
+### 6.3 管理员端
+
+管理员端优先围绕医生、科室、排班、审批、审计相关接口搭建控制台，不补大面积假流程。
+
+## 7. 大阶段计划
+
+### 阶段 0：工程初始化
+
+已完成。
+
+### 阶段 1：患者端主链路收口
+
+进行中。
+
+已完成：
+- 登录
+- 注册建档
+- 首页
+- 按科室挂号入口
+- AI 问诊
+- 医生推荐
+- 挂号确认
+- 支付
+- 候诊状态
+- 历史挂号
+- 个人中心
+
+待继续：
+- 继续统一患者链路的加载、错误、空态与移动端细节。
+- 在真实浏览器链路下补一次患者端受限路由回归检查。
+- 保持患者链路稳定的前提下，开始医生端工作台真实数据盘点与联动。
+
+### 阶段 2：医生端独立登录与最小工作台
+
+目标：
+- 独立医生登录页。
+- 工作台首页。
+- 真实候诊或挂号列表首屏。
+- 医生接诊详情最小闭环。
+当前状态：进行中。
+阶段说明：独立登录入口和默认路由收口已完成，下一步进入工作台假数据与真实接口盘点。
+
+### 阶段 3：管理员端独立登录与控制台
+
+目标：
+- 独立管理员登录页。
+- 控制台首页。
+- 排班、审批、审计的最小入口。
+当前状态：进行中。
+阶段说明：独立登录入口和控制台首页骨架已具备，真实业务面仍未展开。
+
+### 阶段 4：三端入口与会话边界收口
+
+目标：
+- 三端都有独立入口。
+- 三端都有独立默认首页。
+- 路由守卫可独立工作。
+- 不再依赖共享角色状态或共享产品入口。
+当前状态：已完成。
+阶段说明：session store 拆分、患者登录态迁移、meta/guard 落地、doctor/admin 独立登录入口与默认跳转均已收口完成。
+
+### 阶段 5：医生端真实数据联动与演示收口
+
+目标：
+- 医生工作台接入真实数据。
+- 补最小加载态、空态、错误态。
+- 固化一条可重复演示路径。
+
+## 8. 单轮执行切片
+
+为避免一次对话改动过多，后续执行按“每轮只做一个最小子步”推进。每个子步都应满足：
+- 修改范围收敛到同一条链路或同一类文件。
+- 做完即停，并汇报改动文件、残留兼容点和最小验证结果。
+- 没进入当前子步范围的 router、guard、doctor/admin 页面，不提前联动。
+
+### 1. 拆 session store 骨架
+
+#### 1.1 封装 sessionStorage 读写
+目标：抽出通用会话存取工具，避免三端 store 各自重复写浏览器存储逻辑。
+涉及文件：
+- `frontend/src/stores/sessionStorage.ts`
+交付标准：
+- 能按 key 读取、写入、清除会话数据。
+- 对空值和 JSON 解析失败有兜底处理。
+当前状态：已完成。
+
+#### 1.2 建立 Pinia 根实例导出
+目标：统一状态挂载入口，为后续 session store 和守卫提供一致依赖。
+涉及文件：
+- `frontend/src/stores/pinia.ts`
+交付标准：
+- 前端统一复用同一个 `pinia` 实例。
+当前状态：已完成。
+
+#### 1.3 建立三端 session store 骨架
+目标：拆出患者、医生、管理员三套会话容器，只负责登录态和身份信息。
+涉及文件：
+- `frontend/src/stores/patientSession.ts`
+- `frontend/src/stores/doctorSession.ts`
+- `frontend/src/stores/adminSession.ts`
+交付标准：
+- `patientSession` 至少管理 `patient`、`loginDraft`、`isLoggedIn`。
+- `doctorSession`、`adminSession` 至少管理基础身份对象和 `isLoggedIn`。
+- 都具备最小 `login` / `logout` 能力。
+当前状态：已完成。
+
+#### 1.4 让 patientFlow 先退化为兼容层
+目标：先让 `patientFlow` 内部转接 `patientSession`，不一次性重写所有患者页。
+涉及文件：
+- `frontend/src/stores/patientFlow.ts`
+交付标准：
+- `patientFlow` 内部不再自行持有患者登录态来源。
+- 外部旧页面暂时还能通过 `patientFlow` 工作。
+当前状态：已完成。
+
+### 2. 患者端登录态从 patientFlow 挪出去
+
+#### 2.1 登录页和注册页直连 patientSession
+目标：从登录入口先切，让登录、注册动作直接读写 `patientSession`。
+涉及文件：
+- `frontend/src/views/patient/PatientLoginView.vue`
+- `frontend/src/views/patient/PatientRegisterView.vue`
+交付标准：
+- 页面初始化直接读取 `session.loginDraft`。
+- 登录成功、注册成功直接调用 `session.login(...)`。
+- 跳转注册或“已注册请登录”直接调用 `session.setLoginDraft(...)`。
+当前状态：已完成。
+
+#### 2.2 患者业务页面直接读取 patientSession 身份
+目标：把首页、分诊、挂号、支付、排队、个人中心等页面对“当前患者是谁”的读取，从 `patientFlow` 切到 `patientSession`。
+涉及文件：
+- `frontend/src/views/patient/PatientHomeView.vue`
+- `frontend/src/views/patient/PatientTriageView.vue`
+- `frontend/src/views/patient/PatientDoctorsView.vue`
+- `frontend/src/views/patient/PatientConfirmRegisterView.vue`
+- `frontend/src/views/patient/PatientPaymentView.vue`
+- `frontend/src/views/patient/PatientQueueView.vue`
+- `frontend/src/views/patient/PatientRegistersView.vue`
+- `frontend/src/views/patient/PatientProfileView.vue`
+交付标准：
+- 页面直接从 `patientSession` 读取患者身份、登录态或登录草稿。
+- `patientFlow` 只继续承载分诊、医生推荐、号源、支付、候诊等业务流状态。
+当前状态：已完成。
+
+#### 2.3 清理 patientFlow 剩余登录态兼容出口
+目标：在患者页都切完后，删除 `patientFlow` 里多余的登录态兼容接口。
+涉及文件：
+- `frontend/src/stores/patientFlow.ts`
+交付标准：
+- 不再把 `patient`、`loginDraft`、`isLoggedIn` 作为对外推荐出口。
+- 移除 `setPatient`、`setLoginDraft` 等仅服务兼容层的方法。
+当前状态：已完成。
+
+### 3. 路由 meta 和通用守卫
+
+#### 3.1 为三端路由补 meta
+目标：明确每条路由属于哪个端，以及是否需要登录。
+涉及文件：
+- `frontend/src/router/index.ts`
+交付标准：
+- `patient`、`doctor`、`admin` 路由组具备 `role` 标记。
+- 需要登录的业务页具备 `requiresAuth` 标记。
+当前状态：已完成。
+
+#### 3.2 抽通用登录态判定工具
+目标：减少守卫内硬编码判断，让三端登录态读取方式可复用。
+涉及文件：
+- `frontend/src/router/` 下新增工具文件，或 `frontend/src/stores/` 下新增通用判定模块。
+交付标准：
+- 能统一按 `role` 读取对应 session store。
+- 能返回“是否已登录”和“未登录应跳去哪里”。
+当前状态：已完成。
+
+#### 3.3 增加全局前置守卫
+目标：正式接管跨页访问边界，防止未登录直接进入三端业务页。
+涉及文件：
+- `frontend/src/router/index.ts`
+交付标准：
+- 患者未登录访问受限页时跳回患者登录入口。
+- 医生、管理员后续可跳到各自登录页。
+- 不允许跨端复用另一端的登录态直接放行。
+当前状态：已完成。
+
+#### 3.4 做患者链路最小回归验证
+目标：确认守卫加上后，不把患者现有链路打断。
+涉及文件：
+- 以验证为主，不强调新增文件。
+交付标准：
+- 患者登录、注册、首页、挂号主链路跳转保持可用。
+- 至少通过 `vue-tsc --noEmit`，必要时补一次构建验证。
+当前状态：已完成。
+
+### 4. 新增 doctor/admin 登录占位入口
+
+#### 4.1 新增 `/doctor/login` 占位页
+目标：先把医生端入口从业务页直出改成独立登录入口。
+涉及文件：
+- `frontend/src/views/doctor/DoctorLoginView.vue`
+- `frontend/src/router/index.ts`
+交付标准：
+- 可访问独立医生登录页。
+- 先允许占位登录，不要求真实鉴权闭环。
+当前状态：已完成。
+
+#### 4.2 新增 `/admin/login` 占位页
+目标：让管理员端也拥有独立入口，避免继续共享旧的 staff 入口语义。
+涉及文件：
+- `frontend/src/views/admin/AdminLoginView.vue`
+- `frontend/src/router/index.ts`
+交付标准：
+- 可访问独立管理员登录页。
+- 页面结构和入口命名与医生端一致。
+当前状态：已完成。
+
+#### 4.3 staff 入口改为跳转独立登录页
+目标：把现有 staff 侧入口收口到 `/doctor/login`、`/admin/login`。
+涉及文件：
+- `frontend/src/router/index.ts`
+- 可能涉及现有医生端、管理员端入口页或布局文件。
+交付标准：
+- 不再默认用 `/doctor` 直接承载业务页首屏。
+- doctor/admin 的入口语义和患者端明显分离。
+当前状态：已完成。
+
+### 5. 医生端工作台联动真实数据
+
+#### 5.1 盘点医生端假数据入口与真实接口
+目标：先确认当前工作台哪些内容是静态占位，哪些能直接接已有后端接口。
+涉及文件：
+- `frontend/src/views/doctor/DoctorWorkbenchView.vue`
+- 相关医生端 API 文件。
+交付标准：
+- 列清真实可接接口、仍缺的接口、需要保留占位的区域。
+盘点结论：
+- 当前 `DoctorWorkbenchView.vue` 全量为静态占位，没有任何真实 API 调用。
+- 人工业务区里的候诊列表 `queueItems` 是本轮最适合先替换的假数据块；后端已存在 `GET /api/v1/patient/doctor/{employee_uuid}/queue`，返回 `register_uuid`、`patient_uuid`、`patient_name`、`patient_case_number`、`gender`、`symptoms`、`visit_state`、`visit_state_text`、`visit_date`、`time_range`、`clinic_room_name`，可直接支撑“今日候诊列表”首屏。
+- 候诊状态推进也已有后端接口：`PUT /api/v1/patient/register/{uuid}/state`、`PUT /api/v1/patient/register/{uuid}/start-reception`、`PUT /api/v1/patient/register/{uuid}/finish`，后续可接“叫号 / 开始接诊 / 结束接诊”一类操作。
+- AI 辅助区已有可复用真实接口：`POST /api/v1/medical/record/ai-assistant`、`POST /api/v1/medical/record/search-similar`、`GET /api/v1/medical/record/draft/{register_uuid}`、`PUT /api/v1/medical/record/draft/{register_uuid}/confirm`，分别对应 AI 问答、相似病历召回、AI 病历草稿读取与医生确认。
+- 检查检验处置相关接口已存在：`POST /api/v1/medical/check`、`POST /api/v1/medical/inspection`、`POST /api/v1/medical/disposal`，以及对应详情和状态更新接口，可支撑后续“开单”和结果查看。
+- 处方推荐接口已存在：`POST /api/v1/pharmacy/recommend-prescription`，入参为 `register_uuid`，适合放到 AI 辅助区后续联动。
+- 当前仍缺的是前端医生端专用 API 封装文件、工作台与 `doctorSession` 的身份串联，以及基于 `register_uuid` 的接诊详情页实际承载页面；这些属于 `5.2` 及以后范围，不在本步实现。
+当前建议：
+- 下一最小步优先做 `5.2 接入医生登录态到工作台`，先让工作台拿到 `doctorSession.staffCode / 身份信息`，再决定如何映射到后端 `employee_uuid`。
+当前状态：已完成。
+
+#### 5.2 接入医生登录态到工作台
+目标：让医生工作台至少能读取本端 session，而不是无身份上下文运行。
+涉及文件：
+- `frontend/src/stores/doctorSession.ts`
+- `frontend/src/views/doctor/DoctorWorkbenchView.vue`
+- 可能涉及医生端布局文件。
+交付标准：
+- 登录后的医生身份可在工作台读取。
+- 未登录状态下的渲染逻辑和后续守卫方案一致。
+当前状态：待执行。
+
+#### 5.3 工作台首屏切到真实数据
+目标：优先把最关键的一块列表从静态数据切到真实接口，例如今日候诊、挂号队列或待接诊列表。
+涉及文件：
+- `frontend/src/views/doctor/DoctorWorkbenchView.vue`
+- 医生端相关 API 文件。
+交付标准：
+- 至少一块核心列表改为真实接口返回。
+- 明确字段映射，不再只是静态卡片展示。
+当前状态：待执行。
+
+#### 5.4 补加载态、空态、错误态并做最小回归验证
+目标：不把真实接口联动停留在“能请求到数据”，而是补最基础页面稳定性。
+涉及文件：
+- 以上医生端工作台相关文件。
+交付标准：
+- 具备最小加载态、空态、错误态。
+- 至少通过 `vue-tsc --noEmit`，必要时补一次构建验证。
+当前状态：待执行。
+
+## 9. 当前建议起点
+
+如果继续按小步推进，下一轮最合适的切片是：`5.1 盘点医生端假数据入口与真实接口`。
 
 ## 10. 文档维护规则
 
-- 前端专项细节维护在本文档。
-- 总业务范围、总进度、总阶段维护在 `docs/项目规划.md`。
-- 前端真实进度变化时，同步更新本文档“前端进度记录”。
-- 新问题统一记录到 `docs/问题记录.md`。
-
-### 2026-07-01：项目回顾与协作文档补齐
-
-- 新增 `docs/当前项目回顾.md`，集中记录当前项目定位、已完成工作、遇到的问题、真实差距、下一步计划和本次 GitHub 推送描述。
-- 重写 `.agents/AGENTS.md`，明确后续 agent 接手时必须遵守的患者端优先、真实接口优先、AI 来源透明、移动端风格一致等约束。
-- 新增 `.claude/README.md`，记录项目级 `impeccable` 技能的用途、运行方式和使用边界。
-- 保留 `docs/frontend-plan.md` 作为前端专项计划，后续前端页面、接口、状态和视觉规则变化仍写入本文档。
-- 保留 `docs/问题记录.md` 作为问题台账，避免 Network Error、内部编码显示、AI mock 边界、Windows 工具权限等问题反复丢失上下文。
+- 总体产品边界、阶段方向维护在 `docs/项目规划.md`。
+- 前端页面、路由、状态拆分和执行切片维护在本文档。
+- 问题台账统一维护在 `docs/问题记录.md`。
+- 每完成一个执行切片，就在本文档更新对应子步的状态，不把进度只留在对话里。

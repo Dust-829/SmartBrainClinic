@@ -5,14 +5,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
 import { patientApi, type RegisterDetail } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const history = ref<RegisterDetail[]>([])
 const historyLoading = ref(false)
 const visitCodeVisible = ref(false)
 
-const patient = computed(() => flow.patient)
+const patient = computed(() => session.patient)
 const isLoggedIn = computed(() => Boolean(patient.value))
 const patientDisplayName = computed(() => patient.value?.real_name || '\u5c1a\u672a\u767b\u5f55')
 const maskedCardNumber = computed(() => {
@@ -42,7 +44,7 @@ async function loadHistory() {
 
 function startRegistration() {
   if (!isLoggedIn.value) {
-    router.push('/patient')
+    router.push('/patient/login')
     return
   }
   router.push('/patient/departments')
@@ -50,7 +52,7 @@ function startRegistration() {
 
 function openQueue() {
   if (!isLoggedIn.value) {
-    router.push('/patient')
+    router.push('/patient/login')
     return
   }
   if (!flow.canViewQueue) {
@@ -62,7 +64,7 @@ function openQueue() {
 
 function openVisitCode() {
   if (!isLoggedIn.value) {
-    router.push('/patient')
+    router.push('/patient/login')
     return
   }
   if (!flow.onlineRegister?.qr_code_url) {
@@ -84,7 +86,7 @@ async function logout() {
       },
     )
     flow.resetAll()
-    router.replace('/patient')
+    router.replace('/patient/home')
   } catch {
     // User cancelled.
   }
@@ -126,7 +128,7 @@ async function logout() {
       <section v-if="!isLoggedIn" class="patient-profile-login">
         <h2>&#30331;&#24405;&#21518;&#26597;&#30475;&#20010;&#20154;&#26723;&#26696;</h2>
         <p>&#20351;&#29992;&#24050;&#24314;&#26723;&#22995;&#21517;&#21644;&#36523;&#20221;&#35777;&#21495;&#30331;&#24405;&#12290;</p>
-        <button type="button" @click="router.push('/patient')">&#21435;&#30331;&#24405;</button>
+        <button type="button" @click="router.push('/patient/login')">&#21435;&#30331;&#24405;</button>
       </section>
 
       <section class="patient-profile-actions" aria-label="&#24120;&#29992;&#26381;&#21153;">

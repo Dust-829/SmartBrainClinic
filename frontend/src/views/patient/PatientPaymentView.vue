@@ -6,15 +6,21 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
 import { patientApi } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const submitting = ref(false)
 const payMethod = ref('微信')
 
 const amount = computed(() => Number(flow.onlineRegister?.regist_money || flow.selectedDoctor?.regist_fee || 0))
 
 onMounted(() => {
+  if (!session.patient) {
+    router.replace('/patient/login')
+    return
+  }
   if (!flow.onlineRegister) router.replace('/patient/confirm-register')
 })
 

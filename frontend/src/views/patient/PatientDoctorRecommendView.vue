@@ -5,9 +5,11 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
 import { patientApi } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const loading = ref(false)
 
 const deptCode = computed(() => flow.recommendedDeptCode)
@@ -29,8 +31,8 @@ const departmentLabel = computed(() => {
 })
 
 onMounted(async () => {
-  if (!flow.patient) {
-    router.replace('/patient')
+  if (!session.patient) {
+    router.replace('/patient/login')
     return
   }
   if (!deptCode.value) {

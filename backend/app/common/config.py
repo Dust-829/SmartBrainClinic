@@ -14,7 +14,7 @@ class BaseMicroserviceSettings(BaseSettings):
     LLM_API_BASE: str = "https://api.siliconflow.cn/v1"
     LLM_MODEL: str = "deepseek-ai/DeepSeek-V4-Pro"
     LLM_EMBEDDING_MODEL: str = "BAAI/bge-m3"
-    AI_ALLOW_MOCK_FALLBACK: bool = True
+    AI_ALLOW_MOCK_FALLBACK: bool = False
     AI_SECOND_REVIEW_ENABLED: bool = True
     AI_SECOND_REVIEW_MODE: str = "risk_only"
     AI_SECOND_REVIEW_MODEL: str = "deepseek-ai/DeepSeek-V4-Pro"

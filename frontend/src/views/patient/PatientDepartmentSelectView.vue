@@ -5,6 +5,7 @@ import { ElMessageBox } from 'element-plus'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
 import { patientApi, type DepartmentOption } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 interface DepartmentCategory {
   key: string
@@ -15,6 +16,7 @@ interface DepartmentCategory {
 const route = useRoute()
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const departments = ref<DepartmentOption[]>([])
 const loading = ref(false)
 const errorMessage = ref('')
@@ -68,8 +70,8 @@ function normalizeDepartment(raw: DepartmentOption & { dept_code?: string; dept_
 }
 
 onMounted(async () => {
-  if (!flow.patient) {
-    router.replace('/patient')
+  if (!session.patient) {
+    router.replace('/patient/login')
     return
   }
 

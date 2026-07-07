@@ -7,16 +7,18 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import PatientAuthHeader from '@/components/patient/PatientAuthHeader.vue'
 import { patientApi } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 
 const form = reactive({
-  real_name: flow.loginDraft.realName || '\u5f20\u4e09',
-  gender: '\u7537',
-  card_number: flow.loginDraft.cardNumber,
+  real_name: session.loginDraft.realName || '张三',
+  gender: '男',
+  card_number: session.loginDraft.cardNumber,
   birthdate: '',
   home_address: '',
 })
@@ -27,7 +29,7 @@ const idCardChecks = ['1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2']
 function parseIdCard(cardNumber: string) {
   const normalized = cardNumber.trim().toUpperCase()
   if (!/^\d{17}[\dX]$/.test(normalized)) {
-    return { valid: false, birthdate: '', message: '\u8bf7\u8f93\u5165\u6709\u6548\u7684 18 \u4f4d\u8eab\u4efd\u8bc1\u53f7' }
+    return { valid: false, birthdate: '', message: '请输入有效的 18 位身份证号' }
   }
 
   const birth = normalized.slice(6, 14)
@@ -43,7 +45,7 @@ function parseIdCard(cardNumber: string) {
     date.getTime() <= Date.now()
 
   if (!isRealDate) {
-    return { valid: false, birthdate: '', message: '\u8eab\u4efd\u8bc1\u4e2d\u7684\u51fa\u751f\u65e5\u671f\u4e0d\u6b63\u786e' }
+    return { valid: false, birthdate: '', message: '身份证中的出生日期不正确' }
   }
 
   const checksum = normalized
@@ -51,7 +53,7 @@ function parseIdCard(cardNumber: string) {
     .split('')
     .reduce((sum, digit, index) => sum + Number(digit) * idCardWeights[index], 0)
   if (idCardChecks[checksum % 11] !== normalized[17]) {
-    return { valid: false, birthdate: '', message: '\u8eab\u4efd\u8bc1\u6821\u9a8c\u7801\u4e0d\u6b63\u786e' }
+    return { valid: false, birthdate: '', message: '身份证校验码不正确' }
   }
 
   return {
@@ -80,10 +82,10 @@ watch(
 )
 
 const rules: FormRules = {
-  real_name: [{ required: true, message: '\u8bf7\u8f93\u5165\u59d3\u540d', trigger: 'blur' }],
-  gender: [{ required: true, message: '\u8bf7\u9009\u62e9\u6027\u522b', trigger: 'change' }],
+  real_name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
+  gender: [{ required: true, message: '请选择性别', trigger: 'change' }],
   card_number: [
-    { required: true, message: '\u8bf7\u8f93\u5165\u8eab\u4efd\u8bc1\u53f7', trigger: 'blur' },
+    { required: true, message: '请输入身份证号', trigger: 'blur' },
     {
       validator: (_rule, value: string, callback) => {
         const result = parseIdCard(value || '')
@@ -96,10 +98,10 @@ const rules: FormRules = {
     {
       validator: (_rule, value: string, callback) => {
         const result = parseIdCard(form.card_number)
-        if (!result.valid) return callback(new Error('\u8bf7\u5148\u8f93\u5165\u6709\u6548\u7684\u8eab\u4efd\u8bc1\u53f7'))
+        if (!result.valid) return callback(new Error('请先输入有效的身份证号'))
         return value === result.birthdate
           ? callback()
-          : callback(new Error('\u51fa\u751f\u65e5\u671f\u4e0e\u8eab\u4efd\u8bc1\u4e0d\u4e00\u81f4'))
+          : callback(new Error('出生日期与身份证不一致'))
       },
       trigger: 'change',
     },
@@ -113,17 +115,17 @@ async function submit() {
   submitting.value = true
   try {
     const response = await patientApi.createPatient({ ...form })
-    flow.setPatient(response.data.data)
+    session.login(response.data.data)
     flow.resetAfterPatient()
-    ElMessage.success('\u6ce8\u518c\u6210\u529f\uff0c\u5df2\u81ea\u52a8\u767b\u5f55')
+    ElMessage.success('注册成功，已自动登录')
     router.push('/patient/home')
   } catch (error) {
     if (axios.isAxiosError(error)) {
       const detail = String(error.response?.data?.detail || error.response?.data?.message || '')
-      if (detail.includes('\u5df2\u6ce8\u518c')) {
-        flow.setLoginDraft({ realName: form.real_name, cardNumber: form.card_number })
-        ElMessage.info('\u8be5\u8d26\u53f7\u5df2\u6ce8\u518c\uff0c\u8bf7\u76f4\u63a5\u767b\u5f55')
-        router.push('/patient')
+      if (detail.includes('已注册')) {
+        session.setLoginDraft({ realName: form.real_name, cardNumber: form.card_number })
+        ElMessage.info('该账号已注册，请直接登录')
+        router.push('/patient/login')
       }
     }
   } finally {
@@ -152,7 +154,7 @@ function goBack() {
             />
           </el-form-item>
           <el-form-item label="&#24615;&#21035;" prop="gender">
-            <el-segmented v-model="form.gender" :options="['\u7537', '\u5973']" />
+            <el-segmented v-model="form.gender" :options="['男', '女']" />
           </el-form-item>
           <el-form-item label="&#36523;&#20221;&#35777;&#21495;" prop="card_number">
             <el-input
@@ -179,7 +181,7 @@ function goBack() {
             <el-input v-model="form.home_address" type="textarea" :rows="3" placeholder="&#36873;&#22635;" />
           </el-form-item>
           <el-button type="primary" size="large" :loading="submitting" @click="submit">&#27880;&#20876;</el-button>
-          <el-button size="large" plain @click="router.push('/patient')">&#24050;&#26377;&#36134;&#21495;&#65292;&#21435;&#30331;&#24405;</el-button>
+          <el-button size="large" plain @click="router.push('/patient/login')">&#24050;&#26377;&#36134;&#21495;&#65292;&#21435;&#30331;&#24405;</el-button>
         </el-form>
       </SectionCard>
     </main>

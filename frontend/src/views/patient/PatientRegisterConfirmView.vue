@@ -6,6 +6,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
 import { patientApi, type DoctorSchedule } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 interface DateOption {
   date: string
@@ -30,6 +31,7 @@ interface TimeOption {
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const loading = ref(false)
 const submitting = ref(false)
 const selectedDate = ref('')
@@ -131,8 +133,8 @@ const suggestedArrival = computed(() => {
 })
 
 onMounted(async () => {
-  if (!flow.patient) {
-    router.replace('/patient')
+  if (!session.patient) {
+    router.replace('/patient/login')
     return
   }
   if (!flow.selectedDoctor) {
@@ -173,14 +175,14 @@ function goBack() {
 }
 
 async function submit() {
-  if (!flow.patient || !flow.selectedDoctor || !flow.selectedTimeSlotUuid) {
+  if (!session.patient || !flow.selectedDoctor || !flow.selectedTimeSlotUuid) {
     ElMessage.warning('请选择就诊日期、午别和时间')
     return
   }
   submitting.value = true
   try {
     const response = await patientApi.createOnlineRegister({
-      patient_uuid: flow.patient.uuid,
+      patient_uuid: session.patient.uuid,
       employee_uuid: flow.selectedDoctor.doctor_uuid,
       scheduling_time_slot_uuid: flow.selectedTimeSlotUuid,
       symptoms: flow.symptoms,

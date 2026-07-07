@@ -5,9 +5,11 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
 import { patientApi, type RegisterDetail } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 const loading = ref(false)
 const historyLoading = ref(false)
 const history = ref<RegisterDetail[]>([])
@@ -46,10 +48,10 @@ async function refresh() {
 }
 
 async function loadHistory() {
-  if (!flow.patient?.uuid) return
+  if (!session.patient?.uuid) return
   historyLoading.value = true
   try {
-    const response = await patientApi.getRegisterHistory(flow.patient.uuid)
+    const response = await patientApi.getRegisterHistory(session.patient.uuid)
     history.value = response.data.data || []
   } finally {
     historyLoading.value = false

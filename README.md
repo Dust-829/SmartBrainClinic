@@ -9,7 +9,7 @@
 当前仓库的主实现已经确定为 **Python FastAPI 微服务后端**，不是 Java / Spring Boot。
 
 - 后端主目录：`backend/`
-- 前端目录：`frontend/`，当前已是可运行的 Vue 3 + Vite 工程，患者端第一阶段主链路已落地
+- 前端目录：`frontend/`，当前已是可运行的 Vue 3 + Vite 工程，患者端第一阶段主链路已落地，且已移除产品级全局角色切换入口
 - 文档目录：`docs/`
 - 旧 `services/` 目录仅为早期占位，不是当前运行实现
 
@@ -35,12 +35,13 @@
 
 ## 最近状态
 
-截至 2026-06-27，当前本地已完成这些验证：
+截至 2026-07-06，当前本地已完成这些验证：
 
 - `ai-trust-hardening` 分支已合并到本地 `main`
 - Docker 基础设施已可启动：PostgreSQL、Redis、RabbitMQ、Nacos
 - 数据库备份已导入，`backend/migrations/` 已全部执行
 - 6 个微服务的 `/health` 和 `/docs` 均可访问
+- 前端已明确按 `/patient/*`、`/doctor/*`、`/admin/*` 组织三套路由入口，且不再保留顶部全局角色切换按钮
 - 新增测试中，至少以下两组已通过：
   - `backend/tests/test_billing_refund_guard.py`
   - `backend/tests/test_patient_auxiliary_workflows.py`

@@ -1,4 +1,4 @@
-﻿import { http, type ApiEnvelope } from './http'
+import { http, type ApiEnvelope } from './http'
 
 export interface DepartmentOption {
   code: string

@@ -4,16 +4,16 @@ import type {
   DoctorRecommendation,
   DoctorSchedule,
   OnlineRegisterResult,
-  PatientRecord,
   PaymentResult,
   QueueStatus,
   TriageMessage,
   TriageResult,
 } from '@/api/patient'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 export const usePatientFlowStore = defineStore('patientFlow', () => {
-  const patient = ref<PatientRecord | null>(null)
-  const loginDraft = ref({ realName: '', cardNumber: '' })
+  const session = usePatientSessionStore()
+
   const triageMessages = ref<TriageMessage[]>([])
   const triageResult = ref<TriageResult | null>(null)
   const manualDeptCode = ref('')
@@ -34,22 +34,9 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
     return message?.content || ''
   })
   const recommendedDeptCode = computed(() => triageData.value?.recommended_dept_code || manualDeptCode.value)
-  const canRecommendDoctors = computed(() => Boolean(patient.value && recommendedDeptCode.value))
-  const canConfirmRegister = computed(() => Boolean(patient.value && selectedDoctor.value && selectedTimeSlotUuid.value))
+  const canConfirmRegister = computed(() => Boolean(session.patient && selectedDoctor.value && selectedTimeSlotUuid.value))
   const canPay = computed(() => Boolean(onlineRegister.value?.register_uuid))
   const canViewQueue = computed(() => Boolean(payment.value?.register_uuid || onlineRegister.value?.register_uuid))
-
-  function setPatient(value: PatientRecord) {
-    patient.value = value
-    loginDraft.value = { realName: value.real_name, cardNumber: value.card_number }
-  }
-
-  function setLoginDraft(value: { realName?: string; cardNumber?: string }) {
-    loginDraft.value = {
-      realName: value.realName ?? loginDraft.value.realName,
-      cardNumber: value.cardNumber ?? loginDraft.value.cardNumber,
-    }
-  }
 
   function setTriage(messages: TriageMessage[], result: TriageResult) {
     triageMessages.value = messages
@@ -130,14 +117,11 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
   }
 
   function resetAll() {
-    patient.value = null
-    loginDraft.value = { realName: '', cardNumber: '' }
+    session.logout()
     resetAfterPatient()
   }
 
   return {
-    patient,
-    loginDraft,
     triageMessages,
     triageResult,
     manualDeptCode,
@@ -153,12 +137,9 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
     payment,
     queueStatus,
     triagePromptShown,
-    canRecommendDoctors,
     canConfirmRegister,
     canPay,
     canViewQueue,
-    setPatient,
-    setLoginDraft,
     setTriage,
     setManualDepartment,
     setRecommendations,

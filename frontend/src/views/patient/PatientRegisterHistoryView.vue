@@ -4,16 +4,16 @@ import { useRouter } from 'vue-router'
 
 import { patientApi, type RegisterDetail } from '@/api/patient'
 import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
-import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
-const flow = usePatientFlowStore()
+const session = usePatientSessionStore()
 
 const records = ref<RegisterDetail[]>([])
 const loading = ref(false)
 const errorMessage = ref('')
 
-const patient = computed(() => flow.patient)
+const patient = computed(() => session.patient)
 const isLoggedIn = computed(() => Boolean(patient.value?.uuid))
 const recordCountText = computed(() => (records.value.length ? `共 ${records.value.length} 条` : ''))
 
@@ -52,7 +52,7 @@ async function loadRecords() {
 
 
 function goLogin() {
-  router.push('/patient')
+  router.push('/patient/login')
 }
 
 function goRegister() {
