@@ -114,6 +114,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/doctor/DoctorWorkbenchView.vue'),
         meta: { requiresAuth: true },
       },
+      {
+        path: 'encounter/:registerId',
+        name: 'doctor-encounter',
+        component: () => import('@/views/doctor/DoctorEncounterView.vue'),
+        meta: { requiresAuth: true },
+      },
     ],
   },
   {

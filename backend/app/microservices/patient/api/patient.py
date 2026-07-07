@@ -7,12 +7,14 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.ai_audit import query_ai_audit_logs
+from app.common.clients import AuthClient
 from app.common.response import created, success
 from app.common.security import require_ai_audit_admin
 from app.microservices.patient.ws_manager import manager as ws_manager
 
 from ..config import settings
 from ..database import get_session
+from ..models.patient import Patient, SchedulingActual, SchedulingTimeSlot
 from ..services import patient_service as svc
 from ..services.ai_triage import DEPT_LIST, TriageAIUnavailableError, run_ai_triage
 
@@ -160,7 +162,49 @@ async def get_register_info(uuid: str, session: AsyncSession = Depends(get_sessi
     reg = await svc.get_register_by_uuid(session, uuid_pkg.UUID(uuid))
     if not reg:
         raise HTTPException(status_code=404, detail='挂号记录不存在')
-    return success(reg.model_dump(exclude={'id', 'patient_id', 'scheduling_actual_id', 'settle_category_id'}))
+
+    patient = await session.get(Patient, reg.patient_id)
+    schedule = await session.get(SchedulingActual, reg.scheduling_actual_id) if reg.scheduling_actual_id else None
+    slot = await session.get(SchedulingTimeSlot, reg.scheduling_time_slot_id) if reg.scheduling_time_slot_id else None
+
+    employee_name = None
+    dept_name = None
+    clinic_room_name = None
+    clinic_room_location = None
+
+    if reg.employee_uuid:
+        employee = await AuthClient.get_employee(reg.employee_uuid)
+        if employee:
+            employee_name = employee.get('realname')
+
+    if reg.dept_uuid:
+        department = await AuthClient.get_department(str(reg.dept_uuid))
+        if department:
+            dept_name = department.get('dept_name')
+
+    if schedule and schedule.clinic_room_uuid:
+        clinic_room = await AuthClient.get_clinic_room(str(schedule.clinic_room_uuid))
+        if clinic_room:
+            clinic_room_name = clinic_room.get('room_name')
+            clinic_room_location = clinic_room.get('location')
+
+    payload = reg.model_dump(exclude={'id', 'patient_id', 'scheduling_actual_id', 'settle_category_id'})
+    payload.update(
+        {
+            'patient_uuid': str(patient.uuid) if patient else None,
+            'patient_name': patient.real_name if patient else None,
+            'patient_case_number': patient.case_number if patient else None,
+            'patient_gender': patient.gender if patient else None,
+            'employee_name': employee_name,
+            'dept_name': dept_name,
+            'visit_state_text': svc._STATE_MAP.get(reg.visit_state, '未知'),
+            'actual_schedule_date': schedule.schedule_date.isoformat() if schedule else None,
+            'actual_time_range': slot.time_range if slot else None,
+            'clinic_room_name': clinic_room_name,
+            'clinic_room_location': clinic_room_location,
+        }
+    )
+    return success(payload)
 
 
 @router.post('/triage', summary='AI 智能分诊')

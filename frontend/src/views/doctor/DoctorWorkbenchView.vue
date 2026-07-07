@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 
 import { doctorApi, type DoctorCallNextResult, type DoctorQueueItem } from '@/api/doctor'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
 
+const router = useRouter()
 const session = useDoctorSessionStore()
 const queueItems = ref<DoctorQueueItem[]>([])
 const loading = ref(false)
@@ -46,8 +48,21 @@ function canStartReception(item: DoctorQueueItem) {
   return item.visit_state === 1
 }
 
+function canContinueEncounter(item: DoctorQueueItem) {
+  return item.visit_state === 2
+}
+
 function isActionLoading(registerUuid: string) {
   return actionRegisterUuid.value === registerUuid
+}
+
+function openEncounter(item: DoctorQueueItem) {
+  router.push({
+    name: 'doctor-encounter',
+    params: {
+      registerId: item.register_uuid,
+    },
+  })
 }
 
 async function loadQueue() {
@@ -106,6 +121,7 @@ async function handleStartReception(item: DoctorQueueItem) {
 
     ElMessage.success(`已开始接诊：${item.patient_name}`)
     await loadQueue()
+    openEncounter(item)
   } finally {
     actionRegisterUuid.value = ''
   }
@@ -209,7 +225,15 @@ watch(
                     >
                       {{ isActionLoading(item.register_uuid) ? '接诊中...' : '开始接诊' }}
                     </button>
-                    <span v-else class="doctor-workbench__queue-hint">当前患者已在接诊中</span>
+                    <button
+                      v-else-if="canContinueEncounter(item)"
+                      type="button"
+                      class="doctor-workbench__continue"
+                      @click="openEncounter(item)"
+                    >
+                      继续接诊
+                    </button>
+                    <span v-else class="doctor-workbench__queue-hint">当前患者暂不可接诊</span>
                   </div>
                 </div>
               </article>
@@ -297,6 +321,7 @@ watch(
 .doctor-workbench__call-next,
 .doctor-workbench__refresh,
 .doctor-workbench__start,
+.doctor-workbench__continue,
 .doctor-workbench__state button {
   min-height: 38px;
   padding: 0 14px;
@@ -311,6 +336,7 @@ watch(
 .doctor-workbench__call-next:disabled,
 .doctor-workbench__refresh:disabled,
 .doctor-workbench__start:disabled,
+.doctor-workbench__continue:disabled,
 .doctor-workbench__state button:disabled {
   opacity: 0.68;
   cursor: not-allowed;
@@ -415,6 +441,11 @@ watch(
 
 .doctor-workbench__start {
   min-width: 108px;
+}
+
+.doctor-workbench__continue {
+  min-width: 108px;
+  background: #1d4ed8;
 }
 
 .doctor-workbench__queue-hint {

@@ -129,12 +129,17 @@ export interface QueueStatus {
 
 export interface RegisterDetail {
   uuid: string
+  patient_uuid?: string
+  patient_name?: string
+  patient_case_number?: string
+  patient_gender?: string
   visit_date?: string
   noon?: string
   regist_method?: string
   regist_money?: number
   visit_state?: number
   visit_state_str?: string
+  visit_state_text?: string
   symptoms?: string
   employee_name?: string
   dept_name?: string
