@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 
@@ -9,6 +9,7 @@ import { useDoctorSessionStore } from '@/stores/doctorSession'
 
 const router = useRouter()
 const session = useDoctorSessionStore()
+
 const queueItems = ref<DoctorQueueItem[]>([])
 const loading = ref(false)
 const errorMessage = ref('')
@@ -16,19 +17,20 @@ const callingNext = ref(false)
 const actionRegisterUuid = ref('')
 const lastCalled = ref<DoctorCallNextResult | null>(null)
 
+let queuePollTimer: number | null = null
+
 const doctor = computed(() => session.staff)
 const hasIdentity = computed(() => Boolean(doctor.value?.employeeUuid))
 const queueCount = computed(() => queueItems.value.length)
 const waitingCount = computed(() => queueItems.value.filter((item) => item.visit_state === 1).length)
 const inReceptionCount = computed(() => queueItems.value.filter((item) => item.visit_state === 2).length)
+const currentReception = computed(() => queueItems.value.find((item) => item.visit_state === 2) ?? null)
+const nextWaiting = computed(() => queueItems.value.find((item) => item.visit_state === 1) ?? null)
 
-const aiBlocks = [
-  'AI 病历草稿',
-  '相似病历召回',
-  '检查检验建议',
-  '影像辅助判断',
-  '处方推荐',
-]
+function getErrorMessage(error: unknown, fallback: string) {
+  const detail = (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data
+  return String(detail?.detail || detail?.message || fallback)
+}
 
 function tagType(visitState: number) {
   if (visitState === 2) return 'success'
@@ -41,7 +43,7 @@ function visitTimeLabel(item: DoctorQueueItem) {
 }
 
 function symptomLabel(item: DoctorQueueItem) {
-  return item.symptoms?.trim() || '患者暂未填写症状描述'
+  return item.symptoms?.trim() || '患者暂未填写主诉摘要。'
 }
 
 function canStartReception(item: DoctorQueueItem) {
@@ -65,21 +67,46 @@ function openEncounter(item: DoctorQueueItem) {
   })
 }
 
-async function loadQueue() {
-  queueItems.value = []
+async function loadQueue(options: { silent?: boolean } = {}) {
+  if (!doctor.value?.employeeUuid) {
+    queueItems.value = []
+    errorMessage.value = ''
+    return
+  }
+
+  if (!options.silent) {
+    loading.value = true
+  }
+
   errorMessage.value = ''
-
-  if (!doctor.value?.employeeUuid) return
-
-  loading.value = true
   try {
     const response = await doctorApi.getQueue(doctor.value.employeeUuid)
     queueItems.value = response.data.data ?? []
-  } catch {
-    errorMessage.value = '今日候诊列表加载失败，请稍后重试。'
+  } catch (error) {
+    errorMessage.value = getErrorMessage(error, '今日候诊列表加载失败，请稍后重试。')
   } finally {
-    loading.value = false
+    if (!options.silent) {
+      loading.value = false
+    }
   }
+}
+
+function stopQueuePolling() {
+  if (queuePollTimer !== null) {
+    window.clearInterval(queuePollTimer)
+    queuePollTimer = null
+  }
+}
+
+function startQueuePolling() {
+  stopQueuePolling()
+  if (!hasIdentity.value) {
+    return
+  }
+
+  queuePollTimer = window.setInterval(() => {
+    void loadQueue({ silent: true })
+  }, 15000)
 }
 
 async function handleCallNext() {
@@ -94,10 +121,12 @@ async function handleCallNext() {
     if (result?.called) {
       ElMessage.success(`已叫号：${result.patient_name ?? '当前患者'}`)
     } else {
-      ElMessage.info(result?.message || '当前没有可叫号患者')
+      ElMessage.info(result?.message || '当前没有可叫号患者。')
     }
 
     await loadQueue()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '叫号失败，请稍后重试。'))
   } finally {
     callingNext.value = false
   }
@@ -122,6 +151,8 @@ async function handleStartReception(item: DoctorQueueItem) {
     ElMessage.success(`已开始接诊：${item.patient_name}`)
     await loadQueue()
     openEncounter(item)
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '开始接诊失败，请稍后重试。'))
   } finally {
     actionRegisterUuid.value = ''
   }
@@ -130,72 +161,86 @@ async function handleStartReception(item: DoctorQueueItem) {
 watch(
   () => doctor.value?.employeeUuid,
   () => {
-    loadQueue()
+    void loadQueue()
+    startQueuePolling()
   },
   { immediate: true },
 )
+
+onBeforeUnmount(() => {
+  stopQueuePolling()
+})
 </script>
 
 <template>
   <div class="doctor-workbench">
     <section class="doctor-workbench__hero">
-      <div>
-        <span>当前接诊身份</span>
+      <div class="doctor-workbench__hero-main">
+        <span class="doctor-workbench__eyebrow">医生工作台</span>
         <h2>{{ doctor?.displayName || '未登录医生' }}</h2>
-        <p>{{ doctor?.deptName || '登录后会在这里显示真实科室，并带入医生候诊队列查询。' }}</p>
+        <p>{{ doctor?.deptName || '登录后在这里带入真实医生身份，并读取今日候诊队列。' }}</p>
       </div>
       <div class="doctor-workbench__hero-metrics">
-        <strong>{{ queueCount }} 位候诊/接诊中</strong>
-        <p>待接诊 {{ waitingCount }} 位 · 接诊中 {{ inReceptionCount }} 位</p>
+        <div>
+          <strong>{{ queueCount }}</strong>
+          <span>今日队列</span>
+        </div>
+        <div>
+          <strong>{{ waitingCount }}</strong>
+          <span>待接诊</span>
+        </div>
+        <div>
+          <strong>{{ inReceptionCount }}</strong>
+          <span>接诊中</span>
+        </div>
       </div>
     </section>
 
-    <div class="doctor-workbench__human">
-      <SectionCard title="今日候诊列表" subtitle="已接真实接口，并补上叫下一位和开始接诊操作。">
-        <template #extra>
-          <div class="doctor-workbench__actions">
-            <button
-              type="button"
-              class="doctor-workbench__call-next"
-              :disabled="callingNext || !hasIdentity || !waitingCount"
-              @click="handleCallNext"
-            >
-              {{ callingNext ? '叫号中...' : '叫下一位' }}
-            </button>
-            <button type="button" class="doctor-workbench__refresh" :disabled="loading || !hasIdentity" @click="loadQueue">
-              {{ loading ? '刷新中...' : '刷新队列' }}
-            </button>
+    <div class="doctor-workbench__workspace">
+      <div class="doctor-workbench__main">
+        <SectionCard title="今日候诊队列" subtitle="左侧保留真实候诊主工作区，当前支持叫下一位、开始接诊和继续接诊。">
+          <template #extra>
+            <div class="doctor-workbench__actions">
+              <button
+                type="button"
+                class="doctor-workbench__primary"
+                :disabled="callingNext || !hasIdentity || !waitingCount"
+                @click="handleCallNext"
+              >
+                {{ callingNext ? '叫号中...' : '叫下一位' }}
+              </button>
+              <button
+                type="button"
+                class="doctor-workbench__secondary"
+                :disabled="loading || !hasIdentity"
+                @click="loadQueue()"
+              >
+                {{ loading ? '刷新中...' : '刷新队列' }}
+              </button>
+            </div>
+          </template>
+
+          <div v-if="!hasIdentity" class="doctor-workbench__state">
+            <strong>当前没有有效医生身份</strong>
+            <p>请先从医生登录页选择真实医生，再进入工作台读取候诊队列。</p>
           </div>
-        </template>
 
-        <div v-if="!hasIdentity" class="doctor-workbench__state">
-          <strong>当前没有有效医生身份</strong>
-          <p>请先从医生登录页选择真实医生后，再进入工作台读取候诊队列。</p>
-        </div>
+          <el-skeleton v-else :loading="loading" animated :rows="6">
+            <template #default>
+              <div v-if="errorMessage" class="doctor-workbench__state is-error">
+                <strong>{{ errorMessage }}</strong>
+                <button type="button" class="doctor-workbench__secondary" @click="loadQueue()">重新加载</button>
+              </div>
 
-        <el-skeleton v-else :loading="loading" animated :rows="5">
-          <template #default>
-            <div v-if="lastCalled?.called" class="doctor-workbench__callout">
-              <span>最近叫号</span>
-              <strong>{{ lastCalled.patient_name }}</strong>
-              <p>
-                {{ lastCalled.patient_case_number || '门诊号待确认' }}
-                <template v-if="lastCalled.time_range"> · {{ lastCalled.time_range }}</template>
-              </p>
-            </div>
-
-            <div v-if="errorMessage" class="doctor-workbench__state is-error">
-              <strong>{{ errorMessage }}</strong>
-              <button type="button" @click="loadQueue">重新加载</button>
-            </div>
-
-            <div v-else-if="queueItems.length" class="doctor-workbench__queue">
-              <article v-for="item in queueItems" :key="item.register_uuid" class="doctor-workbench__queue-item">
-                <div class="doctor-workbench__queue-main">
+              <div v-else-if="queueItems.length" class="doctor-workbench__queue">
+                <article v-for="item in queueItems" :key="item.register_uuid" class="doctor-workbench__queue-item">
                   <div class="doctor-workbench__queue-head">
                     <div>
-                      <strong>{{ item.patient_name }}</strong>
-                      <p>门诊号 {{ item.patient_case_number }}</p>
+                      <div class="doctor-workbench__queue-title">
+                        <strong>{{ item.patient_name }}</strong>
+                        <span>{{ item.patient_case_number }}</span>
+                      </div>
+                      <p>{{ symptomLabel(item) }}</p>
                     </div>
                     <el-tag :type="tagType(item.visit_state)" effect="plain">
                       {{ item.visit_state_text }}
@@ -213,13 +258,11 @@ watch(
                     </div>
                   </dl>
 
-                  <p class="doctor-workbench__symptom">症状：{{ symptomLabel(item) }}</p>
-
                   <div class="doctor-workbench__queue-actions">
                     <button
                       v-if="canStartReception(item)"
                       type="button"
-                      class="doctor-workbench__start"
+                      class="doctor-workbench__primary"
                       :disabled="isActionLoading(item.register_uuid)"
                       @click="handleStartReception(item)"
                     >
@@ -228,87 +271,163 @@ watch(
                     <button
                       v-else-if="canContinueEncounter(item)"
                       type="button"
-                      class="doctor-workbench__continue"
+                      class="doctor-workbench__primary is-blue"
                       @click="openEncounter(item)"
                     >
                       继续接诊
                     </button>
-                    <span v-else class="doctor-workbench__queue-hint">当前患者暂不可接诊</span>
+                    <span v-else class="doctor-workbench__queue-hint">当前状态不可进入接诊</span>
                   </div>
-                </div>
-              </article>
-            </div>
+                </article>
+              </div>
 
-            <div v-else class="doctor-workbench__state">
-              <strong>今日暂无候诊患者</strong>
-              <p>当前医生名下没有“已挂号”或“接诊中”的当日患者。</p>
-            </div>
-          </template>
-        </el-skeleton>
-      </SectionCard>
-    </div>
+              <div v-else class="doctor-workbench__state">
+                <strong>今日暂无候诊患者</strong>
+                <p>当前医生名下没有“已挂号”或“接诊中”的当日患者。</p>
+              </div>
+            </template>
+          </el-skeleton>
+        </SectionCard>
+      </div>
 
-    <div class="doctor-workbench__ai">
-      <SectionCard title="AI 辅助区" subtitle="这一列暂时保持静态占位，后续再接 AI 病历、相似病例与处方建议。">
-        <div class="doctor-workbench__ai-grid">
-          <div v-for="block in aiBlocks" :key="block" class="doctor-workbench__ai-block">
-            <strong>{{ block }}</strong>
-            <span>静态占位</span>
+      <aside class="doctor-workbench__sidebar">
+        <SectionCard title="当前接诊摘要" subtitle="右侧改成紧凑支持区，不再放大块静态 AI 占位。">
+          <div class="doctor-workbench__summary-card">
+            <div>
+              <span>接诊医生</span>
+              <strong>{{ doctor?.displayName || '未登录' }}</strong>
+            </div>
+            <div>
+              <span>科室</span>
+              <strong>{{ doctor?.deptName || '待登录' }}</strong>
+            </div>
+            <div>
+              <span>当前接诊中</span>
+              <strong>{{ currentReception?.patient_name || '暂无' }}</strong>
+            </div>
           </div>
-        </div>
-      </SectionCard>
+        </SectionCard>
+
+        <SectionCard title="最近叫号" subtitle="帮助医生确认刚刚推进到哪位患者。">
+          <div v-if="lastCalled?.called" class="doctor-workbench__note-card">
+            <strong>{{ lastCalled.patient_name }}</strong>
+            <p>{{ lastCalled.patient_case_number || '病案号待确认' }}</p>
+            <span>{{ lastCalled.time_range || '时间段待确认' }}</span>
+          </div>
+          <div v-else class="doctor-workbench__note-card is-muted">
+            <strong>尚未叫号</strong>
+            <p>点击“叫下一位”后，这里会保留最近一次叫号摘要。</p>
+            <span>{{ nextWaiting?.patient_name ? `下一位：${nextWaiting.patient_name}` : '当前没有待接诊患者' }}</span>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="队列概览" subtitle="把统计、约束和操作边界收在一列。">
+          <div class="doctor-workbench__overview">
+            <div class="doctor-workbench__overview-item">
+              <span>待接诊</span>
+              <strong>{{ waitingCount }}</strong>
+            </div>
+            <div class="doctor-workbench__overview-item">
+              <span>接诊中</span>
+              <strong>{{ inReceptionCount }}</strong>
+            </div>
+            <div class="doctor-workbench__overview-item">
+              <span>下一位</span>
+              <strong>{{ nextWaiting?.patient_name || '暂无' }}</strong>
+            </div>
+          </div>
+          <div class="doctor-workbench__hint">
+            同一名医生同一时刻只允许一位患者处于“接诊中”。如果已有接诊中的患者，开始下一位时会直接拦截并提示。
+          </div>
+        </SectionCard>
+      </aside>
     </div>
   </div>
 </template>
 
 <style scoped>
 .doctor-workbench {
-  min-height: calc(100vh - 48px);
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
   gap: 20px;
 }
 
 .doctor-workbench__hero {
-  grid-column: 1 / -1;
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
   justify-content: space-between;
-  gap: 16px;
-  padding: 22px 24px;
+  gap: 18px;
+  padding: 24px;
   border-radius: 18px;
-  background: linear-gradient(135deg, #0f766e, #0f9b8e);
+  background: linear-gradient(135deg, #0f766e 0%, #115e59 100%);
   color: #ffffff;
 }
 
-.doctor-workbench__hero span,
-.doctor-workbench__hero p {
-  color: rgba(255, 255, 255, 0.88);
+.doctor-workbench__hero-main {
+  display: grid;
+  gap: 8px;
+}
+
+.doctor-workbench__eyebrow {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .doctor-workbench__hero h2,
-.doctor-workbench__hero p {
+.doctor-workbench__hero p,
+.doctor-workbench__hero strong,
+.doctor-workbench__hero span {
   margin: 0;
 }
 
 .doctor-workbench__hero h2 {
-  margin-top: 6px;
-  font-size: 28px;
+  font-size: 30px;
+  line-height: 1.1;
 }
 
-.doctor-workbench__hero strong {
-  white-space: nowrap;
-  font-size: 28px;
+.doctor-workbench__hero p {
+  max-width: 56ch;
+  color: rgba(255, 255, 255, 0.86);
+  line-height: 1.6;
 }
 
 .doctor-workbench__hero-metrics {
   display: grid;
-  gap: 4px;
-  justify-items: end;
+  grid-template-columns: repeat(3, minmax(88px, 1fr));
+  gap: 12px;
+  min-width: 320px;
 }
 
-.doctor-workbench__hero-metrics p {
-  margin: 0;
+.doctor-workbench__hero-metrics div {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(4px);
+}
+
+.doctor-workbench__hero-metrics strong {
+  font-size: 28px;
+}
+
+.doctor-workbench__hero-metrics span {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+}
+
+.doctor-workbench__workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.7fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.doctor-workbench__main,
+.doctor-workbench__sidebar {
+  display: grid;
+  gap: 20px;
 }
 
 .doctor-workbench__actions {
@@ -318,67 +437,49 @@ watch(
   gap: 10px;
 }
 
-.doctor-workbench__call-next,
-.doctor-workbench__refresh,
-.doctor-workbench__start,
-.doctor-workbench__continue,
-.doctor-workbench__state button {
-  min-height: 38px;
-  padding: 0 14px;
+.doctor-workbench__primary,
+.doctor-workbench__secondary {
+  min-height: 40px;
+  padding: 0 16px;
   border: 0;
   border-radius: 10px;
-  background: #0f766e;
-  color: #ffffff;
   font: inherit;
   font-weight: 700;
+  cursor: pointer;
 }
 
-.doctor-workbench__call-next:disabled,
-.doctor-workbench__refresh:disabled,
-.doctor-workbench__start:disabled,
-.doctor-workbench__continue:disabled,
-.doctor-workbench__state button:disabled {
-  opacity: 0.68;
+.doctor-workbench__primary {
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.doctor-workbench__primary.is-blue {
+  background: #1d4ed8;
+}
+
+.doctor-workbench__secondary {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.doctor-workbench__primary:disabled,
+.doctor-workbench__secondary:disabled {
+  opacity: 0.65;
   cursor: not-allowed;
 }
 
-.doctor-workbench__queue,
-.doctor-workbench__ai-grid {
+.doctor-workbench__queue {
   display: grid;
-  gap: 12px;
-}
-
-.doctor-workbench__callout {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 12px;
-  padding: 14px 16px;
-  border: 1px solid #bfdbfe;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%);
-}
-
-.doctor-workbench__callout span {
-  color: #0369a1;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.doctor-workbench__callout strong,
-.doctor-workbench__callout p {
-  margin: 0;
+  gap: 14px;
 }
 
 .doctor-workbench__queue-item {
-  border: 1px solid #e2e8f0;
-  border-radius: 14px;
-  padding: 14px;
-  background: #f8fafc;
-}
-
-.doctor-workbench__queue-main {
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbe5f0;
+  border-radius: 16px;
+  background: #f8fafc;
 }
 
 .doctor-workbench__queue-head {
@@ -388,14 +489,25 @@ watch(
   gap: 14px;
 }
 
-.doctor-workbench__queue-head strong {
-  font-size: 18px;
-  color: #0f172a;
+.doctor-workbench__queue-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
 }
 
+.doctor-workbench__queue-title strong {
+  color: #0f172a;
+  font-size: 18px;
+}
+
+.doctor-workbench__queue-title span,
 .doctor-workbench__queue-head p,
-.doctor-workbench__symptom,
-.doctor-workbench__state p {
+.doctor-workbench__queue-hint,
+.doctor-workbench__state p,
+.doctor-workbench__note-card p,
+.doctor-workbench__note-card span,
+.doctor-workbench__hint {
   margin: 0;
   color: #64748b;
   line-height: 1.6;
@@ -404,54 +516,74 @@ watch(
 .doctor-workbench__queue-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
   margin: 0;
 }
 
-.doctor-workbench__queue-meta div {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 10px;
+.doctor-workbench__queue-meta div,
+.doctor-workbench__summary-card,
+.doctor-workbench__note-card,
+.doctor-workbench__overview-item {
+  padding: 14px;
+  border-radius: 14px;
   background: #ffffff;
+  border: 1px solid #dbe5f0;
 }
 
-.doctor-workbench__queue-meta dt {
+.doctor-workbench__queue-meta dt,
+.doctor-workbench__summary-card span,
+.doctor-workbench__overview-item span {
   color: #64748b;
   font-size: 12px;
 }
 
-.doctor-workbench__queue-meta dd {
+.doctor-workbench__queue-meta dd,
+.doctor-workbench__summary-card strong,
+.doctor-workbench__note-card strong,
+.doctor-workbench__overview-item strong,
+.doctor-workbench__state strong {
   margin: 0;
   color: #0f172a;
-  font-weight: 700;
-}
-
-.doctor-workbench__symptom {
-  padding-top: 12px;
-  border-top: 1px solid #dbe5f0;
 }
 
 .doctor-workbench__queue-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 10px;
+}
+
+.doctor-workbench__summary-card,
+.doctor-workbench__overview {
+  display: grid;
   gap: 12px;
 }
 
-.doctor-workbench__start {
-  min-width: 108px;
+.doctor-workbench__note-card {
+  display: grid;
+  gap: 6px;
 }
 
-.doctor-workbench__continue {
-  min-width: 108px;
-  background: #1d4ed8;
+.doctor-workbench__note-card.is-muted {
+  background: #f8fafc;
 }
 
-.doctor-workbench__queue-hint {
-  color: #0f766e;
-  font-size: 13px;
-  font-weight: 700;
+.doctor-workbench__overview {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.doctor-workbench__overview-item {
+  display: grid;
+  gap: 6px;
+}
+
+.doctor-workbench__hint {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
 }
 
 .doctor-workbench__state {
@@ -460,12 +592,8 @@ watch(
   justify-items: start;
   padding: 18px;
   border-radius: 14px;
-  background: #f8fafc;
   border: 1px solid #e2e8f0;
-}
-
-.doctor-workbench__state strong {
-  color: #0f172a;
+  background: #f8fafc;
 }
 
 .doctor-workbench__state.is-error {
@@ -473,47 +601,40 @@ watch(
   border-color: #fdba74;
 }
 
-.doctor-workbench__ai-block {
-  min-height: 84px;
-  display: grid;
-  align-content: center;
-  gap: 8px;
-  padding: 14px;
-  border-radius: 8px;
-  background: #ecfeff;
-  color: #134e4a;
-  border: 1px solid #99f6e4;
-}
-
-.doctor-workbench__ai-block strong,
-.doctor-workbench__ai-block span {
-  margin: 0;
-}
-
-.doctor-workbench__ai-block span {
-  font-size: 13px;
-  color: #0f766e;
-}
-
-@media (max-width: 1100px) {
-  .doctor-workbench {
+@media (max-width: 1180px) {
+  .doctor-workbench__workspace {
     grid-template-columns: 1fr;
   }
 
   .doctor-workbench__hero {
-    align-items: flex-start;
     flex-direction: column;
   }
 
-  .doctor-workbench__hero-metrics,
-  .doctor-workbench__actions,
-  .doctor-workbench__queue-actions {
-    justify-items: start;
-    justify-content: flex-start;
+  .doctor-workbench__hero-metrics {
+    min-width: 0;
   }
+}
 
+@media (max-width: 720px) {
+  .doctor-workbench__hero-metrics,
+  .doctor-workbench__overview,
   .doctor-workbench__queue-meta {
     grid-template-columns: 1fr;
+  }
+
+  .doctor-workbench__queue-head,
+  .doctor-workbench__queue-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .doctor-workbench__actions {
+    justify-content: stretch;
+  }
+
+  .doctor-workbench__actions button,
+  .doctor-workbench__queue-actions button {
+    width: 100%;
   }
 }
 </style>

@@ -7,8 +7,19 @@ import { usePatientSessionStore } from '@/stores/patientSession'
 const router = useRouter()
 const session = usePatientSessionStore()
 
-const patientName = computed(() => session.patient?.real_name || session.loginDraft.realName || '\u5f20\u4e09')
-const visitNumber = computed(() => session.patient?.case_number || '\u6682\u672a\u5efa\u6863')
+const isLoggedIn = computed(() => session.isLoggedIn)
+const patientName = computed(() => (isLoggedIn.value ? session.patient?.real_name || '当前患者' : '请先登录'))
+const visitMeta = computed(() => (isLoggedIn.value ? `门诊号：${session.patient?.case_number || '暂未建档'}` : '登录后查看个人档案与就诊码'))
+const visitCardActionLabel = computed(() => (isLoggedIn.value ? '出示就诊码' : '去登录'))
+
+function openVisitCard() {
+  if (!isLoggedIn.value) {
+    router.push('/patient/login')
+    return
+  }
+
+  router.push('/patient/profile')
+}
 
 const features = [
   {
@@ -83,16 +94,16 @@ const features = [
     </section>
 
     <main class="patient-home-content">
-      <button type="button" class="patient-home-card patient-home-card--visit" @click="router.push('/patient/profile')">
+      <button type="button" class="patient-home-card patient-home-card--visit" @click="openVisitCard">
         <span class="patient-home-avatar" aria-hidden="true"></span>
         <span class="patient-home-identity">
           <strong>{{ patientName }}</strong>
-          <em>&#26412;&#20154;</em>
-          <small>&#38376;&#35786;&#21495;&#65306;{{ visitNumber }}</small>
+          <em v-if="isLoggedIn">&#26412;&#20154;</em>
+          <small>{{ visitMeta }}</small>
         </span>
         <span class="patient-home-code" aria-hidden="true">
           <span></span>
-          <small>&#20986;&#31034;&#23601;&#35786;&#30721;</small>
+          <small>{{ visitCardActionLabel }}</small>
         </span>
         <span class="patient-home-card__arrow" aria-hidden="true">&#8250;</span>
       </button>

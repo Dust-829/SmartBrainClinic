@@ -138,6 +138,24 @@ async def create_disposal(data: DisposalRequestCreate, session: AsyncSession = D
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/tech", summary="获取医技项目列表")
+async def list_techs(tech_type: Optional[str] = None, session: AsyncSession = Depends(get_session)):
+    try:
+        techs = await svc.list_medical_technologies(session, tech_type=tech_type)
+        return success([
+            {
+                "id": tech.id,
+                "uuid": str(tech.uuid),
+                "tech_code": tech.tech_code,
+                "tech_name": tech.tech_name,
+                "tech_type": tech.tech_type,
+                "price": str(tech.price),
+            }
+            for tech in techs
+        ])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/tech/{uuid}", summary="获取医技项目信息")
 async def get_tech(uuid: str, session: AsyncSession = Depends(get_session)):
     tech = await svc.get_tech_by_uuid(session, uuid)
@@ -325,6 +343,14 @@ async def get_medical_record(register_uuid: uuid_pkg.UUID, session: AsyncSession
         })
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/requests/register/{register_uuid}", summary="按挂号单获取检查检验处置队列")
+async def get_register_requests(register_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.list_requests_by_register(session, register_uuid)
+        return success(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

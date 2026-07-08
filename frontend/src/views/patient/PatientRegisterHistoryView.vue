@@ -97,7 +97,6 @@ watch(() => patient.value?.uuid, loadRecords)
           <div class="patient-register-history-title">
             <div>
               <h2>全部挂号记录</h2>
-              <p>数据来自后端挂号历史接口</p>
             </div>
             <span v-if="recordCountText">{{ recordCountText }}</span>
           </div>
@@ -261,7 +260,6 @@ watch(() => patient.value?.uuid, loadRecords)
 
 .patient-register-history-login p,
 .patient-register-history-empty p,
-.patient-register-history-title p,
 .patient-register-history-card-head p,
 .patient-register-history-symptom {
   color: var(--patient-text-muted);
@@ -357,11 +355,6 @@ watch(() => patient.value?.uuid, loadRecords)
 .patient-register-history-title h2 {
   margin: 0;
   font-size: 20px;
-}
-
-.patient-register-history-title p {
-  margin: 4px 0 0;
-  font-size: 13px;
 }
 
 .patient-register-history-title > span,

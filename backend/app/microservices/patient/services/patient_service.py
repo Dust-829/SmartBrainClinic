@@ -315,7 +315,47 @@ async def get_registers_by_patient_uuid(session: AsyncSession, patient_uuid: uui
 
 async def get_rich_registers_by_patient_uuid(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> list[dict]:
     raw_registers = await get_registers_by_patient_uuid(session, patient_uuid)
+    if not raw_registers:
+        return []
+
+    actual_ids = {reg.scheduling_actual_id for reg in raw_registers if reg.scheduling_actual_id}
+    slot_ids = {reg.scheduling_time_slot_id for reg in raw_registers if reg.scheduling_time_slot_id}
+
+    actual_map = {}
+    if actual_ids:
+        actual_result = await session.execute(
+            select(SchedulingActual).where(SchedulingActual.id.in_(actual_ids))
+        )
+        actual_map = {actual.id: actual for actual in actual_result.scalars().all()}
+
+    slot_map = {}
+    if slot_ids:
+        slot_result = await session.execute(
+            select(SchedulingTimeSlot).where(SchedulingTimeSlot.id.in_(slot_ids))
+        )
+        slot_map = {slot.id: slot for slot in slot_result.scalars().all()}
+
+    employee_cache: dict[str, Optional[dict]] = {}
+    department_cache: dict[str, Optional[dict]] = {}
+    clinic_room_cache: dict[str, Optional[dict]] = {}
     rich_registers = []
+
+    async def get_employee_cached(employee_uuid) -> Optional[dict]:
+        key = str(employee_uuid)
+        if key not in employee_cache:
+            employee_cache[key] = await AuthClient.get_employee(key)
+        return employee_cache[key]
+
+    async def get_department_cached(dept_uuid: str) -> Optional[dict]:
+        if dept_uuid not in department_cache:
+            department_cache[dept_uuid] = await AuthClient.get_department(dept_uuid)
+        return department_cache[dept_uuid]
+
+    async def get_clinic_room_cached(room_uuid) -> Optional[dict]:
+        key = str(room_uuid)
+        if key not in clinic_room_cache:
+            clinic_room_cache[key] = await AuthClient.get_clinic_room(key)
+        return clinic_room_cache[key]
     
     for reg in raw_registers:
         # Pydantic V2 model_dump method is not available on SQLAlchemy models, we need to construct it manually or use __dict__
@@ -339,32 +379,26 @@ async def get_rich_registers_by_patient_uuid(session: AsyncSession, patient_uuid
         employee_name = "未知医生"
         dept_name = "未知科室"
         if reg.employee_uuid:
-            emp = await AuthClient.get_employee(str(reg.employee_uuid))
+            emp = await get_employee_cached(reg.employee_uuid)
             if emp:
                 employee_name = emp.get("realname", "未知医生")
                 dept_uuid = emp.get("dept_uuid")
                 if dept_uuid:
-                    dept = await AuthClient.get_department(str(dept_uuid))
+                    dept = await get_department_cached(str(dept_uuid))
                     if dept:
                         dept_name = dept.get("dept_name", "未知科室")
         
         # 2. 查询确切的排班日期和时间段
-        schedule_date = None
-        time_range = None
-        if reg.scheduling_actual_id:
-            actual = await session.get(SchedulingActual, reg.scheduling_actual_id)
-            if actual:
-                schedule_date = actual.schedule_date.isoformat()
-        if reg.scheduling_time_slot_id:
-            ts = await session.get(SchedulingTimeSlot, reg.scheduling_time_slot_id)
-            if ts:
-                time_range = ts.time_range
+        actual = actual_map.get(reg.scheduling_actual_id) if reg.scheduling_actual_id else None
+        ts = slot_map.get(reg.scheduling_time_slot_id) if reg.scheduling_time_slot_id else None
+        schedule_date = actual.schedule_date.isoformat() if actual else None
+        time_range = ts.time_range if ts else None
                 
         # 3. 查询具体的诊室信息
         room_name = None
         room_location = None
         if actual and actual.clinic_room_uuid:
-            room_info = await AuthClient.get_clinic_room(str(actual.clinic_room_uuid))
+            room_info = await get_clinic_room_cached(actual.clinic_room_uuid)
             if room_info:
                 room_name = room_info.get("room_name")
                 room_location = room_info.get("location")
@@ -827,6 +861,21 @@ async def _transition_visit_state(session: AsyncSession, register_uuid: uuid_pkg
         raise ValueError("挂号单不存在")
 
     target_state = ensure_visit_transition(register.visit_state, visit_state)
+    if int(target_state) == int(VisitState.RECEPTION) and register.visit_state != int(VisitState.RECEPTION):
+        active_stmt = (
+            select(Register)
+            .where(
+                Register.employee_uuid == register.employee_uuid,
+                Register.visit_state == VisitState.RECEPTION,
+                Register.uuid != register.uuid,
+            )
+            .with_for_update()
+            .limit(1)
+        )
+        active_register = (await session.execute(active_stmt)).scalar_one_or_none()
+        if active_register:
+            raise ValueError("当前医生已有接诊中的患者，请先完成当前接诊后再开始下一位。")
+
     register.visit_state = int(target_state)
     session.add(register)
     await session.flush()

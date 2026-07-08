@@ -85,6 +85,18 @@ async def get_tech_by_uuid(session: AsyncSession, tech_uuid: str) -> MedicalTech
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
+
+async def list_medical_technologies(
+    session: AsyncSession,
+    tech_type: str | None = None,
+) -> list[MedicalTechnology]:
+    stmt = select(MedicalTechnology).where(MedicalTechnology.delmark == 1)
+    if tech_type:
+        stmt = stmt.where(MedicalTechnology.tech_type == tech_type)
+    stmt = stmt.order_by(MedicalTechnology.id.asc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
 async def recommend_tech_ai(tech_name: str, available_techs: list[dict]) -> str | None:
     if not available_techs:
         return None
@@ -201,6 +213,98 @@ async def create_disposal_request(session: AsyncSession, data: dict) -> Disposal
     session.add(disposal)
     await session.flush()
     return disposal
+
+
+async def _load_tech_map(session: AsyncSession, tech_ids: set[int]) -> dict[int, MedicalTechnology]:
+    if not tech_ids:
+        return {}
+
+    stmt = select(MedicalTechnology).where(MedicalTechnology.id.in_(list(tech_ids)))
+    techs = (await session.execute(stmt)).scalars().all()
+    return {tech.id: tech for tech in techs}
+
+
+def _serialize_medical_request_item(
+    item_type: str,
+    request_obj: CheckRequest | InspectionRequest | DisposalRequest,
+    tech: MedicalTechnology | None,
+) -> dict:
+    base = {
+        "uuid": str(request_obj.uuid),
+        "register_uuid": str(request_obj.register_uuid),
+        "item_type": item_type,
+        "state": (
+            request_obj.check_state
+            if item_type == "check"
+            else request_obj.inspection_state
+            if item_type == "inspection"
+            else request_obj.disposal_state
+        ),
+        "medical_technology_id": request_obj.medical_technology_id,
+        "medical_technology_uuid": str(tech.uuid) if tech else None,
+        "tech_code": tech.tech_code if tech else None,
+        "tech_name": tech.tech_name if tech else None,
+        "tech_type": tech.tech_type if tech else None,
+        "price": str(tech.price) if tech else "0.00",
+        "creation_time": request_obj.creation_time.isoformat() if request_obj.creation_time else None,
+    }
+
+    if item_type == "check":
+        base["check_info"] = request_obj.check_info
+        base["check_position"] = request_obj.check_position
+        base["result"] = request_obj.check_result
+    elif item_type == "inspection":
+        base["result"] = request_obj.test_results
+    else:
+        base["result"] = request_obj.disposal_result
+
+    return base
+
+
+async def list_requests_by_register(session: AsyncSession, register_uuid: uuid_pkg.UUID | str) -> dict:
+    register_uuid_obj = uuid_pkg.UUID(str(register_uuid))
+
+    check_stmt = (
+        select(CheckRequest)
+        .where(CheckRequest.register_uuid == register_uuid_obj)
+        .order_by(CheckRequest.creation_time.desc(), CheckRequest.id.desc())
+    )
+    inspection_stmt = (
+        select(InspectionRequest)
+        .where(InspectionRequest.register_uuid == register_uuid_obj)
+        .order_by(InspectionRequest.creation_time.desc(), InspectionRequest.id.desc())
+    )
+    disposal_stmt = (
+        select(DisposalRequest)
+        .where(DisposalRequest.register_uuid == register_uuid_obj)
+        .order_by(DisposalRequest.creation_time.desc(), DisposalRequest.id.desc())
+    )
+
+    checks = list((await session.execute(check_stmt)).scalars().all())
+    inspections = list((await session.execute(inspection_stmt)).scalars().all())
+    disposals = list((await session.execute(disposal_stmt)).scalars().all())
+
+    tech_ids = {
+        request_obj.medical_technology_id
+        for request_obj in [*checks, *inspections, *disposals]
+        if request_obj.medical_technology_id
+    }
+    tech_map = await _load_tech_map(session, tech_ids)
+
+    return {
+        "checks": [
+            _serialize_medical_request_item("check", item, tech_map.get(item.medical_technology_id))
+            for item in checks
+        ],
+        "inspections": [
+            _serialize_medical_request_item("inspection", item, tech_map.get(item.medical_technology_id))
+            for item in inspections
+        ],
+        "disposals": [
+            _serialize_medical_request_item("disposal", item, tech_map.get(item.medical_technology_id))
+            for item in disposals
+        ],
+    }
 
 async def update_check_state(session: AsyncSession, check_uuid: str, state: str) -> CheckRequest:
     stmt = select(CheckRequest).where(CheckRequest.uuid == uuid_pkg.UUID(check_uuid)).with_for_update()
@@ -676,11 +780,7 @@ async def get_requests_batch(session: AsyncSession, check_uuids: list[str], insp
             if d.medical_technology_id:
                 tech_ids.add(d.medical_technology_id)
 
-    tech_map = {}
-    if tech_ids:
-        stmt_tech = select(MedicalTechnology).where(MedicalTechnology.id.in_(list(tech_ids)))
-        techs = (await session.execute(stmt_tech)).scalars().all()
-        tech_map = {t.id: str(t.price) for t in techs}
+    tech_map = {tech_id: str(tech.price) for tech_id, tech in (await _load_tech_map(session, tech_ids)).items()}
 
     for item_dict in ret.values():
         for item in item_dict.values():

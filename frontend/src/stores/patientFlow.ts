@@ -16,6 +16,7 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
 
   const triageMessages = ref<TriageMessage[]>([])
   const triageResult = ref<TriageResult | null>(null)
+  const triageSessionUuid = ref('')
   const manualDeptCode = ref('')
   const manualDeptName = ref('')
   const recommendations = ref<DoctorRecommendation[]>([])
@@ -41,6 +42,7 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
   function setTriage(messages: TriageMessage[], result: TriageResult) {
     triageMessages.value = messages
     triageResult.value = result
+    triageSessionUuid.value = result.session_uuid || triageSessionUuid.value
     manualDeptCode.value = ''
     manualDeptName.value = ''
   }
@@ -101,6 +103,7 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
     triagePromptShown.value = false
     triageMessages.value = []
     triageResult.value = null
+    triageSessionUuid.value = ''
     manualDeptCode.value = ''
     manualDeptName.value = ''
     recommendations.value = []
@@ -124,6 +127,7 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
   return {
     triageMessages,
     triageResult,
+    triageSessionUuid,
     manualDeptCode,
     manualDeptName,
     triageData,

@@ -27,7 +27,13 @@ const rules: FormRules = {
   ],
 }
 
+function normalizeLoginForm() {
+  form.real_name = form.real_name.trim()
+  form.card_number = form.card_number.trim().toUpperCase()
+}
+
 async function login() {
+  normalizeLoginForm()
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
@@ -49,6 +55,7 @@ async function login() {
 }
 
 function goRegister() {
+  normalizeLoginForm()
   session.setLoginDraft({ realName: form.real_name, cardNumber: form.card_number })
   router.push('/patient/register')
 }
@@ -85,6 +92,9 @@ function goBack() {
               placeholder="&#35831;&#36755;&#20837;&#36523;&#20221;&#35777;&#21495;"
               autocomplete="username"
             />
+            <p class="patient-auth-hint">
+              &#24739;&#32773;&#30331;&#24405;&#21482;&#25903;&#25345;&#24314;&#26723;&#26102;&#30340;&#36523;&#20221;&#35777;&#21495;&#65292;&#19981;&#25903;&#25345;&#30149;&#26696;&#21495;&#65288;&#22914; SBC-DEMO-P001&#65289;&#12290;
+            </p>
           </el-form-item>
           <el-button type="primary" size="large" :loading="loading" @click="login">&#30331;&#24405;</el-button>
           <el-button size="large" plain @click="goRegister">&#27809;&#26377;&#36134;&#21495;&#65292;&#21435;&#27880;&#20876;&#24314;&#26723;</el-button>
@@ -117,6 +127,13 @@ function goBack() {
 .patient-auth-form :deep(.el-button) {
   width: 100%;
   margin: 4px 0 0;
+}
+
+.patient-auth-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--patient-text-muted);
 }
 
 @media (min-width: 720px) {

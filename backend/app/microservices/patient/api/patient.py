@@ -7,6 +7,13 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.ai_audit import query_ai_audit_logs
+from app.common.ai_conversation import (
+    append_ai_conversation_messages,
+    create_ai_conversation_session,
+    get_ai_conversation_session,
+    list_ai_conversation_messages,
+    update_ai_conversation_session,
+)
 from app.common.clients import AuthClient
 from app.common.response import created, success
 from app.common.security import require_ai_audit_admin
@@ -52,6 +59,8 @@ class TriageMessage(BaseModel):
 
 
 class TriageRequest(BaseModel):
+    patient_uuid: Optional[uuid_pkg.UUID] = None
+    session_uuid: Optional[uuid_pkg.UUID] = None
     messages: list[TriageMessage]
 
 
@@ -120,6 +129,25 @@ class AdminUpdateActualRequest(BaseModel):
     schedule_date: str
     noon: str
     regist_quota: int
+
+
+async def _sync_triage_session_messages(
+    session: AsyncSession,
+    session_uuid: uuid_pkg.UUID,
+    messages: list[dict[str, str]],
+) -> None:
+    existing_messages = await list_ai_conversation_messages(session, session_uuid)
+    existing_payload = [{'role': item.role, 'content': item.content} for item in existing_messages]
+
+    if len(messages) < len(existing_payload):
+        raise ValueError('AI 会话消息长度异常，无法回写本轮分诊记录')
+
+    if existing_payload and messages[: len(existing_payload)] != existing_payload:
+        raise ValueError('AI 会话历史与当前提交不一致，请重新开始分诊')
+
+    new_messages = messages[len(existing_payload):]
+    if new_messages:
+        await append_ai_conversation_messages(session, session_uuid, new_messages, start_turn_index=len(existing_payload) + 1)
 
 
 @router.post('', summary='患者注册建档')
@@ -208,18 +236,56 @@ async def get_register_info(uuid: str, session: AsyncSession = Depends(get_sessi
 
 
 @router.post('/triage', summary='AI 智能分诊')
-async def ai_triage(data: TriageRequest):
+async def ai_triage(data: TriageRequest, session: AsyncSession = Depends(get_session)):
     try:
         messages = [{'role': m.role, 'content': m.content} for m in data.messages]
+        triage_session = None
+
+        if data.session_uuid:
+            triage_session = await get_ai_conversation_session(session, data.session_uuid)
+            if not triage_session:
+                raise HTTPException(status_code=400, detail='AI 会话不存在，请重新开始分诊')
+        else:
+            triage_session = await create_ai_conversation_session(
+                session,
+                surface='patient_triage',
+                module_name='patient.triage',
+                patient_uuid=data.patient_uuid,
+                status='draft',
+            )
+
+        await _sync_triage_session_messages(session, triage_session.uuid, messages)
         res = await run_ai_triage(
             messages=messages,
             api_key=settings.LLM_API_KEY,
             api_base=settings.LLM_API_BASE,
             model=settings.LLM_MODEL,
         )
+        triage_data = res.get('data') if isinstance(res, dict) else None
+        assistant_reply = triage_data.get('reply') if isinstance(triage_data, dict) else None
+        symptom_summary = triage_data.get('symptom_summary') if isinstance(triage_data, dict) else None
+        if assistant_reply:
+            await append_ai_conversation_messages(
+                session,
+                triage_session.uuid,
+                [{'role': 'assistant', 'content': assistant_reply}],
+            )
+        await update_ai_conversation_session(
+            session,
+            triage_session.uuid,
+            patient_uuid=data.patient_uuid if data.patient_uuid else triage_session.patient_uuid,
+            latest_result_json=res,
+            summary_text=symptom_summary,
+            source=res.get('source') if isinstance(res, dict) else None,
+            model=res.get('model') if isinstance(res, dict) else None,
+            validated=bool(res.get('validated')) if isinstance(res, dict) else False,
+        )
+        res['session_uuid'] = str(triage_session.uuid)
         return success(res)
     except TriageAIUnavailableError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

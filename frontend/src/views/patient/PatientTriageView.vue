@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
@@ -10,11 +10,15 @@ import { usePatientSessionStore } from '@/stores/patientSession'
 const router = useRouter()
 const flow = usePatientFlowStore()
 const session = usePatientSessionStore()
+const bodyRef = ref<HTMLElement>()
 const input = ref('')
 const submitting = ref(false)
+const pendingMessages = ref<TriageMessage[]>([])
+const assistantPending = ref(false)
 
 const messages = computed<TriageMessage[]>(() => flow.triageMessages)
 const triage = computed(() => flow.triageData)
+const renderedMessages = computed<TriageMessage[]>(() => pendingMessages.value.length ? pendingMessages.value : messages.value)
 
 const examples = [
   '我有高血压应该挂什么科室的号',
@@ -73,6 +77,19 @@ onMounted(() => {
   }
 })
 
+watch(
+  () => renderedMessages.value.length,
+  async () => {
+    await nextTick()
+    scrollConversationToBottom()
+  },
+)
+
+watch(assistantPending, async () => {
+  await nextTick()
+  scrollConversationToBottom()
+})
+
 async function send(content = input.value) {
   const normalized = content.trim()
   if (!normalized) return
@@ -80,17 +97,34 @@ async function send(content = input.value) {
   const nextMessages: TriageMessage[] = [...messages.value, { role: 'user', content: normalized }]
   input.value = ''
   submitting.value = true
+  pendingMessages.value = nextMessages
+  assistantPending.value = true
 
   try {
-    const response = await patientApi.triage(nextMessages)
+    const response = await patientApi.triage({
+      patient_uuid: session.patient?.uuid,
+      session_uuid: flow.triageSessionUuid || undefined,
+      messages: nextMessages,
+    })
     const result = response.data.data
     const assistantReply = result.data.reply || '已完成本轮分诊。'
     flow.setTriage([...nextMessages, { role: 'assistant', content: assistantReply }], result)
   } catch {
     input.value = normalized
   } finally {
+    pendingMessages.value = []
+    assistantPending.value = false
     submitting.value = false
   }
+}
+
+function scrollConversationToBottom() {
+  const container = bodyRef.value
+  if (!container) return
+  container.scrollTo({
+    top: container.scrollHeight,
+    behavior: 'smooth',
+  })
 }
 
 function useExample(value: string) {
@@ -143,7 +177,7 @@ function formatAge(birthdate?: string) {
       <p>我来帮您快速确定就诊方向</p>
     </section>
 
-    <main class="triage-chat__body">
+    <main ref="bodyRef" class="triage-chat__body">
       <section class="triage-chat__assistant-card">
         <p>请简单描述主要不适、持续时间、伴随症状和既往病史，系统会结合真实 AI 模型给出就诊建议。</p>
         <button v-for="example in examples" :key="example" type="button" @click="useExample(example)">
@@ -152,8 +186,17 @@ function formatAge(birthdate?: string) {
         </button>
       </section>
 
-      <div v-for="(message, index) in messages" :key="index" :class="['triage-chat__message', `is-${message.role}`]">
+      <div
+        v-for="(message, index) in renderedMessages"
+        :key="`${message.role}-${index}-${message.content}`"
+        :class="['triage-chat__message', `is-${message.role}`]"
+      >
         {{ message.content }}
+      </div>
+      <div v-if="assistantPending" class="triage-chat__message triage-chat__message--typing is-assistant">
+        <span></span>
+        <span></span>
+        <span></span>
       </div>
 
       <section v-if="triage" class="triage-chat__result">
@@ -255,7 +298,10 @@ function formatAge(birthdate?: string) {
 .triage-chat__body {
   display: grid;
   gap: 12px;
+  max-height: calc(100vh - 360px);
+  overflow-y: auto;
   padding: 0 14px;
+  scroll-behavior: smooth;
 }
 
 .triage-chat__assistant-card {
@@ -329,6 +375,29 @@ function formatAge(birthdate?: string) {
   background: #ffffff;
 }
 
+.triage-chat__message--typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+}
+
+.triage-chat__message--typing span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9db4da;
+  animation: triage-chat-typing 1.1s infinite ease-in-out;
+}
+
+.triage-chat__message--typing span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.triage-chat__message--typing span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
 .triage-chat__result {
   display: grid;
   gap: 10px;
@@ -396,5 +465,18 @@ function formatAge(birthdate?: string) {
 .triage-chat__composer :deep(.el-button) {
   height: 44px;
   border-radius: 12px;
+}
+
+@keyframes triage-chat-typing {
+  0%,
+  80%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 </style>

@@ -76,8 +76,14 @@ async def run_ai_triage(
 
     if not api_key or not api_key.strip():
         if not allow_mock_fallback:
-            raise TriageAIUnavailableError(
-                'AI triage is not configured. Please set LLM_API_KEY in backend/.env and restart services 8000 and 8002.'
+            logger.warning('[AI Triage] LLM_API_KEY missing, switching to deterministic fallback triage.')
+            return await _build_rule_fallback_result(
+                messages,
+                started_at=started_at,
+                api_key=api_key,
+                api_base=api_base,
+                model=model,
+                warning='llm_triage_not_configured_fallback',
             )
         logger.warning('[AI Triage] LLM_API_KEY missing, falling back to mock triage engine.')
     else:
@@ -97,6 +103,35 @@ async def run_ai_triage(
                     data['dept_determined'] = False
 
                 data = TriageResultData(**data).model_dump(mode='json')
+                fallback_candidate = _mock_multi_turn_triage(messages)
+                if _should_use_rule_fallback(data, fallback_candidate, messages):
+                    logger.warning('[AI Triage] LLM returned low-quality triage result, switching to rule fallback.')
+                    fallback_data = TriageResultData(**fallback_candidate).model_dump(mode='json')
+                    fallback_data, validation, confidence = await _apply_triage_trust_controls(
+                        fallback_data,
+                        messages,
+                        source=AISource.FALLBACK,
+                        api_key=api_key,
+                        api_base=api_base,
+                        model=model,
+                    )
+                    result = build_ai_result(
+                        fallback_data,
+                        source=AISource.FALLBACK,
+                        model='llm-rule-fallback',
+                        confidence=confidence,
+                        warnings=['llm_triage_low_quality_fallback', *validation.warnings],
+                        validated=validation.is_valid,
+                        validator_messages=list(validation.messages),
+                    )
+                    await record_ai_audit(
+                        module_name='patient.triage',
+                        input_text=messages,
+                        result=result,
+                        latency_ms=elapsed_ms(started_at),
+                    )
+                    return result
+
                 data, validation, confidence = await _apply_triage_trust_controls(
                     data,
                     messages,
@@ -122,12 +157,24 @@ async def run_ai_triage(
         except Exception as exc:
             logger.error('[AI Triage] LLM invocation failed: %s', exc)
             if not allow_mock_fallback:
-                raise TriageAIUnavailableError(
-                    'AI triage request failed. Check LLM_API_KEY, LLM_API_BASE, LLM_MODEL, and network connectivity.'
-                ) from exc
+                return await _build_rule_fallback_result(
+                    messages,
+                    started_at=started_at,
+                    api_key=api_key,
+                    api_base=api_base,
+                    model=model,
+                    warning='llm_triage_request_failed_fallback',
+                )
 
     if not allow_mock_fallback:
-        raise TriageAIUnavailableError('AI triage returned no valid result. Please verify the backend model configuration.')
+        return await _build_rule_fallback_result(
+            messages,
+            started_at=started_at,
+            api_key=api_key,
+            api_base=api_base,
+            model=model,
+            warning='llm_triage_no_valid_result_fallback',
+        )
 
     logger.info('[AI Triage] Running offline mock triage engine.')
     data = TriageResultData(**_mock_multi_turn_triage(messages)).model_dump(mode='json')
@@ -377,6 +424,71 @@ async def _department_exists_in_db(dept_code: str) -> bool | None:
     except Exception as exc:
         logger.warning('[AI Triage] Department fact check unavailable: %s', exc)
         return None
+
+
+async def _build_rule_fallback_result(
+    messages: List[Dict[str, str]],
+    *,
+    started_at,
+    api_key: str | None,
+    api_base: str | None,
+    model: str | None,
+    warning: str,
+) -> dict[str, Any]:
+    fallback_data = TriageResultData(**_mock_multi_turn_triage(messages)).model_dump(mode='json')
+    fallback_data, validation, confidence = await _apply_triage_trust_controls(
+        fallback_data,
+        messages,
+        source=AISource.FALLBACK,
+        api_key=api_key,
+        api_base=api_base,
+        model=model,
+    )
+    result = build_ai_result(
+        fallback_data,
+        source=AISource.FALLBACK,
+        model='rule-triage-fallback',
+        confidence=confidence,
+        warnings=[warning, *validation.warnings],
+        validated=validation.is_valid,
+        validator_messages=list(validation.messages),
+    )
+    await record_ai_audit(
+        module_name='patient.triage',
+        input_text=messages,
+        result=result,
+        latency_ms=elapsed_ms(started_at),
+    )
+    return result
+
+
+def _should_use_rule_fallback(
+    llm_data: dict[str, Any],
+    fallback_candidate: dict[str, Any],
+    messages: List[Dict[str, str]],
+) -> bool:
+    if llm_data.get('dept_determined'):
+        return False
+    if not fallback_candidate.get('dept_determined'):
+        return False
+
+    patient_text = _collect_user_text(messages)
+    if not _contains_triage_detail(patient_text):
+        return False
+
+    reply = str(llm_data.get('reply') or '')
+    summary = str(llm_data.get('symptom_summary') or '').strip()
+    fallback_summary = str(fallback_candidate.get('symptom_summary') or '').strip()
+    generic_markers = (
+        '没有理解',
+        '请您用文字说明',
+        '请描述',
+        '哪里不舒服',
+        '持续多久',
+        '伴随症状',
+    )
+
+    return (not summary and bool(fallback_summary)) or any(marker in reply for marker in generic_markers)
 
 
 def _mock_multi_turn_triage(messages: List[Dict[str, str]]) -> Dict[str, Any]:

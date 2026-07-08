@@ -383,7 +383,11 @@ SET employee_uuid = EXCLUDED.employee_uuid,
 INSERT INTO medical_technology (uuid, tech_code, tech_name, tech_type, price, delmark)
 VALUES
   ('90000000-0000-0000-0000-000000000701', 'DEMO_CT_HEAD', '头颅CT', 'check', 180.00, 1),
-  ('90000000-0000-0000-0000-000000000702', 'DEMO_MRI_HEAD', '头颅MRI', 'check', 680.00, 1)
+  ('90000000-0000-0000-0000-000000000702', 'DEMO_MRI_HEAD', '头颅MRI', 'check', 680.00, 1),
+  ('90000000-0000-0000-0000-000000000703', 'DEMO_BLOOD_ROUTINE', '血常规', 'inspection', 38.00, 1),
+  ('90000000-0000-0000-0000-000000000704', 'DEMO_ELECTROLYTE', '电解质', 'inspection', 52.00, 1),
+  ('90000000-0000-0000-0000-000000000705', 'DEMO_NEBULIZATION', '雾化吸入', 'disposal', 68.00, 1),
+  ('90000000-0000-0000-0000-000000000706', 'DEMO_INFUSION', '静脉补液', 'disposal', 96.00, 1)
 ON CONFLICT (tech_code) DO UPDATE
 SET tech_name = EXCLUDED.tech_name,
     tech_type = EXCLUDED.tech_type,

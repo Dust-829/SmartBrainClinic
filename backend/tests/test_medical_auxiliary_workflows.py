@@ -27,6 +27,13 @@ def test_check_detail_api_exposes_result_fields():
     assert '"ai_tumor_prob": str(check.ai_tumor_prob)' in source
 
 
+def test_medical_api_exposes_tech_list_and_register_request_routes():
+    source = Path("app/microservices/medical/api/medical.py").read_text(encoding="utf-8")
+
+    assert '@router.get("/tech", summary="获取医技项目列表")' in source
+    assert '@router.get("/requests/register/{register_uuid}", summary="按挂号单获取检查检验处置队列")' in source
+
+
 def test_medical_order_rejects_unpaid_register():
     data = run_isolated_python(
         """
@@ -160,3 +167,91 @@ def test_input_inspection_and_disposal_result_execute_paid_requests():
     assert data["disposal_state"] == "已执行"
     assert data["disposal_result"] == "完成雾化处置，患者无不适"
     assert data["disposal_flushed"] is True
+
+
+def test_list_requests_by_register_returns_grouped_queue_payload():
+    data = run_isolated_python(
+        """
+        import asyncio
+        import json
+        import uuid
+        from decimal import Decimal
+        from datetime import datetime
+        from types import SimpleNamespace
+        from app.microservices.medical.services import medical_service
+
+        class FakeScalars:
+            def __init__(self, rows):
+                self._rows = rows
+            def all(self):
+                return self._rows
+
+        class FakeExecuteResult:
+            def __init__(self, rows):
+                self._rows = rows
+            def scalars(self):
+                return FakeScalars(self._rows)
+
+        class FakeSession:
+            def __init__(self, rows):
+                self._rows = list(rows)
+            async def execute(self, statement):
+                return FakeExecuteResult(self._rows.pop(0))
+
+        async def main():
+            register_uuid = uuid.UUID("90000000-0000-0000-0000-000000000601")
+            tech_check = SimpleNamespace(
+                id=101,
+                uuid=uuid.UUID("90000000-0000-0000-0000-000000000701"),
+                tech_code="DEMO_CT_HEAD",
+                tech_name="头颅CT",
+                tech_type="check",
+                price=Decimal("180.00"),
+            )
+            tech_inspection = SimpleNamespace(
+                id=102,
+                uuid=uuid.UUID("90000000-0000-0000-0000-000000000703"),
+                tech_code="DEMO_BLOOD",
+                tech_name="血常规",
+                tech_type="inspection",
+                price=Decimal("38.00"),
+            )
+            check = SimpleNamespace(
+                id=1,
+                uuid=uuid.UUID("91000000-0000-0000-0000-000000000001"),
+                register_uuid=register_uuid,
+                medical_technology_id=101,
+                creation_time=datetime(2026, 7, 7, 9, 0, 0),
+                check_state="未缴费",
+                check_info="排查颅内病变",
+                check_position="头部",
+                check_result=None,
+            )
+            inspection = SimpleNamespace(
+                id=2,
+                uuid=uuid.UUID("91000000-0000-0000-0000-000000000002"),
+                register_uuid=register_uuid,
+                medical_technology_id=102,
+                creation_time=datetime(2026, 7, 7, 9, 5, 0),
+                inspection_state="已缴费",
+                test_results=None,
+            )
+            session = FakeSession([
+                [check],
+                [inspection],
+                [],
+                [tech_check, tech_inspection],
+            ])
+            result = await medical_service.list_requests_by_register(session, register_uuid)
+            print(json.dumps(result, ensure_ascii=False))
+
+        asyncio.run(main())
+        """
+    )
+
+    assert data["checks"][0]["tech_name"] == "头颅CT"
+    assert data["checks"][0]["state"] == "未缴费"
+    assert data["checks"][0]["check_position"] == "头部"
+    assert data["inspections"][0]["tech_name"] == "血常规"
+    assert data["inspections"][0]["state"] == "已缴费"
+    assert data["disposals"] == []

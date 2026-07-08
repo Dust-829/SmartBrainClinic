@@ -37,6 +37,7 @@ export interface TriageData {
 }
 
 export interface TriageResult {
+  session_uuid?: string
   source?: string
   model?: string
   confidence?: number
@@ -44,6 +45,12 @@ export interface TriageResult {
   validated?: boolean
   validator_messages?: string[]
   data: TriageData
+}
+
+export interface TriagePayload {
+  patient_uuid?: string
+  session_uuid?: string
+  messages: TriageMessage[]
 }
 
 export interface DoctorRecommendPayload {
@@ -159,8 +166,8 @@ export const patientApi = {
   getDepartments() {
     return http.get<ApiEnvelope<DepartmentOption[]>>('/api/v1/patient/departments')
   },
-  triage(messages: TriageMessage[]) {
-    return http.post<ApiEnvelope<TriageResult>>('/api/v1/patient/triage', { messages })
+  triage(payload: TriagePayload) {
+    return http.post<ApiEnvelope<TriageResult>>('/api/v1/patient/triage', payload)
   },
   recommendDoctors(payload: DoctorRecommendPayload) {
     return http.post<ApiEnvelope<DoctorRecommendation[]>>('/api/v1/patient/recommend-doctors', payload)
