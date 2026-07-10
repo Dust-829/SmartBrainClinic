@@ -6,9 +6,14 @@ interface QueueTimeBucket {
   count: number
 }
 
-const props = defineProps<{
+type QueueVisualState = 'loading' | 'ready' | 'unavailable'
+
+const props = withDefaults(defineProps<{
   items: QueueTimeBucket[]
-}>()
+  state?: QueueVisualState
+}>(), {
+  state: 'ready',
+})
 
 const maxRows = 6
 const unknownTimeLabel = '时间待确认'
@@ -34,6 +39,8 @@ const visibleItems = computed<QueueTimeBucket[]>(() => {
 
 const maxCount = computed(() => Math.max(0, ...visibleItems.value.map((item) => item.count)))
 const accessibleLabel = computed(() => {
+  if (props.state === 'loading') return '正在加载分时段挂号数据'
+  if (props.state === 'unavailable') return '分时段挂号数据暂不可用'
   if (!visibleItems.value.length) return '分时段挂号，今日暂无挂号时段'
   return `分时段挂号，${visibleItems.value.map((item) => `${item.label}${item.count}人`).join('，')}`
 })
@@ -44,10 +51,14 @@ function barWidth(count: number) {
 </script>
 
 <template>
-  <section class="doctor-queue-time-buckets" :aria-label="accessibleLabel">
+  <section class="doctor-queue-time-buckets" :aria-label="accessibleLabel" :aria-busy="state === 'loading'">
     <p class="doctor-queue-time-buckets__title">分时段挂号</p>
 
-    <ul v-if="visibleItems.length">
+    <p v-if="state !== 'ready'" class="doctor-queue-time-buckets__empty">
+      {{ state === 'loading' ? '正在加载挂号时段' : '挂号数据暂不可用' }}
+    </p>
+
+    <ul v-else-if="visibleItems.length">
       <li v-for="item in visibleItems" :key="item.label">
         <span class="doctor-queue-time-buckets__label">{{ item.label }}</span>
         <span class="doctor-queue-time-buckets__track" aria-hidden="true">

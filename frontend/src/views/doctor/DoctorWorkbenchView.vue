@@ -25,11 +25,15 @@ interface QueueTimeBucket {
   count: number
 }
 
+type QueueVisualState = 'loading' | 'ready' | 'unavailable'
+
 const router = useRouter()
 const session = useDoctorSessionStore()
 
 const queueItems = ref<DoctorQueueItem[]>([])
-const loading = ref(false)
+const foregroundQueueRequestCount = ref(0)
+const activeQueueRequestCount = ref(0)
+const hasLoadedQueue = ref(false)
 const errorMessage = ref('')
 const callingNext = ref(false)
 const actionRegisterUuid = ref('')
@@ -37,9 +41,12 @@ const lastCalled = ref<DoctorCallNextResult | null>(null)
 const lastRefreshedAt = ref<Date | null>(null)
 
 let queuePollTimer: number | null = null
+let queueRequestSequence = 0
 
 const doctor = computed(() => session.staff)
 const hasIdentity = computed(() => Boolean(doctor.value?.employeeUuid))
+const loading = computed(() => foregroundQueueRequestCount.value > 0)
+const queueSyncing = computed(() => activeQueueRequestCount.value > 0)
 const queueCount = computed(() => queueItems.value.length)
 const waitingCount = computed(
   () => queueItems.value.filter((item) => item.visit_state === VISIT_STATE_REGISTERED).length,
@@ -88,6 +95,31 @@ const queueTimeBuckets = computed<QueueTimeBucket[]>(() => {
     })
     .map(([label, count]) => ({ label, count }))
 })
+const queueVisualState = computed<QueueVisualState>(() => {
+  if (hasLoadedQueue.value) return 'ready'
+  if (errorMessage.value) return 'unavailable'
+  return 'loading'
+})
+const lastRefreshedLabel = computed(() => {
+  if (!lastRefreshedAt.value) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(lastRefreshedAt.value)
+})
+const queueRefreshLabel = computed(() => {
+  if (!hasIdentity.value) return '等待医生身份'
+  if (queueSyncing.value && hasLoadedQueue.value) return '正在同步，当前显示上次数据'
+  if (queueSyncing.value) return '正在加载挂号数据'
+  if (errorMessage.value && hasLoadedQueue.value) {
+    return `更新失败，当前显示 ${lastRefreshedLabel.value} 数据`
+  }
+  if (errorMessage.value) return '挂号数据暂不可用'
+  if (lastRefreshedLabel.value) return `最后更新 ${lastRefreshedLabel.value}，每 15 秒自动更新`
+  return '等待挂号数据'
+})
 
 function getErrorMessage(error: unknown, fallback: string) {
   const detail = (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data
@@ -130,26 +162,36 @@ function openEncounter(item: DoctorQueueItem) {
 }
 
 async function loadQueue(options: { silent?: boolean } = {}) {
-  if (!doctor.value?.employeeUuid) {
+  const employeeUuid = doctor.value?.employeeUuid
+  if (!employeeUuid) {
     queueItems.value = []
     errorMessage.value = ''
+    hasLoadedQueue.value = false
+    lastRefreshedAt.value = null
     return
   }
 
+  const requestSequence = ++queueRequestSequence
+  activeQueueRequestCount.value += 1
   if (!options.silent) {
-    loading.value = true
+    foregroundQueueRequestCount.value += 1
   }
 
   errorMessage.value = ''
   try {
-    const response = await doctorApi.getQueue(doctor.value.employeeUuid)
+    const response = await doctorApi.getQueue(employeeUuid)
+    if (requestSequence !== queueRequestSequence || doctor.value?.employeeUuid !== employeeUuid) return
+
     queueItems.value = response.data.data ?? []
     lastRefreshedAt.value = new Date()
+    hasLoadedQueue.value = true
   } catch (error) {
+    if (requestSequence !== queueRequestSequence || doctor.value?.employeeUuid !== employeeUuid) return
     errorMessage.value = getErrorMessage(error, '今日候诊列表加载失败，请稍后重试。')
   } finally {
+    activeQueueRequestCount.value = Math.max(0, activeQueueRequestCount.value - 1)
     if (!options.silent) {
-      loading.value = false
+      foregroundQueueRequestCount.value = Math.max(0, foregroundQueueRequestCount.value - 1)
     }
   }
 }
@@ -224,6 +266,12 @@ async function handleStartReception(item: DoctorQueueItem) {
 watch(
   () => doctor.value?.employeeUuid,
   () => {
+    queueRequestSequence += 1
+    queueItems.value = []
+    hasLoadedQueue.value = false
+    lastRefreshedAt.value = null
+    lastCalled.value = null
+    errorMessage.value = ''
     void loadQueue()
     startQueuePolling()
   },
@@ -242,9 +290,16 @@ onBeforeUnmount(() => {
         <span class="doctor-workbench__eyebrow">医生工作台</span>
         <h2>{{ doctor?.displayName || '未登录医生' }}</h2>
         <p>{{ doctor?.deptName || '登录后在这里带入真实医生身份，并读取今日候诊队列。' }}</p>
+        <div
+          class="doctor-workbench__refresh-status"
+          :class="{ 'is-syncing': queueSyncing, 'is-error': Boolean(errorMessage) }"
+        >
+          <i aria-hidden="true"></i>
+          <span>{{ queueRefreshLabel }}</span>
+        </div>
       </div>
-      <DoctorQueueDonut :total="queueCount" :items="queueStatusSummary" />
-      <DoctorQueueTimeBuckets :items="queueTimeBuckets" />
+      <DoctorQueueDonut :total="queueCount" :items="queueStatusSummary" :state="queueVisualState" />
+      <DoctorQueueTimeBuckets :items="queueTimeBuckets" :state="queueVisualState" />
     </section>
 
     <div class="doctor-workbench__workspace">
@@ -415,6 +470,7 @@ onBeforeUnmount(() => {
 
 .doctor-workbench__hero-main {
   display: grid;
+  align-content: center;
   gap: 8px;
 }
 
@@ -440,6 +496,32 @@ onBeforeUnmount(() => {
   max-width: 56ch;
   color: rgba(255, 255, 255, 0.86);
   line-height: 1.6;
+}
+
+.doctor-workbench__refresh-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.doctor-workbench__refresh-status i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #5eead4;
+}
+
+.doctor-workbench__refresh-status.is-syncing i {
+  background: #fcd34d;
+}
+
+.doctor-workbench__refresh-status.is-error i {
+  background: #fdba74;
 }
 
 .doctor-workbench__workspace {

@@ -8,10 +8,15 @@ interface QueueStatusItem {
   percentage: number
 }
 
-const props = defineProps<{
+type QueueVisualState = 'loading' | 'ready' | 'unavailable'
+
+const props = withDefaults(defineProps<{
   total: number
   items: QueueStatusItem[]
-}>()
+  state?: QueueVisualState
+}>(), {
+  state: 'ready',
+})
 
 const radius = 42
 const circumference = 2 * Math.PI * radius
@@ -21,6 +26,8 @@ const segmentColors: Record<QueueStatusItem['key'], string> = {
 }
 
 const accessibleLabel = computed(() => {
+  if (props.state === 'loading') return '正在加载今日挂号状态'
+  if (props.state === 'unavailable') return '今日挂号状态暂不可用'
   const detail = props.items.map((item) => `${item.label}${item.count}人`).join('，')
   return `今日挂号共${props.total}人，${detail}`
 })
@@ -44,24 +51,26 @@ const segments = computed(() => {
 </script>
 
 <template>
-  <section class="doctor-queue-donut" :aria-label="accessibleLabel">
-    <div class="doctor-queue-donut__visual">
+  <section class="doctor-queue-donut" :aria-label="accessibleLabel" :aria-busy="state === 'loading'">
+    <div class="doctor-queue-donut__visual" :class="{ 'is-placeholder': state !== 'ready' }">
       <svg viewBox="0 0 100 100" role="img" :aria-label="accessibleLabel">
         <title>{{ accessibleLabel }}</title>
         <circle class="doctor-queue-donut__track" cx="50" cy="50" :r="radius" />
-        <circle
-          v-for="segment in segments"
-          :key="segment.key"
-          class="doctor-queue-donut__segment"
-          cx="50"
-          cy="50"
-          :r="radius"
-          :stroke="segment.color"
-          :stroke-dasharray="segment.dashArray"
-          :stroke-dashoffset="segment.dashOffset"
-        />
+        <template v-if="state === 'ready'">
+          <circle
+            v-for="segment in segments"
+            :key="segment.key"
+            class="doctor-queue-donut__segment"
+            cx="50"
+            cy="50"
+            :r="radius"
+            :stroke="segment.color"
+            :stroke-dasharray="segment.dashArray"
+            :stroke-dashoffset="segment.dashOffset"
+          />
+        </template>
       </svg>
-      <div class="doctor-queue-donut__total" aria-hidden="true">
+      <div v-if="state === 'ready'" class="doctor-queue-donut__total" aria-hidden="true">
         <strong>{{ total }}</strong>
         <span>今日挂号</span>
       </div>
@@ -69,7 +78,10 @@ const segments = computed(() => {
 
     <div class="doctor-queue-donut__content">
       <p>今日挂号状态</p>
-      <ul>
+      <p v-if="state !== 'ready'" class="doctor-queue-donut__state">
+        {{ state === 'loading' ? '正在加载挂号数据' : '挂号数据暂不可用' }}
+      </p>
+      <ul v-else>
         <li v-for="item in items" :key="item.key">
           <span class="doctor-queue-donut__label">
             <i :style="{ backgroundColor: segmentColors[item.key] }" aria-hidden="true"></i>
@@ -105,6 +117,10 @@ const segments = computed(() => {
   width: 100%;
   height: 100%;
   transform: rotate(-90deg);
+}
+
+.doctor-queue-donut__visual.is-placeholder {
+  opacity: 0.62;
 }
 
 .doctor-queue-donut__track,
@@ -150,6 +166,12 @@ const segments = computed(() => {
   color: #ffffff;
   font-size: 14px;
   font-weight: 700;
+}
+
+.doctor-queue-donut__content .doctor-queue-donut__state {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .doctor-queue-donut__content ul {
