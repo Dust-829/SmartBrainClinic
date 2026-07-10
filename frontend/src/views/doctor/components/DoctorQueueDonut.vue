@@ -86,18 +86,18 @@ const segments = computed(() => {
 <style scoped>
 .doctor-queue-donut {
   display: grid;
-  grid-template-columns: 126px minmax(170px, 1fr);
+  grid-template-columns: 112px minmax(150px, 1fr);
   align-items: center;
-  gap: 20px;
-  min-width: 340px;
+  gap: 16px;
+  min-width: 300px;
   padding-left: 24px;
   border-left: 1px solid rgba(255, 255, 255, 0.22);
 }
 
 .doctor-queue-donut__visual {
   position: relative;
-  width: 126px;
-  height: 126px;
+  width: 112px;
+  height: 112px;
 }
 
 .doctor-queue-donut__visual svg {

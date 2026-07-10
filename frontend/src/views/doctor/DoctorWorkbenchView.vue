@@ -7,6 +7,7 @@ import { doctorApi, type DoctorCallNextResult, type DoctorQueueItem } from '@/ap
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
 import DoctorQueueDonut from '@/views/doctor/components/DoctorQueueDonut.vue'
+import DoctorQueueTimeBuckets from '@/views/doctor/components/DoctorQueueTimeBuckets.vue'
 
 const VISIT_STATE_REGISTERED = 1
 const VISIT_STATE_RECEPTION = 2
@@ -243,6 +244,7 @@ onBeforeUnmount(() => {
         <p>{{ doctor?.deptName || '登录后在这里带入真实医生身份，并读取今日候诊队列。' }}</p>
       </div>
       <DoctorQueueDonut :total="queueCount" :items="queueStatusSummary" />
+      <DoctorQueueTimeBuckets :items="queueTimeBuckets" />
     </section>
 
     <div class="doctor-workbench__workspace">
@@ -401,9 +403,9 @@ onBeforeUnmount(() => {
 }
 
 .doctor-workbench__hero {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(300px, 0.95fr) minmax(280px, 1fr);
   align-items: stretch;
-  justify-content: space-between;
   gap: 18px;
   padding: 24px;
   border-radius: 18px;
@@ -630,7 +632,7 @@ onBeforeUnmount(() => {
   }
 
   .doctor-workbench__hero {
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
 }
