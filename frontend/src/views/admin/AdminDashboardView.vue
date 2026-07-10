@@ -1,8 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { adminApi, type AuditLogRecord, type BillRecord, type DrugListItem, type SchedulingApplicationRecord } from '@/api/admin'
-import { authApi, type ClinicRoomRecord, type DepartmentRecord, type DoctorDirectoryItem, type EmployeeRecord } from '@/api/auth'
+import {
+  adminApi,
+  type AuditLogRecord,
+  type BillRecord,
+  type DrugListItem,
+  type SchedulingApplicationRecord,
+} from '@/api/admin'
+import {
+  authApi,
+  type ClinicRoomRecord,
+  type DepartmentRecord,
+  type DoctorDirectoryItem,
+  type EmployeeRecord,
+} from '@/api/auth'
 import { http, type ApiEnvelope } from '@/api/http'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useAdminSessionStore } from '@/stores/adminSession'
@@ -63,12 +75,9 @@ function formatDateTime(value?: string | null) {
 }
 
 async function tryGetClinicRoomByName(name: string) {
-  const response = await http.get<ApiEnvelope<ClinicRoomRecord>>(
-    `/api/v1/auth/clinic-room/name/${encodeURIComponent(name)}`,
-    {
-      validateStatus: (status) => status === 200 || status === 404,
-    },
-  )
+  const response = await http.get<ApiEnvelope<ClinicRoomRecord>>(`/api/v1/auth/clinic-room/name/${encodeURIComponent(name)}`, {
+    validateStatus: (status) => status === 200 || status === 404,
+  })
 
   return response.status === 200 ? response.data.data ?? null : null
 }
@@ -94,8 +103,7 @@ async function loadDashboard() {
     ])
 
     pendingApplications.value = results[0].status === 'fulfilled' ? results[0].value.data.data ?? [] : []
-    auditLogs.value =
-      results[1].status === 'fulfilled' && results[1].value ? results[1].value.data.data ?? [] : []
+    auditLogs.value = results[1].status === 'fulfilled' && results[1].value ? results[1].value.data.data ?? [] : []
     lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
     recentBills.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []
     doctors.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? [] : []
@@ -115,7 +123,7 @@ onMounted(() => {
   <div class="admin-dashboard">
     <section class="admin-dashboard__hero">
       <div>
-        <span>主页大屏</span>
+        <span>首页大屏</span>
         <h2>{{ session.staff?.displayName || '值班管理员' }}</h2>
         <p>聚合审批、AI 审计、药房账单与资源摘要，作为管理员端主屏使用。</p>
       </div>
@@ -125,11 +133,7 @@ onMounted(() => {
     </section>
 
     <section class="admin-dashboard__metrics">
-      <article
-        v-for="metric in metricCards"
-        :key="metric.label"
-        :class="['admin-dashboard__metric', `is-${metric.tone}`]"
-      >
+      <article v-for="metric in metricCards" :key="metric.label" :class="['admin-dashboard__metric', `is-${metric.tone}`]">
         <span>{{ metric.label }}</span>
         <strong>{{ metric.value }}</strong>
       </article>
@@ -150,7 +154,10 @@ onMounted(() => {
         </div>
       </SectionCard>
 
-      <SectionCard title="AI 模块统计" :subtitle="auditAvailable ? '展示 AI 审计中已留下证据链的模块记录。' : '当前未配置 AI 审计 token。'">
+      <SectionCard
+        title="AI 模块统计"
+        :subtitle="auditAvailable ? '展示 AI 审计中已留下证据链的模块记录。' : '当前未配置 AI 审计 token。'"
+      >
         <div class="admin-dashboard__module-list">
           <article v-for="item in moduleSummary" :key="item.label">
             <strong>{{ item.label }}</strong>
@@ -163,17 +170,13 @@ onMounted(() => {
     <div class="admin-dashboard__grid">
       <SectionCard title="待办快照" subtitle="优先关注会影响主链路演示的后台动作。">
         <div v-if="pendingApplications.length" class="admin-dashboard__list">
-          <article
-            v-for="item in pendingApplications.slice(0, 4)"
-            :key="item.uuid"
-            class="admin-dashboard__list-item"
-          >
+          <article v-for="item in pendingApplications.slice(0, 4)" :key="item.uuid" class="admin-dashboard__list-item">
             <strong>{{ item.employee_uuid }}</strong>
             <p>{{ item.prompt }}</p>
             <span>{{ formatDateTime(item.created_at) }}</span>
           </article>
         </div>
-        <div v-else class="admin-dashboard__empty">当前没有待审批排班申请。</div>
+        <div v-else class="admin-empty">当前没有待审批排班申请。</div>
       </SectionCard>
 
       <SectionCard title="账单与库存" subtitle="把药房和财务的风险信号收束到首页。">
@@ -186,7 +189,7 @@ onMounted(() => {
           <article class="admin-dashboard__stat-card">
             <strong>最近账单</strong>
             <p>{{ recentBills[0]?.bill_code || '暂无账单记录' }}</p>
-            <span v-if="recentBills[0]">{{ recentBills[0].bill_state }} · {{ recentBills[0].total_amount }}</span>
+            <span v-if="recentBills[0]">{{ recentBills[0].bill_state }} | {{ recentBills[0].total_amount }}</span>
           </article>
         </div>
       </SectionCard>
@@ -212,219 +215,9 @@ onMounted(() => {
         <article class="admin-dashboard__resource-card">
           <span>诊室样本</span>
           <strong>{{ room?.room_name || '未命中样本' }}</strong>
-          <p>{{ room?.room_code || '若后端无 CT一室 / 门诊一诊室 / 脑电图室，不再弹错。' }}</p>
+          <p>{{ room?.room_code || '若后端无样本诊室，这里不再报错。' }}</p>
         </article>
       </div>
     </SectionCard>
   </div>
 </template>
-
-<style scoped>
-.admin-dashboard {
-  display: grid;
-  gap: 20px;
-}
-
-.admin-dashboard__hero {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 24px;
-  border-radius: 24px;
-  background: linear-gradient(135deg, #1d4ed8, #4338ca 62%, #0f766e);
-  color: #ffffff;
-}
-
-.admin-dashboard__hero h2,
-.admin-dashboard__hero p {
-  margin: 0;
-}
-
-.admin-dashboard__hero h2 {
-  margin-top: 8px;
-  font-size: 30px;
-}
-
-.admin-dashboard__hero p,
-.admin-dashboard__hero span {
-  color: rgba(255, 255, 255, 0.86);
-}
-
-.admin-dashboard__hero button {
-  min-height: 42px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
-  font: inherit;
-  font-weight: 700;
-}
-
-.admin-dashboard__metrics,
-.admin-dashboard__grid,
-.admin-dashboard__resources {
-  display: grid;
-  gap: 14px;
-}
-
-.admin-dashboard__metrics {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
-.admin-dashboard__grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.admin-dashboard__metric,
-.admin-dashboard__resource-card,
-.admin-dashboard__stat-card {
-  display: grid;
-  gap: 8px;
-  padding: 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: #ffffff;
-}
-
-.admin-dashboard__metric span,
-.admin-dashboard__resource-card span,
-.admin-dashboard__stat-card span {
-  color: #64748b;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-dashboard__metric strong,
-.admin-dashboard__resource-card strong,
-.admin-dashboard__stat-card strong {
-  color: #0f172a;
-  font-size: 28px;
-}
-
-.admin-dashboard__metric.is-indigo {
-  background: linear-gradient(180deg, #eef2ff, #ffffff);
-}
-
-.admin-dashboard__metric.is-sky {
-  background: linear-gradient(180deg, #e0f2fe, #ffffff);
-}
-
-.admin-dashboard__metric.is-amber {
-  background: linear-gradient(180deg, #fff7ed, #ffffff);
-}
-
-.admin-dashboard__metric.is-emerald {
-  background: linear-gradient(180deg, #ecfdf5, #ffffff);
-}
-
-.admin-dashboard__metric.is-slate {
-  background: linear-gradient(180deg, #e2e8f0, #ffffff);
-}
-
-.admin-dashboard__insights,
-.admin-dashboard__stack,
-.admin-dashboard__list,
-.admin-dashboard__module-list {
-  display: grid;
-  gap: 12px;
-}
-
-.admin-dashboard__insight {
-  display: grid;
-  gap: 10px;
-}
-
-.admin-dashboard__insight > div:first-child {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.admin-dashboard__insight strong,
-.admin-dashboard__module-list strong,
-.admin-dashboard__list-item strong {
-  color: #0f172a;
-}
-
-.admin-dashboard__insight span,
-.admin-dashboard__module-list p,
-.admin-dashboard__list-item p,
-.admin-dashboard__list-item span,
-.admin-dashboard__resource-card p,
-.admin-dashboard__stat-card p {
-  margin: 0;
-  color: #475569;
-}
-
-.admin-dashboard__bar {
-  height: 10px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #e2e8f0;
-}
-
-.admin-dashboard__bar i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #2563eb, #14b8a6);
-}
-
-.admin-dashboard__module-list {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.admin-dashboard__module-list article,
-.admin-dashboard__list-item {
-  display: grid;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  border: 1px solid #dbeafe;
-  background: #f8fbff;
-}
-
-.admin-dashboard__resources {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.admin-dashboard__resource-card strong {
-  font-size: 22px;
-}
-
-.admin-dashboard__empty {
-  padding: 18px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #64748b;
-}
-
-@media (max-width: 1200px) {
-  .admin-dashboard__metrics,
-  .admin-dashboard__resources {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .admin-dashboard__grid,
-  .admin-dashboard__module-list {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 760px) {
-  .admin-dashboard__hero {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .admin-dashboard__metrics,
-  .admin-dashboard__resources {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

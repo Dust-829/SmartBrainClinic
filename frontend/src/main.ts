@@ -7,6 +7,7 @@ import router from './router'
 import { pinia } from './stores/pinia'
 import './styles/reset.css'
 import './styles/theme.css'
+import './styles/admin-skin.css'
 
 const app = createApp(App)
 

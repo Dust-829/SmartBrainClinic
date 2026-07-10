@@ -26,7 +26,7 @@ const metricCards = computed(() => [
   },
 ])
 
-const quickLinks = [
+const quickLinks = computed(() => [
   { title: '医生管理', subtitle: '查看医生、维护专长、调整 AI 评分', to: '/admin/doctors' },
   { title: '科室资料', subtitle: '查看科室和人员资源分布', to: '/admin/departments' },
   { title: '诊室资源', subtitle: '查询门诊诊室、CT室和检查室资源', to: '/admin/rooms' },
@@ -34,13 +34,13 @@ const quickLinks = [
   { title: '审批中心', subtitle: '集中处理排班申请与高风险后台动作', to: '/admin/approvals' },
   {
     title: 'AI 审计',
-    subtitle: auditAvailable.value ? '查看 AI 输出、人工确认结果和证据链' : '当前需先配置前端审计 token',
+    subtitle: auditAvailable.value ? '查看 AI 输出、人工确认结果和证据链' : '当前需要先配置前端审计 token',
     to: '/admin/audit',
   },
   { title: '药房工作台', subtitle: '批量入库、发药、退药和库存预警', to: '/admin/pharmacy' },
   { title: '财务账单', subtitle: '查询挂号账单、退费和异常收费处理', to: '/admin/billing' },
   { title: '运营分析', subtitle: '用于答辩展示后台统计与证据链概览', to: '/admin/analytics' },
-] as const
+])
 
 async function loadDashboard() {
   loading.value = true
@@ -51,16 +51,8 @@ async function loadDashboard() {
     ] as const
 
     const [applicationsResult, auditsResult] = await Promise.allSettled(tasks)
-
-    pendingApplications.value =
-      applicationsResult.status === 'fulfilled'
-        ? applicationsResult.value.data.data ?? []
-        : []
-
-    auditLogs.value =
-      auditsResult.status === 'fulfilled' && auditsResult.value
-        ? auditsResult.value.data.data ?? []
-        : []
+    pendingApplications.value = applicationsResult.status === 'fulfilled' ? applicationsResult.value.data.data ?? [] : []
+    auditLogs.value = auditsResult.status === 'fulfilled' && auditsResult.value ? auditsResult.value.data.data ?? [] : []
   } catch {
     pendingApplications.value = []
     auditLogs.value = []
@@ -93,11 +85,7 @@ onMounted(() => {
     </section>
 
     <section class="admin-console__metrics">
-      <article
-        v-for="metric in metricCards"
-        :key="metric.label"
-        :class="['admin-console__metric', `is-${metric.tone}`]"
-      >
+      <article v-for="metric in metricCards" :key="metric.label" :class="['admin-console__metric', `is-${metric.tone}`]">
         <span>{{ metric.label }}</span>
         <strong>{{ metric.value }}</strong>
       </article>
@@ -105,7 +93,7 @@ onMounted(() => {
 
     <div class="admin-console__grid">
       <SectionCard title="待办与异常" subtitle="优先处理最能影响演示闭环的后台动作。">
-        <div v-if="pendingApplications.length" class="admin-console__list">
+        <div v-if="pendingApplications.length" class="admin-list">
           <article v-for="item in pendingApplications.slice(0, 4)" :key="item.uuid" class="admin-console__list-item">
             <strong>{{ item.employee_uuid }}</strong>
             <p>{{ item.prompt }}</p>
@@ -115,11 +103,14 @@ onMounted(() => {
         <div v-else class="admin-console__empty">当前没有待审批排班申请。</div>
       </SectionCard>
 
-      <SectionCard title="AI 审计快照" :subtitle="auditAvailable ? '用来展示 AI 产生信息与人工确认信息的留痕证据。' : '当前未配置审计 token，只显示配置提示。'">
-        <div v-if="auditLogs.length" class="admin-console__list">
+      <SectionCard
+        title="AI 审计快照"
+        :subtitle="auditAvailable ? '用来展示 AI 产生信息与人工确认信息的留痕证据。' : '当前未配置审计 token，只显示配置提示。'"
+      >
+        <div v-if="auditLogs.length" class="admin-list">
           <article v-for="item in auditLogs.slice(0, 4)" :key="item.uuid" class="admin-console__list-item">
             <strong>{{ item.module_name }}</strong>
-            <p>{{ item.source || '未知来源' }} · {{ item.model || '未记录模型' }}</p>
+            <p>{{ item.source || '未知来源' }} | {{ item.model || '未记录模型' }}</p>
             <span>{{ item.validated ? '已验证' : '待复核' }}</span>
           </article>
         </div>
@@ -139,181 +130,3 @@ onMounted(() => {
     </SectionCard>
   </div>
 </template>
-
-<style scoped>
-.admin-console {
-  display: grid;
-  gap: 20px;
-}
-
-.admin-console__hero {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 24px;
-  border-radius: 24px;
-  background: linear-gradient(135deg, #1d4ed8, #4338ca 62%, #7c3aed);
-  color: #ffffff;
-}
-
-.admin-console__hero h2,
-.admin-console__hero p {
-  margin: 0;
-}
-
-.admin-console__hero h2 {
-  margin-top: 8px;
-  font-size: 30px;
-}
-
-.admin-console__hero p,
-.admin-console__hero span {
-  color: rgba(255, 255, 255, 0.86);
-}
-
-.admin-console__hero button {
-  min-height: 42px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.18);
-  color: #ffffff;
-  font: inherit;
-  font-weight: 700;
-}
-
-.admin-console__metrics,
-.admin-console__grid,
-.admin-console__links {
-  display: grid;
-  gap: 14px;
-}
-
-.admin-console__metrics {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.admin-console__grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.admin-console__metric {
-  display: grid;
-  gap: 8px;
-  padding: 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  background: rgba(255, 255, 255, 0.88);
-}
-
-.admin-console__metric span {
-  color: #475569;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-console__metric strong {
-  color: #0f172a;
-  font-size: 28px;
-}
-
-.admin-console__metric.is-indigo {
-  background: linear-gradient(180deg, #eef2ff, #ffffff);
-}
-
-.admin-console__metric.is-sky {
-  background: linear-gradient(180deg, #e0f2fe, #ffffff);
-}
-
-.admin-console__metric.is-amber {
-  background: linear-gradient(180deg, #fff7ed, #ffffff);
-}
-
-.admin-console__metric.is-slate {
-  background: linear-gradient(180deg, #e2e8f0, #ffffff);
-}
-
-.admin-console__list {
-  display: grid;
-  gap: 12px;
-}
-
-.admin-console__list-item {
-  display: grid;
-  gap: 6px;
-  padding: 14px 16px;
-  border: 1px solid #dbeafe;
-  border-radius: 14px;
-  background: #f8fbff;
-}
-
-.admin-console__list-item strong,
-.admin-console__list-item p,
-.admin-console__list-item span {
-  margin: 0;
-}
-
-.admin-console__list-item p {
-  color: #475569;
-  line-height: 1.6;
-}
-
-.admin-console__list-item span {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.admin-console__empty {
-  padding: 18px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #64748b;
-}
-
-.admin-console__links {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.admin-console__link-card {
-  display: grid;
-  gap: 8px;
-  min-height: 138px;
-  padding: 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(129, 140, 248, 0.2);
-  background: linear-gradient(180deg, #ffffff, #eef2ff);
-}
-
-.admin-console__link-card strong {
-  color: #0f172a;
-  font-size: 18px;
-}
-
-.admin-console__link-card p {
-  margin: 0;
-  color: #475569;
-  line-height: 1.7;
-}
-
-@media (max-width: 1100px) {
-  .admin-console__metrics,
-  .admin-console__grid,
-  .admin-console__links {
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-@media (max-width: 760px) {
-  .admin-console__hero {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .admin-console__metrics,
-  .admin-console__grid,
-  .admin-console__links {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

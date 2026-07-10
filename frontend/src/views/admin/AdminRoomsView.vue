@@ -40,7 +40,6 @@ async function loadRoomByUuid() {
     loadingByUuid.value = false
   }
 }
-
 </script>
 
 <template>
@@ -49,7 +48,7 @@ async function loadRoomByUuid() {
       <div>
         <span>基础资料中心</span>
         <h2>诊室与检查室资源</h2>
-        <p>按规划文档补齐资源配置入口，先用现有诊室查询接口支撑管理员端资源视图。</p>
+        <p>按规划文档补齐资源配置入口，先用现有诊室查询接口支持管理员端资源视图。</p>
       </div>
     </section>
 
@@ -113,117 +112,3 @@ async function loadRoomByUuid() {
     </SectionCard>
   </div>
 </template>
-
-<style scoped>
-.admin-page {
-  display: grid;
-  gap: 20px;
-}
-
-.admin-page__hero {
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid rgba(15, 118, 110, 0.18);
-  background: linear-gradient(135deg, #ecfeff, #ffffff 68%);
-}
-
-.admin-page__hero h2,
-.admin-page__hero p {
-  margin: 0;
-}
-
-.admin-page__hero h2 {
-  margin-top: 6px;
-  font-size: 28px;
-}
-
-.admin-page__hero span {
-  color: #0f766e;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-page__hero p {
-  margin-top: 8px;
-  color: #475569;
-}
-
-.admin-page__grid {
-  display: grid;
-  gap: 16px;
-}
-
-.admin-page__grid.is-two-column {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.admin-form,
-.resource-guide {
-  display: grid;
-  gap: 12px;
-}
-
-.admin-form label {
-  display: grid;
-  gap: 8px;
-}
-
-.admin-form span {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-form input,
-.admin-form button {
-  min-height: 42px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #0f172a;
-  font: inherit;
-}
-
-.admin-form button {
-  border: 0;
-  background: linear-gradient(135deg, #0f766e, #2563eb);
-  color: #ffffff;
-  font-weight: 700;
-}
-
-.room-card,
-.resource-guide article {
-  display: grid;
-  gap: 6px;
-  padding: 16px;
-  border-radius: 14px;
-  border: 1px solid #dbeafe;
-  background: #f8fbff;
-}
-
-.room-card strong,
-.room-card p,
-.resource-guide strong,
-.resource-guide p {
-  margin: 0;
-}
-
-.room-card p,
-.resource-guide p {
-  color: #475569;
-}
-
-.admin-empty {
-  padding: 18px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #64748b;
-}
-
-@media (max-width: 960px) {
-  .admin-page__grid.is-two-column {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

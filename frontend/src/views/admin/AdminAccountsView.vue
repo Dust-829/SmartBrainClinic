@@ -248,18 +248,10 @@ onMounted(() => {
     </section>
 
     <div class="accounts-page__tabs">
-      <button
-        type="button"
-        :class="['accounts-page__tab', { 'is-active': activeTab === 'doctor' }]"
-        @click="activeTab = 'doctor'"
-      >
+      <button type="button" :class="['accounts-page__tab', { 'is-active': activeTab === 'doctor' }]" @click="activeTab = 'doctor'">
         doctor
       </button>
-      <button
-        type="button"
-        :class="['accounts-page__tab', { 'is-active': activeTab === 'patient' }]"
-        @click="activeTab = 'patient'"
-      >
+      <button type="button" :class="['accounts-page__tab', { 'is-active': activeTab === 'patient' }]" @click="activeTab = 'patient'">
         patient
       </button>
     </div>
@@ -273,9 +265,7 @@ onMounted(() => {
               {{ loadingDoctors ? '查询中...' : '查询医生' }}
             </button>
           </form>
-          <button type="button" class="toolbar__create" @click="openCreateDoctorDialog">
-            新增医生
-          </button>
+          <button type="button" class="toolbar__create" @click="openCreateDoctorDialog">新增医生</button>
         </div>
       </SectionCard>
 
@@ -285,7 +275,7 @@ onMounted(() => {
             <div class="account-card__head">
               <div>
                 <strong>{{ doctor.realname }}</strong>
-                <p>{{ formatDoctorGender(doctor.gender) }} · AI 评分 {{ doctor.ai_eval_score ?? '未记录' }}</p>
+                <p>{{ formatDoctorGender(doctor.gender) }} | AI 评分 {{ doctor.ai_eval_score ?? '未记录' }}</p>
               </div>
               <span>{{ doctor.uuid }}</span>
             </div>
@@ -314,9 +304,7 @@ onMounted(() => {
               {{ loadingPatients ? '查询中...' : '查询患者' }}
             </button>
           </form>
-          <button type="button" class="toolbar__create" @click="openCreatePatientDialog">
-            新增患者
-          </button>
+          <button type="button" class="toolbar__create" @click="openCreatePatientDialog">新增患者</button>
         </div>
       </SectionCard>
 
@@ -326,7 +314,7 @@ onMounted(() => {
             <div class="account-card__head">
               <div>
                 <strong>{{ patient.real_name }}</strong>
-                <p>{{ formatPatientGender(patient.gender) }} · {{ patient.card_number }}</p>
+                <p>{{ formatPatientGender(patient.gender) }} | {{ patient.card_number }}</p>
               </div>
               <span>{{ patient.case_number }}</span>
             </div>
@@ -434,196 +422,3 @@ onMounted(() => {
     </el-dialog>
   </div>
 </template>
-
-<style scoped>
-.accounts-page {
-  display: grid;
-  gap: 20px;
-}
-
-.accounts-page__hero {
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid rgba(59, 130, 246, 0.18);
-  background: linear-gradient(135deg, #eff6ff, #ffffff 68%);
-}
-
-.accounts-page__hero h2,
-.accounts-page__hero p {
-  margin: 0;
-}
-
-.accounts-page__hero h2 {
-  margin-top: 6px;
-  font-size: 28px;
-}
-
-.accounts-page__hero span {
-  color: #2563eb;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.accounts-page__hero p {
-  margin-top: 8px;
-  color: #475569;
-}
-
-.accounts-page__tabs {
-  display: flex;
-  gap: 12px;
-}
-
-.accounts-page__tab {
-  min-height: 44px;
-  padding: 0 18px;
-  border: 1px solid #cbd5e1;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #334155;
-  font: inherit;
-  font-weight: 700;
-}
-
-.accounts-page__tab.is-active {
-  border-color: #2563eb;
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
-.toolbar,
-.toolbar__search,
-.account-list,
-.dialog-form {
-  display: grid;
-  gap: 12px;
-}
-
-.toolbar {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
-.toolbar__search {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.dialog-form label {
-  display: grid;
-  gap: 8px;
-}
-
-.dialog-form span {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.toolbar__search input,
-.toolbar__search button,
-.toolbar__create,
-.dialog-form input,
-.dialog-form select,
-.dialog-form textarea,
-.dialog-actions button,
-.account-card__actions button {
-  min-height: 42px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #0f172a;
-  font: inherit;
-}
-
-.dialog-form textarea {
-  min-height: 92px;
-  padding-top: 12px;
-  padding-bottom: 12px;
-  resize: vertical;
-}
-
-.toolbar__search button,
-.toolbar__create,
-.dialog-actions__primary,
-.account-card__actions button {
-  border: 0;
-  background: linear-gradient(135deg, #2563eb, #4338ca);
-  color: #ffffff;
-  font-weight: 700;
-}
-
-.account-card {
-  display: grid;
-  gap: 12px;
-  padding: 18px;
-  border-radius: 16px;
-  border: 1px solid #dbeafe;
-  background: #f8fbff;
-}
-
-.account-card__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.account-card__head strong,
-.account-card__head p,
-.account-card__head span,
-.account-meta p {
-  margin: 0;
-}
-
-.account-card__head p,
-.account-card__head span,
-.account-meta p {
-  color: #475569;
-}
-
-.account-card__head span {
-  max-width: 320px;
-  font-size: 12px;
-  word-break: break-all;
-}
-
-.account-meta {
-  display: grid;
-  gap: 6px;
-}
-
-.account-card__actions,
-.dialog-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.dialog-actions {
-  justify-content: flex-end;
-}
-
-.dialog-actions__secondary {
-  background: #f8fafc;
-}
-
-.accounts-empty {
-  padding: 18px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #64748b;
-}
-
-@media (max-width: 960px) {
-  .toolbar,
-  .toolbar__search {
-    grid-template-columns: 1fr;
-  }
-
-  .account-card__head,
-  .account-card__actions {
-    flex-direction: column;
-  }
-}
-</style>

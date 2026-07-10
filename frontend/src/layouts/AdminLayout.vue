@@ -10,7 +10,7 @@ const session = useAdminSessionStore()
 const auditConfigured = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
 
 const navItems = computed(() => [
-  { label: '主页大屏', to: '/admin/dashboard' },
+  { label: '首页大屏', to: '/admin/dashboard' },
   { label: '账号管理', to: '/admin/accounts' },
   { label: '智能排班', to: '/admin/schedules' },
   { label: '审批中心', to: '/admin/approvals' },
@@ -37,7 +37,7 @@ function logout() {
   <div class="admin-layout">
     <aside v-if="route.path !== '/admin/login'" class="admin-layout__aside">
       <div class="admin-layout__brand">
-        <span class="admin-layout__eyebrow">SmartBrainClinic</span>
+        <span class="admin-layout__eyebrow">智慧云脑诊疗平台</span>
         <strong>管理员总控台</strong>
         <p>资源、审批、药房、账单与 AI 审计统一入口</p>
       </div>
@@ -69,7 +69,7 @@ function logout() {
 
       <header v-if="route.path !== '/admin/login'" class="admin-layout__header">
         <div>
-          <div class="admin-layout__eyebrow">智慧云脑诊疗平台</div>
+          <div class="admin-layout__eyebrow">后台工作台</div>
           <h1>管理员端</h1>
         </div>
       </header>
@@ -85,20 +85,18 @@ function logout() {
 .admin-layout {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  background:
-    radial-gradient(circle at top left, rgba(129, 140, 248, 0.12), transparent 34%),
-    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+  grid-template-columns: 280px minmax(0, 1fr);
+  background: var(--admin-page-bg);
 }
 
 .admin-layout__aside {
   display: grid;
   grid-template-rows: auto 1fr auto;
   gap: 18px;
-  padding: 24px 18px;
-  border-right: 1px solid rgba(129, 140, 248, 0.15);
-  background: rgba(15, 23, 42, 0.96);
-  color: #e2e8f0;
+  padding: 88px 24px 24px;
+  border-right: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-text);
 }
 
 .admin-layout__brand,
@@ -108,13 +106,14 @@ function logout() {
 }
 
 .admin-layout__brand strong {
-  font-size: 22px;
+  font-size: 28px;
+  line-height: 1.1;
 }
 
 .admin-layout__brand p,
 .admin-layout__session span {
   margin: 0;
-  color: rgba(226, 232, 240, 0.72);
+  color: var(--admin-text-muted);
   line-height: 1.6;
 }
 
@@ -127,44 +126,44 @@ function logout() {
 .admin-layout__nav-link {
   display: block;
   padding: 12px 14px;
-  border-radius: 14px;
-  color: #cbd5e1;
+  border-radius: var(--admin-radius-md);
+  color: var(--admin-text);
   border: 1px solid transparent;
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
 }
 
 .admin-layout__nav-link:hover {
-  color: #ffffff;
-  background: rgba(99, 102, 241, 0.12);
+  color: var(--admin-accent-strong);
+  background: #f1f5f9;
 }
 
 .admin-layout__nav-link.is-active {
-  color: #ffffff;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.28), rgba(59, 130, 246, 0.18));
-  border-color: rgba(129, 140, 248, 0.26);
+  color: var(--admin-accent-strong);
+  background: var(--admin-accent-soft);
+  border-color: rgba(15, 118, 110, 0.2);
 }
 
 .admin-layout__session {
   padding: 16px;
-  border-radius: 16px;
-  background: rgba(30, 41, 59, 0.96);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: var(--admin-radius-lg);
+  background: linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%);
+  border: 1px solid var(--admin-border);
 }
 
 .admin-layout__session strong {
   display: block;
   margin-top: 4px;
-  color: #ffffff;
+  color: var(--admin-text);
 }
 
 .admin-layout__session button {
   min-height: 40px;
+  margin-top: 8px;
   border: 0;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #4f46e5, #2563eb);
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-accent);
   color: #ffffff;
   font: inherit;
-  font-weight: 700;
 }
 
 .admin-layout__content {
@@ -174,9 +173,9 @@ function logout() {
 .admin-layout__banner {
   margin: 18px 28px 0;
   padding: 12px 16px;
-  border-radius: 14px;
-  border: 1px solid rgba(245, 158, 11, 0.24);
-  background: #fffbeb;
+  border-radius: var(--admin-radius-md);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  background: var(--admin-warn-soft);
   color: #92400e;
   line-height: 1.6;
 }
@@ -185,12 +184,12 @@ function logout() {
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  padding: 40px 28px 18px;
+  padding: 28px 28px 8px;
 }
 
 .admin-layout__eyebrow {
   font-size: 12px;
-  color: #4f46e5;
+  color: var(--admin-accent);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -198,7 +197,7 @@ function logout() {
 .admin-layout__header h1 {
   margin: 8px 0 0;
   font-size: 30px;
-  color: #0f172a;
+  color: var(--admin-text);
 }
 
 .admin-layout__main {
@@ -216,9 +215,9 @@ function logout() {
 
   .admin-layout__aside {
     grid-template-rows: auto;
-    padding-bottom: 12px;
+    padding: 24px 18px 12px;
     border-right: 0;
-    border-bottom: 1px solid rgba(129, 140, 248, 0.15);
+    border-bottom: 1px solid var(--admin-border);
   }
 
   .admin-layout__nav {

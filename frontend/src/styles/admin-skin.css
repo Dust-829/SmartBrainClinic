@@ -1,0 +1,751 @@
+:root {
+  --admin-surface: #ffffff;
+  --admin-surface-muted: #f8fafc;
+  --admin-page-bg: #f8fafc;
+  --admin-border: #dbe5f0;
+  --admin-text: #0f172a;
+  --admin-text-muted: #64748b;
+  --admin-accent: #0f766e;
+  --admin-accent-strong: #115e59;
+  --admin-accent-soft: #ecfdf5;
+  --admin-info-soft: #eff6ff;
+  --admin-warn-soft: #fff7ed;
+  --admin-danger: #b91c1c;
+  --admin-radius-xl: 18px;
+  --admin-radius-lg: 16px;
+  --admin-radius-md: 14px;
+  --admin-radius-sm: 12px;
+  --admin-shadow: 0 14px 32px rgba(15, 23, 42, 0.06);
+}
+
+.admin-layout {
+  --el-color-primary: var(--admin-accent);
+  --el-color-primary-light-3: #2ba391;
+  --el-color-primary-light-5: #64c0b2;
+  --el-color-primary-light-7: #9ad8cf;
+  --el-color-primary-light-8: #bfe7e1;
+  --el-color-primary-light-9: #e8f8f4;
+  --el-color-primary-dark-2: var(--admin-accent-strong);
+}
+
+.admin-layout .el-input__wrapper,
+.admin-layout .el-textarea__inner,
+.admin-layout .el-select__wrapper,
+.admin-layout .el-dialog {
+  border-radius: var(--admin-radius-sm);
+}
+
+.admin-layout .el-dialog {
+  box-shadow: var(--admin-shadow);
+}
+
+.admin-layout .el-dialog__footer {
+  padding-top: 0;
+}
+
+.admin-page,
+.accounts-page,
+.admin-console,
+.admin-dashboard,
+.admin-login {
+  display: grid;
+  gap: 20px;
+}
+
+.admin-page__hero,
+.accounts-page__hero,
+.admin-console__hero,
+.admin-dashboard__hero,
+.admin-login__hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 24px;
+  border-radius: var(--admin-radius-xl);
+  background: linear-gradient(135deg, var(--admin-accent) 0%, var(--admin-accent-strong) 100%);
+  color: #ffffff;
+}
+
+.accounts-page__hero,
+.admin-login__hero {
+  align-items: flex-start;
+}
+
+.admin-page__hero h1,
+.admin-page__hero h2,
+.admin-page__hero p,
+.accounts-page__hero h1,
+.accounts-page__hero h2,
+.accounts-page__hero p,
+.admin-console__hero h2,
+.admin-console__hero p,
+.admin-dashboard__hero h2,
+.admin-dashboard__hero p,
+.admin-login__hero h1,
+.admin-login__hero p {
+  margin: 0;
+}
+
+.admin-page__hero h1,
+.accounts-page__hero h1,
+.admin-login__hero h1 {
+  font-size: 34px;
+  line-height: 1.1;
+}
+
+.admin-page__hero h2,
+.accounts-page__hero h2,
+.admin-console__hero h2,
+.admin-dashboard__hero h2 {
+  margin-top: 6px;
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+.admin-page__hero span,
+.accounts-page__hero span,
+.admin-console__hero span,
+.admin-dashboard__hero span,
+.admin-login__eyebrow {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.admin-page__hero p,
+.accounts-page__hero p,
+.admin-console__hero p,
+.admin-dashboard__hero p,
+.admin-login__hero p {
+  margin-top: 8px;
+  color: rgba(255, 255, 255, 0.86);
+  line-height: 1.6;
+}
+
+.admin-page__hero button,
+.admin-console__hero button,
+.admin-dashboard__hero button,
+.admin-login__form button,
+.admin-inline-button,
+.toolbar__create,
+.toolbar__search button,
+.dialog-actions__primary,
+.account-card__actions button,
+.approval-card__actions button,
+.bill-card__actions button,
+.admin-form button,
+.drug-import-form button,
+.doctor-card button {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-accent);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+}
+
+.admin-page__hero button,
+.admin-console__hero button,
+.admin-dashboard__hero button {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.dialog-actions__secondary,
+.drug-import-form button.is-secondary,
+.accounts-page__tab {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+  font-weight: 700;
+}
+
+.accounts-page__tab.is-active {
+  border-color: rgba(15, 118, 110, 0.22);
+  background: var(--admin-accent-soft);
+  color: var(--admin-accent-strong);
+}
+
+.admin-page__hero button:disabled,
+.admin-console__hero button:disabled,
+.admin-dashboard__hero button:disabled,
+.admin-login__form button:disabled,
+.toolbar__create:disabled,
+.toolbar__search button:disabled,
+.dialog-actions__primary:disabled,
+.account-card__actions button:disabled,
+.approval-card__actions button:disabled,
+.bill-card__actions button:disabled,
+.admin-form button:disabled,
+.drug-import-form button:disabled,
+.doctor-card button:disabled,
+.admin-inline-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.analytics-cards,
+.admin-page__grid,
+.admin-console__grid,
+.admin-console__metrics,
+.admin-console__links,
+.admin-dashboard__metrics,
+.admin-dashboard__grid,
+.admin-dashboard__resources,
+.admin-dashboard__stack,
+.admin-dashboard__list,
+.admin-dashboard__module-list,
+.admin-dashboard__insights,
+.analytics-list,
+.toolbar,
+.toolbar__search,
+.dialog-form,
+.account-list,
+.admin-list,
+.result-list,
+.bill-list,
+.audit-list,
+.approval-list,
+.employee-list,
+.doctor-list,
+.resource-guide,
+.admin-page__stack,
+.drug-import-form {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-page__grid.is-two-column,
+.admin-console__grid,
+.admin-dashboard__grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analytics-cards,
+.admin-dashboard__metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.admin-console__metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-console__links {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.admin-dashboard__resources {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-dashboard__module-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.toolbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.toolbar__search {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.admin-form,
+.audit-form,
+.dialog-form,
+.doctor-list,
+.doctor-card,
+.account-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-form label,
+.audit-form label,
+.dialog-form label,
+.doctor-card__field,
+.approval-card__field {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-form span,
+.audit-form span,
+.dialog-form span,
+.doctor-card__field span,
+.approval-card__field span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.toolbar__search input,
+.dialog-form input,
+.dialog-form select,
+.dialog-form textarea,
+.admin-form input,
+.admin-form select,
+.admin-form textarea,
+.approval-card__field textarea,
+.doctor-card textarea,
+.doctor-card input,
+.drug-import-form input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: var(--admin-radius-sm);
+  border: 1px solid #cbd5e1;
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.dialog-form textarea,
+.admin-form textarea,
+.approval-card__field textarea,
+.doctor-card textarea {
+  min-height: 92px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  resize: vertical;
+}
+
+.admin-form input:focus,
+.admin-form select:focus,
+.admin-form textarea:focus,
+.toolbar__search input:focus,
+.dialog-form input:focus,
+.dialog-form select:focus,
+.dialog-form textarea:focus,
+.approval-card__field textarea:focus,
+.doctor-card textarea:focus,
+.doctor-card input:focus,
+.drug-import-form input:focus,
+.admin-login__form input:focus {
+  outline: none;
+  border-color: var(--admin-accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.admin-form__checkbox {
+  grid-auto-flow: column;
+  justify-content: start;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-form__checkbox input {
+  width: 16px;
+  min-height: auto;
+  padding: 0;
+}
+
+.admin-empty,
+.accounts-empty,
+.admin-result,
+.admin-console__empty {
+  padding: 18px;
+  border-radius: var(--admin-radius-md);
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface-muted);
+  color: var(--admin-text-muted);
+  line-height: 1.6;
+}
+
+.admin-result {
+  margin: 0;
+  min-height: 120px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.analytics-card,
+.admin-list__item,
+.result-card,
+.employee-card,
+.department-card,
+.room-card,
+.resource-guide article,
+.analytics-list article,
+.account-card,
+.doctor-card,
+.approval-card,
+.bill-card,
+.audit-card,
+.admin-console__list-item,
+.admin-console__link-card,
+.admin-console__metric,
+.admin-dashboard__metric,
+.admin-dashboard__resource-card,
+.admin-dashboard__stat-card,
+.admin-dashboard__module-list article,
+.admin-dashboard__list-item {
+  padding: 16px;
+  border-radius: var(--admin-radius-lg);
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  box-shadow: var(--admin-shadow);
+}
+
+.analytics-card span,
+.admin-console__metric span,
+.admin-dashboard__metric span,
+.admin-dashboard__resource-card span,
+.admin-dashboard__stat-card span {
+  color: var(--admin-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.analytics-card strong,
+.admin-console__metric strong,
+.admin-dashboard__metric strong,
+.admin-dashboard__resource-card strong,
+.admin-dashboard__stat-card strong {
+  color: var(--admin-text);
+  font-size: 28px;
+}
+
+.admin-dashboard__resource-card strong {
+  font-size: 22px;
+}
+
+.admin-console__metric.is-indigo,
+.admin-console__metric.is-sky,
+.admin-console__metric.is-amber,
+.admin-console__metric.is-slate,
+.admin-dashboard__metric.is-indigo,
+.admin-dashboard__metric.is-sky,
+.admin-dashboard__metric.is-amber,
+.admin-dashboard__metric.is-emerald,
+.admin-dashboard__metric.is-slate {
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+}
+
+.account-card__head,
+.doctor-card__head,
+.approval-card__head,
+.bill-card__head,
+.bill-card__meta,
+.audit-card__head,
+.audit-card__meta,
+.audit-card__content,
+.bill-card__actions,
+.approval-card__actions,
+.doctor-card__actions,
+.doctor-card__score,
+.dialog-actions,
+.admin-dashboard__insight > div:first-child {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bill-card__meta,
+.audit-card__meta,
+.audit-card__content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.account-card__head strong,
+.account-card__head p,
+.account-card__head span,
+.account-meta p,
+.doctor-card__head strong,
+.doctor-card__head p,
+.doctor-card__head span,
+.employee-card strong,
+.employee-card p,
+.employee-card span,
+.department-card strong,
+.department-card p,
+.department-card span,
+.room-card strong,
+.room-card p,
+.result-card strong,
+.result-card p,
+.result-card span,
+.bill-card__head strong,
+.bill-card__head p,
+.bill-card__head span,
+.approval-card__head strong,
+.approval-card__head span,
+.approval-card p,
+.audit-card__head strong,
+.audit-card__head p,
+.admin-console__list-item strong,
+.admin-console__list-item p,
+.admin-console__list-item span,
+.admin-console__link-card strong,
+.admin-console__link-card p,
+.analytics-list strong,
+.analytics-list p,
+.admin-dashboard__module-list strong,
+.admin-dashboard__module-list p,
+.admin-dashboard__list-item strong,
+.admin-dashboard__list-item p,
+.admin-dashboard__list-item span,
+.admin-dashboard__resource-card p,
+.admin-dashboard__stat-card p {
+  margin: 0;
+}
+
+.account-card__head p,
+.account-card__head span,
+.account-meta p,
+.doctor-card__head p,
+.doctor-card__head span,
+.employee-card p,
+.employee-card span,
+.department-card p,
+.department-card span,
+.room-card p,
+.result-card p,
+.result-card span,
+.bill-card__head p,
+.bill-card__head span,
+.approval-card__head span,
+.approval-card p,
+.audit-card__head p,
+.admin-console__list-item p,
+.admin-console__list-item span,
+.admin-console__link-card p,
+.analytics-list p,
+.admin-dashboard__module-list p,
+.admin-dashboard__list-item p,
+.admin-dashboard__list-item span,
+.admin-dashboard__resource-card p,
+.admin-dashboard__stat-card p {
+  color: var(--admin-text-muted);
+  line-height: 1.6;
+}
+
+.account-card__head span,
+.doctor-card__head span,
+.employee-card span,
+.department-card span,
+.result-card span,
+.admin-console__list-item span,
+.admin-dashboard__list-item span {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.bill-card__head span {
+  color: var(--admin-accent-strong);
+  font-weight: 700;
+}
+
+.approval-card__head em {
+  color: #92400e;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.bill-card__meta dt,
+.audit-card__meta dt {
+  color: var(--admin-text-muted);
+  font-size: 12px;
+}
+
+.bill-card__meta dd,
+.audit-card__meta dd {
+  margin: 0;
+  color: var(--admin-text);
+  font-weight: 700;
+}
+
+.audit-note {
+  margin: 14px 0 0;
+  color: var(--admin-accent);
+  line-height: 1.6;
+}
+
+.audit-note.is-warning {
+  color: #b45309;
+}
+
+.audit-card__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.audit-card__badge.is-pending {
+  background: var(--admin-warn-soft);
+  color: #c2410c;
+}
+
+.approval-card__actions .is-reject {
+  background: var(--admin-danger);
+}
+
+.accounts-page__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+}
+
+.admin-login {
+  max-width: 620px;
+}
+
+.admin-login__hero {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-login__form {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-login__form label {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-login__form span {
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.admin-login__form input {
+  min-height: 46px;
+  padding: 0 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+}
+
+.drug-import-form__row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--admin-radius-md);
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface-muted);
+}
+
+.drug-import-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.doctor-card__score {
+  flex: 1;
+}
+
+.doctor-card__score input {
+  width: 120px;
+}
+
+.admin-dashboard__bar {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.admin-dashboard__bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--admin-accent), #1d4ed8);
+}
+
+@media (max-width: 1200px) {
+  .analytics-cards,
+  .admin-dashboard__metrics,
+  .admin-dashboard__resources {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .admin-console__metrics,
+  .admin-console__grid,
+  .admin-console__links,
+  .drug-import-form__row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .audit-form,
+  .audit-card__content {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 960px) {
+  .admin-page__grid.is-two-column,
+  .admin-console__grid,
+  .admin-dashboard__grid,
+  .toolbar,
+  .toolbar__search,
+  .bill-card__meta {
+    grid-template-columns: 1fr;
+  }
+
+  .account-card__head,
+  .account-card__actions,
+  .doctor-card__head,
+  .doctor-card__actions {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-page__hero,
+  .accounts-page__hero,
+  .admin-console__hero,
+  .admin-dashboard__hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .analytics-cards,
+  .admin-console__metrics,
+  .admin-console__grid,
+  .admin-console__links,
+  .admin-dashboard__grid,
+  .admin-dashboard__module-list,
+  .admin-dashboard__resources,
+  .audit-card__meta,
+  .bill-card__meta {
+    grid-template-columns: 1fr;
+  }
+
+  .approval-card__actions,
+  .bill-card__actions,
+  .dialog-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

@@ -220,7 +220,7 @@ onMounted(() => {
         <div v-if="recentDrugs.length" class="result-list">
           <article v-for="item in recentDrugs" :key="item.uuid" class="result-card">
             <strong>{{ item.drug_name }}</strong>
-            <p>{{ item.drug_code }} · {{ item.specification }}</p>
+            <p>{{ item.drug_code }} | {{ item.specification }}</p>
             <span>库存 {{ item.stock }} / 预警线 {{ item.min_stock_limit ?? 10 }}</span>
           </article>
         </div>
@@ -231,7 +231,7 @@ onMounted(() => {
         <div v-if="recentPrescriptions.length" class="result-list">
           <article v-for="item in recentPrescriptions" :key="item.uuid" class="result-card">
             <strong>{{ item.prescription_code }}</strong>
-            <p>{{ item.drug_state }} · {{ item.is_ai_recommended ? 'AI 建议' : '人工开立' }}</p>
+            <p>{{ item.drug_state }} | {{ item.is_ai_recommended ? 'AI 建议' : '人工开立' }}</p>
             <span>{{ item.uuid }}</span>
           </article>
         </div>
@@ -260,169 +260,3 @@ onMounted(() => {
     </div>
   </div>
 </template>
-
-<style scoped>
-.admin-page {
-  display: grid;
-  gap: 20px;
-}
-
-.admin-page__hero {
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid rgba(14, 165, 233, 0.18);
-  background: linear-gradient(135deg, #eff6ff, #ffffff 68%);
-}
-
-.admin-page__hero h2,
-.admin-page__hero p {
-  margin: 0;
-}
-
-.admin-page__hero h2 {
-  margin-top: 6px;
-  font-size: 28px;
-}
-
-.admin-page__hero span {
-  color: #0369a1;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-page__hero p {
-  margin-top: 8px;
-  color: #475569;
-}
-
-.admin-page__grid {
-  display: grid;
-  gap: 16px;
-}
-
-.admin-page__grid.is-two-column {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.admin-page__stack {
-  display: grid;
-  gap: 14px;
-}
-
-.drug-import-form,
-.admin-form {
-  display: grid;
-  gap: 12px;
-}
-
-.drug-import-form__row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  padding: 14px;
-  border-radius: 14px;
-  background: #f8fafc;
-}
-
-.drug-import-form__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.drug-import-form input,
-.drug-import-form button,
-.admin-form input,
-.admin-form button {
-  min-height: 42px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #0f172a;
-  font: inherit;
-}
-
-.admin-form label {
-  display: grid;
-  gap: 8px;
-}
-
-.admin-form__checkbox {
-  grid-auto-flow: column;
-  justify-content: start;
-  align-items: center;
-  gap: 10px;
-}
-
-.admin-form__checkbox input {
-  width: 16px;
-  min-height: auto;
-  padding: 0;
-}
-
-.admin-form span {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.drug-import-form button,
-.admin-form button {
-  border: 0;
-  background: linear-gradient(135deg, #0891b2, #2563eb);
-  color: #ffffff;
-  font-weight: 700;
-}
-
-.drug-import-form button.is-secondary {
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
-.result-list {
-  display: grid;
-  gap: 12px;
-}
-
-.result-card {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  border-radius: 14px;
-  border: 1px solid #dbeafe;
-  background: #f8fbff;
-}
-
-.result-card p,
-.result-card span {
-  margin: 0;
-  color: #475569;
-}
-
-.result-card span {
-  font-size: 12px;
-}
-
-.admin-empty,
-.admin-result {
-  padding: 16px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #64748b;
-}
-
-.admin-result {
-  margin: 0;
-  min-height: 120px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-@media (max-width: 1080px) {
-  .admin-page__grid.is-two-column,
-  .drug-import-form__row {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

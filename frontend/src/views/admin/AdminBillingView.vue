@@ -15,6 +15,7 @@ const lastRefund = ref<BillRefundResult | null>(null)
 const queryForm = reactive({
   register_uuid: '',
 })
+
 const listFilters = reactive({
   state: '',
 })
@@ -126,7 +127,7 @@ onMounted(() => {
             <span>{{ item.bill_state }}</span>
           </div>
 
-          <dl class="bill-card__meta">
+          <div class="bill-card__meta">
             <div>
               <dt>金额</dt>
               <dd>{{ item.total_amount }}</dd>
@@ -135,7 +136,7 @@ onMounted(() => {
               <dt>支付时间</dt>
               <dd>{{ item.pay_time?.replace('T', ' ').slice(0, 16) || '未记录' }}</dd>
             </div>
-          </dl>
+          </div>
         </article>
       </div>
       <div v-else class="admin-empty">当前没有命中的最近账单记录。</div>
@@ -152,7 +153,7 @@ onMounted(() => {
             <span>{{ item.bill_state }}</span>
           </div>
 
-          <dl class="bill-card__meta">
+          <div class="bill-card__meta">
             <div>
               <dt>金额</dt>
               <dd>{{ item.total_amount }}</dd>
@@ -161,7 +162,7 @@ onMounted(() => {
               <dt>交易号</dt>
               <dd>{{ item.transaction_id || '未记录' }}</dd>
             </div>
-          </dl>
+          </div>
 
           <div class="bill-card__actions">
             <button
@@ -178,171 +179,3 @@ onMounted(() => {
     </SectionCard>
   </div>
 </template>
-
-<style scoped>
-.admin-page {
-  display: grid;
-  gap: 20px;
-}
-
-.admin-page__hero {
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid rgba(244, 114, 182, 0.18);
-  background: linear-gradient(135deg, #fdf2f8, #ffffff 68%);
-}
-
-.admin-page__hero h2,
-.admin-page__hero p {
-  margin: 0;
-}
-
-.admin-page__hero h2 {
-  margin-top: 6px;
-  font-size: 28px;
-}
-
-.admin-page__hero span {
-  color: #be185d;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-page__hero p {
-  margin-top: 8px;
-  color: #475569;
-}
-
-.admin-page__grid {
-  display: grid;
-  gap: 16px;
-}
-
-.admin-page__grid.is-two-column {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.admin-form {
-  display: grid;
-  gap: 12px;
-}
-
-.admin-form label {
-  display: grid;
-  gap: 8px;
-}
-
-.admin-form span {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-form input,
-.admin-form button {
-  min-height: 42px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #0f172a;
-  font: inherit;
-}
-
-.admin-form button,
-.bill-card__actions button {
-  border: 0;
-  background: linear-gradient(135deg, #ec4899, #be185d);
-  color: #ffffff;
-  font-weight: 700;
-}
-
-.admin-result,
-.admin-empty {
-  padding: 16px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #64748b;
-}
-
-.admin-result {
-  margin: 0;
-  min-height: 120px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.bill-list {
-  display: grid;
-  gap: 14px;
-}
-
-.bill-card {
-  display: grid;
-  gap: 12px;
-  padding: 18px;
-  border-radius: 16px;
-  border: 1px solid #fbcfe8;
-  background: #fffafc;
-}
-
-.bill-card__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.bill-card__head strong,
-.bill-card__head p {
-  margin: 0;
-}
-
-.bill-card__head p {
-  margin-top: 4px;
-  color: #475569;
-}
-
-.bill-card__head span {
-  color: #be185d;
-  font-weight: 700;
-}
-
-.bill-card__meta {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-}
-
-.bill-card__meta div {
-  display: grid;
-  gap: 4px;
-  padding: 12px;
-  border-radius: 12px;
-  background: #ffffff;
-}
-
-.bill-card__meta dt {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.bill-card__meta dd {
-  margin: 0;
-  color: #0f172a;
-  font-weight: 700;
-}
-
-.bill-card__actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
-@media (max-width: 920px) {
-  .admin-page__grid.is-two-column,
-  .bill-card__meta {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

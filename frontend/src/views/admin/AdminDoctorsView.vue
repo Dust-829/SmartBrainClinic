@@ -30,12 +30,8 @@ async function loadDoctors() {
   try {
     const response = await authApi.listDoctorsByDepartmentCode(selectedDeptCode.value.trim())
     doctors.value = response.data.data ?? []
-    expertiseDrafts.value = Object.fromEntries(
-      doctors.value.map((doctor) => [doctor.uuid, doctor.expertise || '']),
-    )
-    scoreAdjustments.value = Object.fromEntries(
-      doctors.value.map((doctor) => [doctor.uuid, 0]),
-    )
+    expertiseDrafts.value = Object.fromEntries(doctors.value.map((doctor) => [doctor.uuid, doctor.expertise || '']))
+    scoreAdjustments.value = Object.fromEntries(doctors.value.map((doctor) => [doctor.uuid, 0]))
   } catch {
     doctors.value = []
   } finally {
@@ -154,7 +150,7 @@ loadDoctors()
           <div class="doctor-card__head">
             <div>
               <strong>{{ doctor.realname }}</strong>
-              <p>{{ doctor.gender || '未知性别' }} · AI 评分 {{ doctor.ai_eval_score ?? '未记录' }}</p>
+              <p>{{ doctor.gender || '未知性别' }} | AI 评分 {{ doctor.ai_eval_score ?? '未记录' }}</p>
             </div>
             <span>{{ doctor.uuid }}</span>
           </div>
@@ -165,21 +161,13 @@ loadDoctors()
           </label>
 
           <div class="doctor-card__actions">
-            <button
-              type="button"
-              :disabled="updatingExpertise === doctor.uuid"
-              @click="saveExpertise(doctor)"
-            >
+            <button type="button" :disabled="updatingExpertise === doctor.uuid" @click="saveExpertise(doctor)">
               {{ updatingExpertise === doctor.uuid ? '保存中...' : '保存专长' }}
             </button>
 
             <div class="doctor-card__score">
               <input v-model.number="scoreAdjustments[doctor.uuid]" type="number" step="0.1" min="-5" max="5" />
-              <button
-                type="button"
-                :disabled="adjustingScore === doctor.uuid"
-                @click="adjustScore(doctor)"
-              >
+              <button type="button" :disabled="adjustingScore === doctor.uuid" @click="adjustScore(doctor)">
                 {{ adjustingScore === doctor.uuid ? '调整中...' : '调整评分' }}
               </button>
             </div>
@@ -190,163 +178,3 @@ loadDoctors()
     </SectionCard>
   </div>
 </template>
-
-<style scoped>
-.admin-page {
-  display: grid;
-  gap: 20px;
-}
-
-.admin-page__hero {
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid rgba(59, 130, 246, 0.18);
-  background: linear-gradient(135deg, #eff6ff, #ffffff 68%);
-}
-
-.admin-page__hero h2,
-.admin-page__hero p {
-  margin: 0;
-}
-
-.admin-page__hero h2 {
-  margin-top: 6px;
-  font-size: 28px;
-}
-
-.admin-page__hero span {
-  color: #1d4ed8;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-page__hero p {
-  margin-top: 8px;
-  color: #475569;
-}
-
-.admin-page__grid {
-  display: grid;
-  gap: 16px;
-}
-
-.admin-page__grid.is-two-column {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.admin-form,
-.doctor-list,
-.doctor-card {
-  display: grid;
-  gap: 12px;
-}
-
-.admin-form label,
-.doctor-card__field {
-  display: grid;
-  gap: 8px;
-}
-
-.admin-form span,
-.doctor-card__field span {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.admin-form input,
-.admin-form select,
-.admin-form textarea,
-.admin-form button,
-.doctor-card textarea,
-.doctor-card input,
-.doctor-card button {
-  min-height: 42px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #0f172a;
-  font: inherit;
-}
-
-.admin-form textarea,
-.doctor-card textarea {
-  min-height: 92px;
-  padding-top: 12px;
-  padding-bottom: 12px;
-  resize: vertical;
-}
-
-.admin-form button,
-.doctor-card button {
-  border: 0;
-  background: linear-gradient(135deg, #2563eb, #4338ca);
-  color: #ffffff;
-  font-weight: 700;
-}
-
-.doctor-card {
-  padding: 18px;
-  border-radius: 16px;
-  border: 1px solid #dbeafe;
-  background: #f8fbff;
-}
-
-.doctor-card__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.doctor-card__head strong,
-.doctor-card__head p,
-.doctor-card__head span {
-  margin: 0;
-}
-
-.doctor-card__head p,
-.doctor-card__head span {
-  color: #475569;
-}
-
-.doctor-card__head span {
-  max-width: 320px;
-  font-size: 12px;
-  word-break: break-all;
-}
-
-.doctor-card__actions,
-.doctor-card__score {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.doctor-card__score {
-  flex: 1;
-}
-
-.doctor-card__score input {
-  width: 120px;
-}
-
-.admin-empty {
-  padding: 18px;
-  border-radius: 14px;
-  background: #f8fafc;
-  color: #64748b;
-}
-
-@media (max-width: 960px) {
-  .admin-page__grid.is-two-column {
-    grid-template-columns: 1fr;
-  }
-
-  .doctor-card__head,
-  .doctor-card__actions {
-    flex-direction: column;
-  }
-}
-</style>
