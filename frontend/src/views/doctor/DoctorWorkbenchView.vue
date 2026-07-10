@@ -7,6 +7,22 @@ import { doctorApi, type DoctorCallNextResult, type DoctorQueueItem } from '@/ap
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
 
+const VISIT_STATE_REGISTERED = 1
+const VISIT_STATE_RECEPTION = 2
+const UNKNOWN_TIME_RANGE = '时间待确认'
+
+interface QueueStatusSummaryItem {
+  key: 'waiting' | 'inReception'
+  label: string
+  count: number
+  percentage: number
+}
+
+interface QueueTimeBucket {
+  label: string
+  count: number
+}
+
 const router = useRouter()
 const session = useDoctorSessionStore()
 
@@ -16,16 +32,60 @@ const errorMessage = ref('')
 const callingNext = ref(false)
 const actionRegisterUuid = ref('')
 const lastCalled = ref<DoctorCallNextResult | null>(null)
+const lastRefreshedAt = ref<Date | null>(null)
 
 let queuePollTimer: number | null = null
 
 const doctor = computed(() => session.staff)
 const hasIdentity = computed(() => Boolean(doctor.value?.employeeUuid))
 const queueCount = computed(() => queueItems.value.length)
-const waitingCount = computed(() => queueItems.value.filter((item) => item.visit_state === 1).length)
-const inReceptionCount = computed(() => queueItems.value.filter((item) => item.visit_state === 2).length)
-const currentReception = computed(() => queueItems.value.find((item) => item.visit_state === 2) ?? null)
-const nextWaiting = computed(() => queueItems.value.find((item) => item.visit_state === 1) ?? null)
+const waitingCount = computed(
+  () => queueItems.value.filter((item) => item.visit_state === VISIT_STATE_REGISTERED).length,
+)
+const inReceptionCount = computed(
+  () => queueItems.value.filter((item) => item.visit_state === VISIT_STATE_RECEPTION).length,
+)
+const currentReception = computed(
+  () => queueItems.value.find((item) => item.visit_state === VISIT_STATE_RECEPTION) ?? null,
+)
+const nextWaiting = computed(
+  () => queueItems.value.find((item) => item.visit_state === VISIT_STATE_REGISTERED) ?? null,
+)
+const queueStatusSummary = computed<QueueStatusSummaryItem[]>(() => {
+  const total = queueCount.value
+  const toPercentage = (count: number) => (total > 0 ? Math.round((count / total) * 100) : 0)
+
+  return [
+    {
+      key: 'waiting',
+      label: '待接诊',
+      count: waitingCount.value,
+      percentage: toPercentage(waitingCount.value),
+    },
+    {
+      key: 'inReception',
+      label: '接诊中',
+      count: inReceptionCount.value,
+      percentage: toPercentage(inReceptionCount.value),
+    },
+  ]
+})
+const queueTimeBuckets = computed<QueueTimeBucket[]>(() => {
+  const bucketCounts = new Map<string, number>()
+
+  for (const item of queueItems.value) {
+    const label = item.time_range?.trim() || UNKNOWN_TIME_RANGE
+    bucketCounts.set(label, (bucketCounts.get(label) ?? 0) + 1)
+  }
+
+  return [...bucketCounts.entries()]
+    .sort(([left], [right]) => {
+      if (left === UNKNOWN_TIME_RANGE) return 1
+      if (right === UNKNOWN_TIME_RANGE) return -1
+      return left.localeCompare(right)
+    })
+    .map(([label, count]) => ({ label, count }))
+})
 
 function getErrorMessage(error: unknown, fallback: string) {
   const detail = (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data
@@ -47,11 +107,11 @@ function symptomLabel(item: DoctorQueueItem) {
 }
 
 function canStartReception(item: DoctorQueueItem) {
-  return item.visit_state === 1
+  return item.visit_state === VISIT_STATE_REGISTERED
 }
 
 function canContinueEncounter(item: DoctorQueueItem) {
-  return item.visit_state === 2
+  return item.visit_state === VISIT_STATE_RECEPTION
 }
 
 function isActionLoading(registerUuid: string) {
@@ -82,6 +142,7 @@ async function loadQueue(options: { silent?: boolean } = {}) {
   try {
     const response = await doctorApi.getQueue(doctor.value.employeeUuid)
     queueItems.value = response.data.data ?? []
+    lastRefreshedAt.value = new Date()
   } catch (error) {
     errorMessage.value = getErrorMessage(error, '今日候诊列表加载失败，请稍后重试。')
   } finally {
