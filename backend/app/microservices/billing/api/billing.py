@@ -57,3 +57,16 @@ async def get_bills_by_register(register_uuid: uuid_pkg.UUID, session: AsyncSess
         return success(bills)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/list", summary="获取账单列表")
+async def list_bills(
+    state: str | None = None,
+    limit: int = 20,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        bills = await svc.list_bills(session, state=state, limit=limit)
+        return success(bills)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

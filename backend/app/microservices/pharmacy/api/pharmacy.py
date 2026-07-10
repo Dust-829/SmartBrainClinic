@@ -33,6 +33,32 @@ async def get_drug(uuid: str, session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=404, detail="药品不存在")
     return success(drug.model_dump(mode="json"))
 
+
+@router.get("/drugs", summary="获取药品列表")
+async def list_drugs(
+    keyword: str | None = None,
+    low_stock_only: bool = False,
+    limit: int = 20,
+    session: AsyncSession = Depends(get_session),
+):
+    drugs = await svc.list_drugs(
+        session,
+        keyword=keyword,
+        low_stock_only=low_stock_only,
+        limit=limit,
+    )
+    return success(drugs)
+
+
+@router.get("/prescriptions", summary="获取处方列表")
+async def list_prescriptions(
+    state: str | None = None,
+    limit: int = 20,
+    session: AsyncSession = Depends(get_session),
+):
+    prescriptions = await svc.list_prescriptions(session, state=state, limit=limit)
+    return success(prescriptions)
+
 @router.get("/prescription-item/{uuid}", summary="获取处方单明细")
 async def get_prescription_item(uuid: str, session: AsyncSession = Depends(get_session)):
     item = await svc.get_prescription_item_by_uuid(session, uuid)

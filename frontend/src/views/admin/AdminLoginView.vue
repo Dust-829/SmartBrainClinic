@@ -17,7 +17,7 @@ const form = reactive({
 
 const redirectPath = computed(() => {
   const value = route.query.redirect
-  return typeof value === 'string' && value.trim() ? value : '/admin/console'
+  return typeof value === 'string' && value.trim() ? value : '/admin/dashboard'
 })
 
 function submit() {

@@ -1,7 +1,7 @@
 import uuid as uuid_pkg
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.drug import DrugInfo, Prescription, PrescriptionItem
 from .internal_client import PatientClient, MedicalClient
@@ -67,6 +67,75 @@ async def get_drug_by_uuid(session: AsyncSession, drug_uuid: str) -> DrugInfo:
     stmt = select(DrugInfo).where(DrugInfo.uuid == uuid_pkg.UUID(drug_uuid))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def list_drugs(
+    session: AsyncSession,
+    *,
+    keyword: str | None = None,
+    low_stock_only: bool = False,
+    limit: int = 20,
+) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    stmt = select(DrugInfo).where(DrugInfo.delmark == 1)
+
+    normalized_keyword = " ".join((keyword or "").split())
+    if normalized_keyword:
+        pattern = f"%{normalized_keyword}%"
+        stmt = stmt.where(
+            or_(
+                DrugInfo.drug_code.ilike(pattern),
+                DrugInfo.drug_name.ilike(pattern),
+            )
+        )
+
+    if low_stock_only:
+        stmt = stmt.where(DrugInfo.stock <= DrugInfo.min_stock_limit)
+
+    stmt = stmt.order_by(DrugInfo.stock.asc(), DrugInfo.id.desc()).limit(limit)
+    result = await session.execute(stmt)
+    drugs = result.scalars().all()
+    return [
+        {
+            "uuid": str(drug.uuid),
+            "drug_code": drug.drug_code,
+            "drug_name": drug.drug_name,
+            "specification": drug.specification,
+            "unit": drug.unit,
+            "price": str(drug.price),
+            "stock": drug.stock,
+            "min_stock_limit": drug.min_stock_limit,
+            "is_low_stock": drug.stock <= (drug.min_stock_limit or 10),
+        }
+        for drug in drugs
+    ]
+
+
+async def list_prescriptions(
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    stmt = select(Prescription).order_by(Prescription.creation_time.desc(), Prescription.id.desc())
+    if state:
+        stmt = stmt.where(Prescription.drug_state == state)
+    stmt = stmt.limit(limit)
+
+    result = await session.execute(stmt)
+    prescriptions = result.scalars().all()
+    return [
+        {
+            "uuid": str(prescription.uuid),
+            "register_uuid": str(prescription.register_uuid),
+            "prescription_code": prescription.prescription_code,
+            "creation_time": prescription.creation_time.isoformat() if prescription.creation_time else None,
+            "is_ai_recommended": bool(prescription.is_ai_recommended),
+            "drug_state": prescription.drug_state,
+        }
+        for prescription in prescriptions
+    ]
 
 async def update_prescription_state_by_item(session: AsyncSession, item_uuid: str, state: str) -> Prescription:
     result = await session.execute(select(PrescriptionItem).where(PrescriptionItem.uuid == uuid_pkg.UUID(item_uuid)))

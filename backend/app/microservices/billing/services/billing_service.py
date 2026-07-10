@@ -546,3 +546,32 @@ async def get_bills_by_register(session: AsyncSession, register_uuid: uuid_pkg.U
         }
         for b in bills
     ]
+
+
+async def list_bills(
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    stmt = select(OutpatientBill).order_by(OutpatientBill.pay_time.desc(), OutpatientBill.id.desc())
+    if state:
+        stmt = stmt.where(OutpatientBill.bill_state == state)
+    stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    bills = result.scalars().all()
+    return [
+        {
+            "uuid": str(bill.uuid),
+            "register_uuid": str(bill.register_uuid),
+            "bill_code": bill.bill_code,
+            "total_amount": str(bill.total_amount),
+            "bill_state": bill.bill_state,
+            "pay_method": bill.pay_method,
+            "transaction_id": bill.transaction_id,
+            "pay_time": bill.pay_time.isoformat() if bill.pay_time else None,
+            "fee_status": 0 if bill.bill_state in ["未缴费", "待支付"] else 1,
+        }
+        for bill in bills
+    ]

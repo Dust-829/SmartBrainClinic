@@ -36,6 +36,13 @@ class PatientCreate(BaseModel):
     home_address: str | None = None
 
 
+class PatientAdminUpdate(BaseModel):
+    real_name: str
+    gender: str
+    birthdate: date
+    home_address: str | None = None
+
+
 class PatientFeedbackCreate(BaseModel):
     register_uuid: uuid_pkg.UUID
     doctor_uuid: uuid_pkg.UUID
@@ -150,7 +157,7 @@ async def _sync_triage_session_messages(
         await append_ai_conversation_messages(session, session_uuid, new_messages, start_turn_index=len(existing_payload) + 1)
 
 
-@router.post('', summary='患者注册建档')
+@router.post('', summary='API endpoint')
 async def create_patient_record(data: PatientCreate, session: AsyncSession = Depends(get_session)):
     try:
         patient = await svc.create_patient(session, data.model_dump())
@@ -159,7 +166,7 @@ async def create_patient_record(data: PatientCreate, session: AsyncSession = Dep
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post('/feedback', summary='患者提交反馈')
+@router.post('/feedback', summary='API endpoint')
 async def create_feedback(data: PatientFeedbackCreate, session: AsyncSession = Depends(get_session)):
     try:
         result = await svc.create_patient_feedback(session, data.model_dump())
@@ -168,7 +175,7 @@ async def create_feedback(data: PatientFeedbackCreate, session: AsyncSession = D
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get('/card/{card_number}', summary='按证件号或就诊卡查询患者')
+@router.get('/card/{card_number}', summary='API endpoint')
 async def get_patient_by_card(card_number: str, session: AsyncSession = Depends(get_session)):
     patient = await svc.get_patient_by_card(session, card_number)
     if not patient:
@@ -176,7 +183,7 @@ async def get_patient_by_card(card_number: str, session: AsyncSession = Depends(
     return success(patient.model_dump(exclude={'id', 'patient_id'}))
 
 
-@router.post('/register', summary='线下挂号')
+@router.post('/register', summary='API endpoint')
 async def register_visit(data: RegisterCreate, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.create_register(session, data.model_dump())
@@ -185,7 +192,7 @@ async def register_visit(data: RegisterCreate, session: AsyncSession = Depends(g
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get('/register/{uuid}', summary='查询挂号详情')
+@router.get('/register/{uuid}', summary='API endpoint')
 async def get_register_info(uuid: str, session: AsyncSession = Depends(get_session)):
     reg = await svc.get_register_by_uuid(session, uuid_pkg.UUID(uuid))
     if not reg:
@@ -235,7 +242,7 @@ async def get_register_info(uuid: str, session: AsyncSession = Depends(get_sessi
     return success(payload)
 
 
-@router.post('/triage', summary='AI 智能分诊')
+@router.post('/triage', summary='API endpoint')
 async def ai_triage(data: TriageRequest, session: AsyncSession = Depends(get_session)):
     try:
         messages = [{'role': m.role, 'content': m.content} for m in data.messages]
@@ -290,14 +297,14 @@ async def ai_triage(data: TriageRequest, session: AsyncSession = Depends(get_ses
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get('/departments', summary='获取患者可挂号科室列表')
+@router.get('/departments', summary='API endpoint')
 async def list_departments():
     return success(DEPT_LIST)
 
 
 @router.get(
     '/admin/ai-audits',
-    summary='查询 AI 审计日志',
+    summary='API endpoint',
     dependencies=[Depends(require_ai_audit_admin)],
 )
 async def list_ai_audits(
@@ -323,7 +330,7 @@ async def list_ai_audits(
     return success(logs)
 
 
-@router.post('/recommend-doctors', summary='智能推荐医生')
+@router.post('/recommend-doctors', summary='API endpoint')
 async def recommend_doctors(data: DoctorRecommendRequest, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.recommend_doctors(session, data.model_dump())
@@ -334,7 +341,7 @@ async def recommend_doctors(data: DoctorRecommendRequest, session: AsyncSession 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get('/schedules', summary='查询医生有效排班')
+@router.get('/schedules', summary='API endpoint')
 async def get_doctor_schedules(employee_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         schedules = await svc.get_schedules_by_doctor(session, employee_uuid)
@@ -343,13 +350,13 @@ async def get_doctor_schedules(employee_uuid: uuid_pkg.UUID, session: AsyncSessi
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/schedules/today-available', summary='批量查询今日在岗员工')
+@router.post('/schedules/today-available', summary='API endpoint')
 async def get_today_available_employees(data: TodayAvailableRequest, session: AsyncSession = Depends(get_session)):
     available = await svc.get_today_available_employees(session, data.employee_uuids)
     return success(available)
 
 
-@router.post('/online-register', summary='线上预挂号锁号源')
+@router.post('/online-register', summary='API endpoint')
 async def online_register(data: OnlineRegisterCreate, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.create_online_register(session, data.model_dump())
@@ -360,7 +367,7 @@ async def online_register(data: OnlineRegisterCreate, session: AsyncSession = De
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/online-register/pay', summary='线上支付确认')
+@router.post('/online-register/pay', summary='API endpoint')
 async def confirm_payment(
     data: ConfirmPaymentRequest,
     session: AsyncSession = Depends(get_session),
@@ -381,7 +388,7 @@ async def confirm_payment(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put('/register/{uuid}/state', summary='更新挂号状态')
+@router.put('/register/{uuid}/state', summary='API endpoint')
 async def update_register_state(uuid: uuid_pkg.UUID, visit_state: int, session: AsyncSession = Depends(get_session)):
     try:
         result = await svc.update_visit_state(session, uuid, visit_state)
@@ -392,7 +399,7 @@ async def update_register_state(uuid: uuid_pkg.UUID, visit_state: int, session: 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put('/register/{uuid}/start-reception', summary='开始接诊')
+@router.put('/register/{uuid}/start-reception', summary='API endpoint')
 async def start_reception(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         result = await svc.start_reception(session, uuid)
@@ -403,7 +410,7 @@ async def start_reception(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(g
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put('/register/{uuid}/finish', summary='结束就诊')
+@router.put('/register/{uuid}/finish', summary='API endpoint')
 async def finish_visit(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         result = await svc.finish_visit(session, uuid)
@@ -414,7 +421,7 @@ async def finish_visit(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put('/register/{uuid}/cancel', summary='取消挂号')
+@router.put('/register/{uuid}/cancel', summary='API endpoint')
 async def cancel_register(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         result = await svc.cancel_register(session, uuid)
@@ -425,7 +432,7 @@ async def cancel_register(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(g
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/ai-schedule', summary='AI 智能排班微调')
+@router.post('/ai-schedule', summary='API endpoint')
 async def ai_schedule(data: AIScheduleRequest, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.ai_schedule(session, data.employee_uuid, data.prompt)
@@ -436,7 +443,7 @@ async def ai_schedule(data: AIScheduleRequest, session: AsyncSession = Depends(g
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/schedule/generate', summary='自动生成常规排班')
+@router.post('/schedule/generate', summary='API endpoint')
 async def generate_schedule(data: GenerateScheduleRequest, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.generate_scheduling_actuals(session, data.start_date, data.end_date)
@@ -447,7 +454,7 @@ async def generate_schedule(data: GenerateScheduleRequest, session: AsyncSession
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get('/doctor/{employee_uuid}/queue', summary='查询医生当日候诊队列')
+@router.get('/doctor/{employee_uuid}/queue', summary='API endpoint')
 async def get_doctor_queue(employee_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         queue = await svc.get_doctor_queue(session, employee_uuid)
@@ -456,7 +463,7 @@ async def get_doctor_queue(employee_uuid: uuid_pkg.UUID, session: AsyncSession =
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/doctor/{employee_uuid}/queue/call-next', summary='叫下一位候诊患者')
+@router.post('/doctor/{employee_uuid}/queue/call-next', summary='API endpoint')
 async def call_next_patient(employee_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         result = await svc.call_next_patient(session, employee_uuid)
@@ -467,7 +474,7 @@ async def call_next_patient(employee_uuid: uuid_pkg.UUID, session: AsyncSession 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get('/register/{register_uuid}/queue-status', summary='查询候诊进度')
+@router.get('/register/{register_uuid}/queue-status', summary='API endpoint')
 async def get_queue_status(register_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         status = await svc.get_queue_status(session, register_uuid)
@@ -490,7 +497,7 @@ async def websocket_queue_endpoint(websocket: WebSocket, scheduling_actual_id: i
         ws_manager.disconnect(websocket, scheduling_actual_id)
 
 
-@router.post('/scheduling-applications', summary='提交排班申请')
+@router.post('/scheduling-applications', summary='API endpoint')
 async def create_scheduling_application(data: SchedulingApplicationCreate, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.create_scheduling_application(session, data.employee_uuid, data.prompt)
@@ -499,7 +506,7 @@ async def create_scheduling_application(data: SchedulingApplicationCreate, sessi
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get('/admin/scheduling-applications', summary='获取待审批排班申请')
+@router.get('/admin/scheduling-applications', summary='API endpoint')
 async def get_pending_applications(session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.get_pending_scheduling_applications(session)
@@ -508,7 +515,7 @@ async def get_pending_applications(session: AsyncSession = Depends(get_session))
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/admin/scheduling-applications/{uuid}/approve', summary='审批通过排班申请')
+@router.post('/admin/scheduling-applications/{uuid}/approve', summary='API endpoint')
 async def approve_scheduling_application(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.approve_scheduling_application(session, uuid)
@@ -522,7 +529,7 @@ async def approve_scheduling_application(uuid: uuid_pkg.UUID, session: AsyncSess
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/admin/scheduling-applications/{uuid}/reject', summary='拒绝排班申请')
+@router.post('/admin/scheduling-applications/{uuid}/reject', summary='API endpoint')
 async def reject_scheduling_application(
     uuid: uuid_pkg.UUID,
     data: RejectRequest | None = None,
@@ -538,7 +545,7 @@ async def reject_scheduling_application(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/admin/scheduling-rules', summary='管理员强制干预排班规则')
+@router.post('/admin/scheduling-rules', summary='API endpoint')
 async def admin_update_scheduling_rule(data: AdminUpdateRuleRequest, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.admin_update_scheduling_rule(session, data.model_dump(exclude_unset=True))
@@ -547,7 +554,7 @@ async def admin_update_scheduling_rule(data: AdminUpdateRuleRequest, session: As
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put('/admin/scheduling-actuals', summary='管理员调整实际排班')
+@router.put('/admin/scheduling-actuals', summary='API endpoint')
 async def admin_update_scheduling_actual(data: AdminUpdateActualRequest, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.admin_update_scheduling_actual(session, data.model_dump())
@@ -556,7 +563,35 @@ async def admin_update_scheduling_actual(data: AdminUpdateActualRequest, session
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get('/{uuid}', summary='获取患者信息')
+@router.get('/admin/patients', summary='API endpoint')
+async def list_admin_patients(
+    keyword: str = '',
+    limit: int = 20,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        patients = await svc.list_admin_patients(session, keyword=keyword, limit=limit)
+        return success(patients)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put('/admin/patients/{uuid}', summary='API endpoint')
+async def update_admin_patient(
+    uuid: uuid_pkg.UUID,
+    data: PatientAdminUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        patient = await svc.update_admin_patient(session, uuid, data.model_dump())
+        return success(patient)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get('/{uuid}', summary='API endpoint')
 async def get_patient_info(uuid: str, session: AsyncSession = Depends(get_session)):
     patient = await svc.get_patient_by_uuid(session, uuid_pkg.UUID(uuid))
     if not patient:
@@ -564,7 +599,7 @@ async def get_patient_info(uuid: str, session: AsyncSession = Depends(get_sessio
     return success(patient.model_dump(exclude={'id', 'patient_id'}))
 
 
-@router.get('/{patient_uuid}/registers', summary='查询患者全部挂号记录')
+@router.get('/{patient_uuid}/registers', summary='API endpoint')
 async def get_patient_registers(patient_uuid: str, session: AsyncSession = Depends(get_session)):
     registers = await svc.get_registers_by_patient_uuid(session, uuid_pkg.UUID(patient_uuid))
     return success([
@@ -573,13 +608,13 @@ async def get_patient_registers(patient_uuid: str, session: AsyncSession = Depen
     ])
 
 
-@router.get('/{patient_uuid}/registers/detail', summary='查询患者全部挂号详情')
+@router.get('/{patient_uuid}/registers/detail', summary='API endpoint')
 async def get_patient_registers_detail(patient_uuid: str, session: AsyncSession = Depends(get_session)):
     rich_registers = await svc.get_rich_registers_by_patient_uuid(session, uuid_pkg.UUID(patient_uuid))
     return success(rich_registers)
 
 
-@router.get('/{patient_uuid}/my-disruptions', summary='获取患者未读异常工单')
+@router.get('/{patient_uuid}/my-disruptions', summary='API endpoint')
 async def get_my_disruptions(patient_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.get_patient_disruptions(session, patient_uuid)
@@ -590,7 +625,7 @@ async def get_my_disruptions(patient_uuid: uuid_pkg.UUID, session: AsyncSession 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post('/disruption/{uuid}/resolve', summary='处理排班异常工单')
+@router.post('/disruption/{uuid}/resolve', summary='API endpoint')
 async def resolve_disruption(uuid: uuid_pkg.UUID, data: DisruptionResolveRequest, session: AsyncSession = Depends(get_session)):
     try:
         res = await svc.resolve_schedule_disruption(session, uuid, data.action, data.new_time_slot_uuid)
@@ -599,3 +634,4 @@ async def resolve_disruption(uuid: uuid_pkg.UUID, data: DisruptionResolveRequest
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+

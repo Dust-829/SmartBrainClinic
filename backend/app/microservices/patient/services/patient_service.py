@@ -1,24 +1,34 @@
+import asyncio
+import json
 import uuid as uuid_pkg
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Optional, List
-from sqlalchemy import and_, case, or_, select, update, func
+from typing import List, Optional
+
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..models.patient import Patient, Register, SchedulingActual, SchedulingTimeSlot, SchedulingRule, PatientFeedback, OutboxEvent, SchedulingApplication, ScheduleDisruption
-from .internal_client import AuthClient
-from .ai_scheduling import run_ai_scheduling
+
+from app.common.ai_embedding import get_embedding
+from app.common.ai_schema import unwrap_ai_data
 from app.common.enums import BillState, VisitState
 from app.common.idempotency import begin_idempotency, complete_idempotency
 from app.common.state_machine import ensure_visit_transition
 from app.microservices.patient.ws_manager import manager as ws_manager
 
-from app.common.ai_embedding import get_embedding
-from app.common.ai_schema import unwrap_ai_data
-import asyncio
-import json
-from ..models.patient import OutboxEvent
-from ..models.patient import SchedulingApplication
+from ..models.patient import (
+    OutboxEvent,
+    Patient,
+    PatientFeedback,
+    Register,
+    ScheduleDisruption,
+    SchedulingActual,
+    SchedulingApplication,
+    SchedulingRule,
+    SchedulingTimeSlot,
+)
+from .ai_scheduling import run_ai_scheduling
+from .internal_client import AuthClient
 
 async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_new: bool = False):
     interval = 10  # 强制固定每号 10 分钟
@@ -134,6 +144,19 @@ def _gen_case_number() -> str:
     seq = random.randint(1000, 9999)
     return f"BLH{now.strftime('%Y%m%d%H%M%S')}{seq}"
 
+
+def _serialize_patient(patient: Patient) -> dict:
+    return {
+        "uuid": str(patient.uuid),
+        "case_number": patient.case_number,
+        "real_name": patient.real_name,
+        "gender": patient.gender,
+        "card_number": patient.card_number,
+        "birthdate": patient.birthdate.isoformat() if patient.birthdate else None,
+        "home_address": patient.home_address,
+        "created_at": patient.created_at.isoformat() if patient.created_at else None,
+    }
+
 async def create_patient(session: AsyncSession, data: dict) -> Patient:
     existing = await session.execute(select(Patient).where(Patient.card_number == data["card_number"]))
     if existing.scalar_one_or_none():
@@ -149,6 +172,39 @@ async def create_patient(session: AsyncSession, data: dict) -> Patient:
     session.add(patient)
     await session.flush()
     return patient
+
+
+async def list_admin_patients(session: AsyncSession, keyword: str = "", limit: int = 20) -> list[dict]:
+    normalized_keyword = str(keyword or "").strip()
+    safe_limit = max(1, min(int(limit or 20), 100))
+    stmt = select(Patient)
+
+    if normalized_keyword:
+        fuzzy_keyword = f"%{normalized_keyword}%"
+        stmt = stmt.where(
+            or_(
+                Patient.real_name.ilike(fuzzy_keyword),
+                Patient.card_number.ilike(fuzzy_keyword),
+            )
+        )
+
+    stmt = stmt.order_by(Patient.created_at.desc()).limit(safe_limit)
+    result = await session.execute(stmt)
+    return [_serialize_patient(patient) for patient in result.scalars().all()]
+
+
+async def update_admin_patient(session: AsyncSession, patient_uuid: uuid_pkg.UUID, data: dict) -> dict:
+    patient = await get_patient_by_uuid(session, patient_uuid)
+    if not patient:
+        raise ValueError("鎮ｈ€呬笉瀛樺湪")
+
+    patient.real_name = data["real_name"]
+    patient.gender = data["gender"]
+    patient.birthdate = data["birthdate"]
+    patient.home_address = data.get("home_address")
+    session.add(patient)
+    await session.flush()
+    return _serialize_patient(patient)
 
 async def get_patient_by_uuid(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> Optional[Patient]:
     result = await session.execute(select(Patient).where(Patient.uuid == patient_uuid))

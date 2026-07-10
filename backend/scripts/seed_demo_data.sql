@@ -18,7 +18,12 @@ SELECT setval(pg_get_serial_sequence('drug_info', 'id'), COALESCE((SELECT MAX(id
 -- Demo reference data
 INSERT INTO department (uuid, dept_code, dept_name, dept_type, delmark)
 VALUES
-  ('90000000-0000-0000-0000-000000000001', 'ADMIN', '院务管理', 'management', 1)
+  ('90000000-0000-0000-0000-000000000001', 'ADMIN', '院务管理', 'management', 1),
+  ('90000000-0000-0000-0000-000000000002', 'SJWK', '神经外科', 'outpatient', 1),
+  ('90000000-0000-0000-0000-000000000003', 'XNK', '心内科', 'outpatient', 1),
+  ('90000000-0000-0000-0000-000000000004', 'GK', '骨科', 'outpatient', 1),
+  ('90000000-0000-0000-0000-000000000005', 'EK', '儿科', 'outpatient', 1),
+  ('90000000-0000-0000-0000-000000000006', 'FCK', '妇产科', 'outpatient', 1)
 ON CONFLICT (dept_code) DO UPDATE
 SET dept_name = EXCLUDED.dept_name,
     dept_type = EXCLUDED.dept_type,
