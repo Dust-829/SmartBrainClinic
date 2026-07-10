@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router'
 import { doctorApi, type DoctorCallNextResult, type DoctorQueueItem } from '@/api/doctor'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
+import DoctorQueueDonut from '@/views/doctor/components/DoctorQueueDonut.vue'
 
 const VISIT_STATE_REGISTERED = 1
 const VISIT_STATE_RECEPTION = 2
@@ -241,20 +242,7 @@ onBeforeUnmount(() => {
         <h2>{{ doctor?.displayName || '未登录医生' }}</h2>
         <p>{{ doctor?.deptName || '登录后在这里带入真实医生身份，并读取今日候诊队列。' }}</p>
       </div>
-      <div class="doctor-workbench__hero-metrics">
-        <div>
-          <strong>{{ queueCount }}</strong>
-          <span>今日队列</span>
-        </div>
-        <div>
-          <strong>{{ waitingCount }}</strong>
-          <span>待接诊</span>
-        </div>
-        <div>
-          <strong>{{ inReceptionCount }}</strong>
-          <span>接诊中</span>
-        </div>
-      </div>
+      <DoctorQueueDonut :total="queueCount" :items="queueStatusSummary" />
     </section>
 
     <div class="doctor-workbench__workspace">
@@ -452,32 +440,6 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
-.doctor-workbench__hero-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(88px, 1fr));
-  gap: 12px;
-  min-width: 320px;
-}
-
-.doctor-workbench__hero-metrics div {
-  display: grid;
-  align-content: center;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(4px);
-}
-
-.doctor-workbench__hero-metrics strong {
-  font-size: 28px;
-}
-
-.doctor-workbench__hero-metrics span {
-  color: rgba(255, 255, 255, 0.82);
-  font-size: 13px;
-}
-
 .doctor-workbench__workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(300px, 0.7fr);
@@ -671,13 +633,9 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
-  .doctor-workbench__hero-metrics {
-    min-width: 0;
-  }
 }
 
 @media (max-width: 720px) {
-  .doctor-workbench__hero-metrics,
   .doctor-workbench__overview,
   .doctor-workbench__queue-meta {
     grid-template-columns: 1fr;
