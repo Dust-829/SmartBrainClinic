@@ -397,7 +397,7 @@ onBeforeUnmount(() => {
       </div>
 
       <aside class="doctor-workbench__sidebar">
-        <SectionCard title="当前接诊摘要" subtitle="右侧改成紧凑支持区，不再放大块静态 AI 占位。">
+        <SectionCard title="当前接诊摘要" subtitle="确认当前医生与正在处理的患者。">
           <div class="doctor-workbench__summary-card">
             <div>
               <span>接诊医生</span>
@@ -414,7 +414,7 @@ onBeforeUnmount(() => {
           </div>
         </SectionCard>
 
-        <SectionCard title="最近叫号" subtitle="帮助医生确认刚刚推进到哪位患者。">
+        <SectionCard title="最近叫号" subtitle="保留最近一次叫号信息。">
           <div v-if="lastCalled?.called" class="doctor-workbench__note-card">
             <strong>{{ lastCalled.patient_name }}</strong>
             <p>{{ lastCalled.patient_case_number || '病案号待确认' }}</p>
@@ -422,12 +422,12 @@ onBeforeUnmount(() => {
           </div>
           <div v-else class="doctor-workbench__note-card is-muted">
             <strong>尚未叫号</strong>
-            <p>点击“叫下一位”后，这里会保留最近一次叫号摘要。</p>
+            <p>点击“叫下一位”后，系统会保留最近一次叫号信息。</p>
             <span>{{ nextWaiting?.patient_name ? `下一位：${nextWaiting.patient_name}` : '当前没有待接诊患者' }}</span>
           </div>
         </SectionCard>
 
-        <SectionCard title="队列概览" subtitle="把统计、约束和操作边界收在一列。">
+        <SectionCard title="队列概览" subtitle="查看候诊状态与操作约束。">
           <div class="doctor-workbench__overview">
             <div class="doctor-workbench__overview-item">
               <span>待接诊</span>
@@ -443,7 +443,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="doctor-workbench__hint">
-            同一名医生同一时刻只允许一位患者处于“接诊中”。如果已有接诊中的患者，开始下一位时会直接拦截并提示。
+            同一时刻仅可接诊一位患者。若已有接诊中患者，系统会在开始下一位前提示。
           </div>
         </SectionCard>
       </aside>
@@ -453,8 +453,20 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .doctor-workbench {
+  --doctor-font-sans: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif;
+  --doctor-text-heading: #102a43;
+  --doctor-text-body: #486581;
+  --doctor-text-meta: #627d98;
+  --doctor-line: #d5e2ec;
+  --patient-text: var(--doctor-text-heading);
+  --patient-text-muted: var(--doctor-text-body);
+  --patient-border: var(--doctor-line);
+
   display: grid;
   gap: 20px;
+  font-family: var(--doctor-font-sans);
+  font-kerning: normal;
+  font-optical-sizing: auto;
 }
 
 .doctor-workbench__hero {
@@ -638,19 +650,19 @@ onBeforeUnmount(() => {
 }
 
 .doctor-workbench__queue-meta dt,
-.doctor-workbench__summary-card span,
 .doctor-workbench__overview-item span {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--doctor-text-meta);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .doctor-workbench__queue-meta dd,
-.doctor-workbench__summary-card strong,
 .doctor-workbench__note-card strong,
 .doctor-workbench__overview-item strong,
 .doctor-workbench__state strong {
   margin: 0;
-  color: #0f172a;
+  color: var(--doctor-text-heading);
 }
 
 .doctor-workbench__queue-actions {
@@ -663,12 +675,11 @@ onBeforeUnmount(() => {
 .doctor-workbench__summary-card,
 .doctor-workbench__overview {
   display: grid;
-  gap: 12px;
 }
 
 .doctor-workbench__note-card {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .doctor-workbench__note-card.is-muted {
@@ -681,7 +692,7 @@ onBeforeUnmount(() => {
 
 .doctor-workbench__overview-item {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .doctor-workbench__hint {
@@ -691,6 +702,119 @@ onBeforeUnmount(() => {
   background: #eff6ff;
   border: 1px solid #bfdbfe;
   color: #1e3a8a;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__header) {
+  padding: 20px 22px 0;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__header h3) {
+  color: var(--doctor-text-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__header p) {
+  max-width: 34ch;
+  color: var(--doctor-text-body);
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__body) {
+  padding: 16px 22px 22px;
+}
+
+.doctor-workbench__summary-card {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.doctor-workbench__summary-card > div {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 0.8fr) minmax(0, 1.2fr);
+  align-items: baseline;
+  gap: 14px;
+  padding: 0.875rem 0;
+  border-bottom: 1px solid var(--doctor-line);
+}
+
+.doctor-workbench__summary-card > div:first-child {
+  padding-top: 0;
+}
+
+.doctor-workbench__summary-card > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.doctor-workbench__summary-card span {
+  color: var(--doctor-text-meta);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.doctor-workbench__summary-card strong {
+  min-width: 0;
+  color: var(--doctor-text-heading);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.doctor-workbench__note-card {
+  padding: 1rem;
+  border-color: var(--doctor-line);
+  background: #f8fbfd;
+}
+
+.doctor-workbench__note-card strong {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.doctor-workbench__note-card p {
+  color: var(--doctor-text-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.doctor-workbench__note-card span {
+  color: var(--doctor-text-meta);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.doctor-workbench__overview-item {
+  padding: 0.875rem;
+  border-color: var(--doctor-line);
+}
+
+.doctor-workbench__overview-item strong {
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.doctor-workbench__hint {
+  color: #1f4f78;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  text-wrap: pretty;
 }
 
 .doctor-workbench__state {
