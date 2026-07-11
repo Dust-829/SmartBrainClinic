@@ -9,10 +9,12 @@ import type {
   TriageMessage,
   TriageResult,
 } from '@/api/patient'
+import { usePatientRegisterHistoryStore } from '@/stores/patientRegisterHistory'
 import { usePatientSessionStore } from '@/stores/patientSession'
 
 export const usePatientFlowStore = defineStore('patientFlow', () => {
   const session = usePatientSessionStore()
+  const registerHistory = usePatientRegisterHistoryStore()
 
   const triageMessages = ref<TriageMessage[]>([])
   const triageResult = ref<TriageResult | null>(null)
@@ -85,10 +87,12 @@ export const usePatientFlowStore = defineStore('patientFlow', () => {
     onlineRegister.value = value
     payment.value = null
     queueStatus.value = null
+    registerHistory.invalidate()
   }
 
   function setPayment(value: PaymentResult) {
     payment.value = value
+    registerHistory.invalidate()
   }
 
   function setQueueStatus(value: QueueStatus) {

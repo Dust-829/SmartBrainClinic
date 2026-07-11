@@ -17,6 +17,7 @@ from app.common.ai_conversation import (
     append_ai_conversation_messages,
     create_ai_conversation_session,
     get_ai_conversation_session,
+    get_latest_ai_conversation_session_by_register,
     list_ai_conversation_messages,
     update_ai_conversation_session,
 )
@@ -88,6 +89,7 @@ class OnlineRegisterCreate(BaseModel):
     employee_uuid: uuid_pkg.UUID
     scheduling_actual_id: Optional[int] = None
     scheduling_time_slot_uuid: Optional[uuid_pkg.UUID] = None
+    triage_session_uuid: Optional[uuid_pkg.UUID] = None
     settle_category_uuid: Optional[uuid_pkg.UUID] = None
     is_emergency: bool = False
     symptoms: Optional[str] = None
@@ -255,7 +257,48 @@ async def get_register_info(uuid: str, session: AsyncSession = Depends(get_sessi
     return success(payload)
 
 
-@router.post('/triage', summary='API endpoint')
+@router.get('/register/{register_uuid}/ai-context', summary='查询挂号关联 AI 上下文')
+async def get_register_ai_context(register_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    triage_session = await get_latest_ai_conversation_session_by_register(
+        session,
+        register_uuid,
+        module_name='patient.triage',
+        surface='patient_triage',
+    )
+    if not triage_session:
+        raise HTTPException(status_code=404, detail='当前挂号暂无关联 AI 分诊记录')
+
+    messages = await list_ai_conversation_messages(session, triage_session.uuid)
+    payload = {
+        'session_uuid': str(triage_session.uuid),
+        'register_uuid': str(triage_session.register_uuid) if triage_session.register_uuid else None,
+        'patient_uuid': str(triage_session.patient_uuid) if triage_session.patient_uuid else None,
+        'employee_uuid': str(triage_session.employee_uuid) if triage_session.employee_uuid else None,
+        'surface': triage_session.surface,
+        'module_name': triage_session.module_name,
+        'status': triage_session.status,
+        'summary_text': triage_session.summary_text,
+        'profile_snapshot': triage_session.profile_snapshot_json,
+        'latest_result': triage_session.latest_result_json,
+        'source': triage_session.source,
+        'model': triage_session.model,
+        'validated': triage_session.validated,
+        'created_at': triage_session.created_at.isoformat() if triage_session.created_at else None,
+        'updated_at': triage_session.updated_at.isoformat() if triage_session.updated_at else None,
+        'message_count': len(messages),
+        'messages': [
+            {
+                'turn_index': item.turn_index,
+                'role': item.role,
+                'content': item.content,
+            }
+            for item in messages
+        ],
+    }
+    return success(payload)
+
+
+@router.post('/triage', summary='AI 智能分诊')
 async def ai_triage(data: TriageRequest, session: AsyncSession = Depends(get_session)):
     try:
         messages = [{'role': m.role, 'content': m.content} for m in data.messages]

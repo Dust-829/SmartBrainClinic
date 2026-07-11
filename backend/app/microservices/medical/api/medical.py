@@ -1,12 +1,12 @@
 import uuid as uuid_pkg
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..services import medical_service as svc
 from app.common.response import success, created
 from ..models.medical import MedicalTechnology
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/v1/medical", tags=["临床与医技服务"])
 
@@ -28,6 +28,19 @@ class InspectionRequestCreate(BaseModel):
 class DisposalRequestCreate(BaseModel):
     register_uuid: uuid_pkg.UUID
     medical_technology_id: int
+
+
+class OrderSignItem(BaseModel):
+    type: Literal["check", "inspection", "disposal"]
+    medical_technology_id: int
+    check_info: str | None = None
+    check_position: str | None = None
+
+
+class OrderSignRequest(BaseModel):
+    register_uuid: uuid_pkg.UUID
+    items: list[OrderSignItem] = Field(min_length=1)
+
 
 class RefundItem(BaseModel):
     type: str
@@ -135,6 +148,24 @@ async def create_disposal(data: DisposalRequestCreate, session: AsyncSession = D
     try:
         disposal = await svc.create_disposal_request(session, data.model_dump())
         return created({"uuid": str(disposal.uuid)})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/sign", summary="统一签署检查检验处置医嘱")
+async def sign_orders(
+    data: OrderSignRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        items = await svc.create_signed_orders(
+            session,
+            data.register_uuid,
+            [item.model_dump() for item in data.items],
+            background_tasks,
+        )
+        return created({"count": len(items), "items": items})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

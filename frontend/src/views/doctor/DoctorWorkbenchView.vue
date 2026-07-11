@@ -6,26 +6,120 @@ import { useRouter } from 'vue-router'
 import { doctorApi, type DoctorCallNextResult, type DoctorQueueItem } from '@/api/doctor'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
+import DoctorQueueDonut from '@/views/doctor/components/DoctorQueueDonut.vue'
+import DoctorQueueTimeBuckets from '@/views/doctor/components/DoctorQueueTimeBuckets.vue'
+
+const VISIT_STATE_REGISTERED = 1
+const VISIT_STATE_RECEPTION = 2
+const UNKNOWN_TIME_RANGE = '时间待确认'
+
+interface QueueStatusSummaryItem {
+  key: 'waiting' | 'inReception'
+  label: string
+  count: number
+  percentage: number
+}
+
+interface QueueTimeBucket {
+  label: string
+  count: number
+}
+
+type QueueVisualState = 'loading' | 'ready' | 'unavailable'
 
 const router = useRouter()
 const session = useDoctorSessionStore()
 
 const queueItems = ref<DoctorQueueItem[]>([])
-const loading = ref(false)
+const foregroundQueueRequestCount = ref(0)
+const activeQueueRequestCount = ref(0)
+const hasLoadedQueue = ref(false)
 const errorMessage = ref('')
 const callingNext = ref(false)
 const actionRegisterUuid = ref('')
 const lastCalled = ref<DoctorCallNextResult | null>(null)
+const lastRefreshedAt = ref<Date | null>(null)
 
 let queuePollTimer: number | null = null
+let queueRequestSequence = 0
 
 const doctor = computed(() => session.staff)
 const hasIdentity = computed(() => Boolean(doctor.value?.employeeUuid))
+const loading = computed(() => foregroundQueueRequestCount.value > 0)
+const queueSyncing = computed(() => activeQueueRequestCount.value > 0)
 const queueCount = computed(() => queueItems.value.length)
-const waitingCount = computed(() => queueItems.value.filter((item) => item.visit_state === 1).length)
-const inReceptionCount = computed(() => queueItems.value.filter((item) => item.visit_state === 2).length)
-const currentReception = computed(() => queueItems.value.find((item) => item.visit_state === 2) ?? null)
-const nextWaiting = computed(() => queueItems.value.find((item) => item.visit_state === 1) ?? null)
+const waitingCount = computed(
+  () => queueItems.value.filter((item) => item.visit_state === VISIT_STATE_REGISTERED).length,
+)
+const inReceptionCount = computed(
+  () => queueItems.value.filter((item) => item.visit_state === VISIT_STATE_RECEPTION).length,
+)
+const currentReception = computed(
+  () => queueItems.value.find((item) => item.visit_state === VISIT_STATE_RECEPTION) ?? null,
+)
+const nextWaiting = computed(
+  () => queueItems.value.find((item) => item.visit_state === VISIT_STATE_REGISTERED) ?? null,
+)
+const queueStatusSummary = computed<QueueStatusSummaryItem[]>(() => {
+  const total = queueCount.value
+  const toPercentage = (count: number) => (total > 0 ? Math.round((count / total) * 100) : 0)
+
+  return [
+    {
+      key: 'waiting',
+      label: '待接诊',
+      count: waitingCount.value,
+      percentage: toPercentage(waitingCount.value),
+    },
+    {
+      key: 'inReception',
+      label: '接诊中',
+      count: inReceptionCount.value,
+      percentage: toPercentage(inReceptionCount.value),
+    },
+  ]
+})
+const queueTimeBuckets = computed<QueueTimeBucket[]>(() => {
+  const bucketCounts = new Map<string, number>()
+
+  for (const item of queueItems.value) {
+    const label = item.time_range?.trim() || UNKNOWN_TIME_RANGE
+    bucketCounts.set(label, (bucketCounts.get(label) ?? 0) + 1)
+  }
+
+  return [...bucketCounts.entries()]
+    .sort(([left], [right]) => {
+      if (left === UNKNOWN_TIME_RANGE) return 1
+      if (right === UNKNOWN_TIME_RANGE) return -1
+      return left.localeCompare(right)
+    })
+    .map(([label, count]) => ({ label, count }))
+})
+const queueVisualState = computed<QueueVisualState>(() => {
+  if (hasLoadedQueue.value) return 'ready'
+  if (errorMessage.value) return 'unavailable'
+  return 'loading'
+})
+const lastRefreshedLabel = computed(() => {
+  if (!lastRefreshedAt.value) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(lastRefreshedAt.value)
+})
+const queueRefreshLabel = computed(() => {
+  if (!hasIdentity.value) return '等待医生身份'
+  if (queueSyncing.value && hasLoadedQueue.value) return '正在同步，当前显示上次数据'
+  if (queueSyncing.value) return '正在加载挂号数据'
+  if (errorMessage.value && hasLoadedQueue.value) {
+    return `更新失败，当前显示 ${lastRefreshedLabel.value} 数据`
+  }
+  if (errorMessage.value) return '挂号数据暂不可用'
+  if (lastRefreshedLabel.value) return `最后更新 ${lastRefreshedLabel.value}，每 15 秒自动更新`
+  return '等待挂号数据'
+})
 
 function getErrorMessage(error: unknown, fallback: string) {
   const detail = (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data
@@ -47,11 +141,11 @@ function symptomLabel(item: DoctorQueueItem) {
 }
 
 function canStartReception(item: DoctorQueueItem) {
-  return item.visit_state === 1
+  return item.visit_state === VISIT_STATE_REGISTERED
 }
 
 function canContinueEncounter(item: DoctorQueueItem) {
-  return item.visit_state === 2
+  return item.visit_state === VISIT_STATE_RECEPTION
 }
 
 function isActionLoading(registerUuid: string) {
@@ -68,25 +162,36 @@ function openEncounter(item: DoctorQueueItem) {
 }
 
 async function loadQueue(options: { silent?: boolean } = {}) {
-  if (!doctor.value?.employeeUuid) {
+  const employeeUuid = doctor.value?.employeeUuid
+  if (!employeeUuid) {
     queueItems.value = []
     errorMessage.value = ''
+    hasLoadedQueue.value = false
+    lastRefreshedAt.value = null
     return
   }
 
+  const requestSequence = ++queueRequestSequence
+  activeQueueRequestCount.value += 1
   if (!options.silent) {
-    loading.value = true
+    foregroundQueueRequestCount.value += 1
   }
 
   errorMessage.value = ''
   try {
-    const response = await doctorApi.getQueue(doctor.value.employeeUuid)
+    const response = await doctorApi.getQueue(employeeUuid)
+    if (requestSequence !== queueRequestSequence || doctor.value?.employeeUuid !== employeeUuid) return
+
     queueItems.value = response.data.data ?? []
+    lastRefreshedAt.value = new Date()
+    hasLoadedQueue.value = true
   } catch (error) {
+    if (requestSequence !== queueRequestSequence || doctor.value?.employeeUuid !== employeeUuid) return
     errorMessage.value = getErrorMessage(error, '今日候诊列表加载失败，请稍后重试。')
   } finally {
+    activeQueueRequestCount.value = Math.max(0, activeQueueRequestCount.value - 1)
     if (!options.silent) {
-      loading.value = false
+      foregroundQueueRequestCount.value = Math.max(0, foregroundQueueRequestCount.value - 1)
     }
   }
 }
@@ -161,6 +266,12 @@ async function handleStartReception(item: DoctorQueueItem) {
 watch(
   () => doctor.value?.employeeUuid,
   () => {
+    queueRequestSequence += 1
+    queueItems.value = []
+    hasLoadedQueue.value = false
+    lastRefreshedAt.value = null
+    lastCalled.value = null
+    errorMessage.value = ''
     void loadQueue()
     startQueuePolling()
   },
@@ -179,21 +290,16 @@ onBeforeUnmount(() => {
         <span class="doctor-workbench__eyebrow">医生工作台</span>
         <h2>{{ doctor?.displayName || '未登录医生' }}</h2>
         <p>{{ doctor?.deptName || '登录后在这里带入真实医生身份，并读取今日候诊队列。' }}</p>
-      </div>
-      <div class="doctor-workbench__hero-metrics">
-        <div>
-          <strong>{{ queueCount }}</strong>
-          <span>今日队列</span>
-        </div>
-        <div>
-          <strong>{{ waitingCount }}</strong>
-          <span>待接诊</span>
-        </div>
-        <div>
-          <strong>{{ inReceptionCount }}</strong>
-          <span>接诊中</span>
+        <div
+          class="doctor-workbench__refresh-status"
+          :class="{ 'is-syncing': queueSyncing, 'is-error': Boolean(errorMessage) }"
+        >
+          <i aria-hidden="true"></i>
+          <span>{{ queueRefreshLabel }}</span>
         </div>
       </div>
+      <DoctorQueueDonut :total="queueCount" :items="queueStatusSummary" :state="queueVisualState" />
+      <DoctorQueueTimeBuckets :items="queueTimeBuckets" :state="queueVisualState" />
     </section>
 
     <div class="doctor-workbench__workspace">
@@ -291,7 +397,7 @@ onBeforeUnmount(() => {
       </div>
 
       <aside class="doctor-workbench__sidebar">
-        <SectionCard title="当前接诊摘要" subtitle="右侧改成紧凑支持区，不再放大块静态 AI 占位。">
+        <SectionCard title="当前接诊摘要" subtitle="确认当前医生与正在处理的患者。">
           <div class="doctor-workbench__summary-card">
             <div>
               <span>接诊医生</span>
@@ -308,7 +414,7 @@ onBeforeUnmount(() => {
           </div>
         </SectionCard>
 
-        <SectionCard title="最近叫号" subtitle="帮助医生确认刚刚推进到哪位患者。">
+        <SectionCard title="最近叫号" subtitle="保留最近一次叫号信息。">
           <div v-if="lastCalled?.called" class="doctor-workbench__note-card">
             <strong>{{ lastCalled.patient_name }}</strong>
             <p>{{ lastCalled.patient_case_number || '病案号待确认' }}</p>
@@ -316,12 +422,12 @@ onBeforeUnmount(() => {
           </div>
           <div v-else class="doctor-workbench__note-card is-muted">
             <strong>尚未叫号</strong>
-            <p>点击“叫下一位”后，这里会保留最近一次叫号摘要。</p>
+            <p>点击“叫下一位”后，系统会保留最近一次叫号信息。</p>
             <span>{{ nextWaiting?.patient_name ? `下一位：${nextWaiting.patient_name}` : '当前没有待接诊患者' }}</span>
           </div>
         </SectionCard>
 
-        <SectionCard title="队列概览" subtitle="把统计、约束和操作边界收在一列。">
+        <SectionCard title="队列概览" subtitle="查看候诊状态与操作约束。">
           <div class="doctor-workbench__overview">
             <div class="doctor-workbench__overview-item">
               <span>待接诊</span>
@@ -337,7 +443,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="doctor-workbench__hint">
-            同一名医生同一时刻只允许一位患者处于“接诊中”。如果已有接诊中的患者，开始下一位时会直接拦截并提示。
+            同一时刻仅可接诊一位患者。若已有接诊中患者，系统会在开始下一位前提示。
           </div>
         </SectionCard>
       </aside>
@@ -347,14 +453,26 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .doctor-workbench {
+  --doctor-font-sans: 'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif;
+  --doctor-text-heading: #102a43;
+  --doctor-text-body: #486581;
+  --doctor-text-meta: #627d98;
+  --doctor-line: #d5e2ec;
+  --patient-text: var(--doctor-text-heading);
+  --patient-text-muted: var(--doctor-text-body);
+  --patient-border: var(--doctor-line);
+
   display: grid;
   gap: 20px;
+  font-family: var(--doctor-font-sans);
+  font-kerning: normal;
+  font-optical-sizing: auto;
 }
 
 .doctor-workbench__hero {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(300px, 0.95fr) minmax(280px, 1fr);
   align-items: stretch;
-  justify-content: space-between;
   gap: 18px;
   padding: 24px;
   border-radius: 18px;
@@ -364,6 +482,7 @@ onBeforeUnmount(() => {
 
 .doctor-workbench__hero-main {
   display: grid;
+  align-content: center;
   gap: 8px;
 }
 
@@ -391,30 +510,30 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
-.doctor-workbench__hero-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(88px, 1fr));
-  gap: 12px;
-  min-width: 320px;
-}
-
-.doctor-workbench__hero-metrics div {
-  display: grid;
-  align-content: center;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(4px);
-}
-
-.doctor-workbench__hero-metrics strong {
-  font-size: 28px;
-}
-
-.doctor-workbench__hero-metrics span {
+.doctor-workbench__refresh-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
   color: rgba(255, 255, 255, 0.82);
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.doctor-workbench__refresh-status i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #5eead4;
+}
+
+.doctor-workbench__refresh-status.is-syncing i {
+  background: #fcd34d;
+}
+
+.doctor-workbench__refresh-status.is-error i {
+  background: #fdba74;
 }
 
 .doctor-workbench__workspace {
@@ -531,19 +650,19 @@ onBeforeUnmount(() => {
 }
 
 .doctor-workbench__queue-meta dt,
-.doctor-workbench__summary-card span,
 .doctor-workbench__overview-item span {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--doctor-text-meta);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .doctor-workbench__queue-meta dd,
-.doctor-workbench__summary-card strong,
 .doctor-workbench__note-card strong,
 .doctor-workbench__overview-item strong,
 .doctor-workbench__state strong {
   margin: 0;
-  color: #0f172a;
+  color: var(--doctor-text-heading);
 }
 
 .doctor-workbench__queue-actions {
@@ -556,12 +675,11 @@ onBeforeUnmount(() => {
 .doctor-workbench__summary-card,
 .doctor-workbench__overview {
   display: grid;
-  gap: 12px;
 }
 
 .doctor-workbench__note-card {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .doctor-workbench__note-card.is-muted {
@@ -574,7 +692,7 @@ onBeforeUnmount(() => {
 
 .doctor-workbench__overview-item {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .doctor-workbench__hint {
@@ -584,6 +702,119 @@ onBeforeUnmount(() => {
   background: #eff6ff;
   border: 1px solid #bfdbfe;
   color: #1e3a8a;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__header) {
+  padding: 20px 22px 0;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__header h3) {
+  color: var(--doctor-text-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__header p) {
+  max-width: 34ch;
+  color: var(--doctor-text-body);
+  font-size: 0.875rem;
+  font-weight: 400;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.doctor-workbench__sidebar :deep(.section-card__body) {
+  padding: 16px 22px 22px;
+}
+
+.doctor-workbench__summary-card {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.doctor-workbench__summary-card > div {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, 0.8fr) minmax(0, 1.2fr);
+  align-items: baseline;
+  gap: 14px;
+  padding: 0.875rem 0;
+  border-bottom: 1px solid var(--doctor-line);
+}
+
+.doctor-workbench__summary-card > div:first-child {
+  padding-top: 0;
+}
+
+.doctor-workbench__summary-card > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.doctor-workbench__summary-card span {
+  color: var(--doctor-text-meta);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.doctor-workbench__summary-card strong {
+  min-width: 0;
+  color: var(--doctor-text-heading);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.doctor-workbench__note-card {
+  padding: 1rem;
+  border-color: var(--doctor-line);
+  background: #f8fbfd;
+}
+
+.doctor-workbench__note-card strong {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.doctor-workbench__note-card p {
+  color: var(--doctor-text-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+.doctor-workbench__note-card span {
+  color: var(--doctor-text-meta);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.doctor-workbench__overview-item {
+  padding: 0.875rem;
+  border-color: var(--doctor-line);
+}
+
+.doctor-workbench__overview-item strong {
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.doctor-workbench__hint {
+  color: #1f4f78;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  text-wrap: pretty;
 }
 
 .doctor-workbench__state {
@@ -607,16 +838,12 @@ onBeforeUnmount(() => {
   }
 
   .doctor-workbench__hero {
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
-  .doctor-workbench__hero-metrics {
-    min-width: 0;
-  }
 }
 
 @media (max-width: 720px) {
-  .doctor-workbench__hero-metrics,
   .doctor-workbench__overview,
   .doctor-workbench__queue-meta {
     grid-template-columns: 1fr;

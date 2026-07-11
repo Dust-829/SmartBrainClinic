@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from app.common.clients import close_shared_async_client
 from .api.medical import router
 from .config import settings
 from .workers.billing_consumer import start_billing_consumer, start_billing_refund_consumer
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(task_payment, task_refund, task_register)
     except asyncio.CancelledError:
         pass
+    await close_shared_async_client()
     nacos_manager.deregister_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
 
 app = FastAPI(title="Medical Service", version="1.0.0", lifespan=lifespan)

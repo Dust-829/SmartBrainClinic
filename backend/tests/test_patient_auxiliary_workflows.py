@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.common import clients as common_clients
 from app.common.clients import AuthClient, BaseClient, BillingClient
 from app.microservices.patient.services import patient_service
 
@@ -34,6 +35,40 @@ async def test_billing_client_uses_bill_route_and_required_get(monkeypatch):
         "url": f"http://billing:8005/api/v1/bill/register/{register_uuid}",
         "params": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_base_client_reuses_shared_async_client(monkeypatch):
+    created_clients = []
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {"ok": True}}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            created_clients.append(self)
+
+        async def get(self, url, params=None):
+            return FakeResponse()
+
+        async def aclose(self):
+            return None
+
+    await common_clients.close_shared_async_client()
+    monkeypatch.setattr(common_clients.httpx, "AsyncClient", FakeAsyncClient)
+
+    first = await BaseClient.get("http://example.com/first")
+    second = await BaseClient.get("http://example.com/second")
+
+    assert first == {"ok": True}
+    assert second == {"ok": True}
+    assert len(created_clients) == 1
+
+    await common_clients.close_shared_async_client()
 
 
 @pytest.mark.asyncio

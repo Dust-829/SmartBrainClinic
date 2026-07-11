@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from app.common.clients import close_shared_async_client
 from .api.patient import router
 from .config import settings
 from .services.zombie_sweeper import sweep_zombie_slots
@@ -27,6 +28,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
     outbox_task.cancel()
     medical_consumer_task.cancel()
+    await close_shared_async_client()
     nacos_manager.deregister_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
 
 app = FastAPI(title="Patient Service", version="1.0.0", lifespan=lifespan)

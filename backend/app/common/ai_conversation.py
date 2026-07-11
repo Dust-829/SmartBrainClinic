@@ -96,6 +96,25 @@ async def get_ai_conversation_session(
     return result.scalar_one_or_none()
 
 
+async def get_latest_ai_conversation_session_by_register(
+    session: AsyncSession,
+    register_uuid: uuid_pkg.UUID | str,
+    *,
+    module_name: str | None = None,
+    surface: str | None = None,
+) -> AIConversationSession | None:
+    stmt = select(AIConversationSession).where(
+        AIConversationSession.register_uuid == _coerce_uuid(register_uuid)
+    )
+    if module_name:
+        stmt = stmt.where(AIConversationSession.module_name == module_name)
+    if surface:
+        stmt = stmt.where(AIConversationSession.surface == surface)
+    stmt = stmt.order_by(AIConversationSession.updated_at.desc(), AIConversationSession.id.desc())
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
 async def list_ai_conversation_messages(
     session: AsyncSession,
     session_uuid: uuid_pkg.UUID | str,
@@ -200,4 +219,3 @@ def _coerce_uuid(value: uuid_pkg.UUID | str | None) -> uuid_pkg.UUID | None:
     if isinstance(value, uuid_pkg.UUID):
         return value
     return uuid_pkg.UUID(str(value))
-

@@ -1,20 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { patientApi, type RegisterDetail } from '@/api/patient'
+import type { RegisterDetail } from '@/api/patient'
 import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
+import { usePatientRegisterHistoryStore } from '@/stores/patientRegisterHistory'
 import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const session = usePatientSessionStore()
-
-const records = ref<RegisterDetail[]>([])
-const loading = ref(false)
-const errorMessage = ref('')
+const historyStore = usePatientRegisterHistoryStore()
 
 const patient = computed(() => session.patient)
 const isLoggedIn = computed(() => Boolean(patient.value?.uuid))
+const records = computed(() => historyStore.records)
+const loading = computed(() => historyStore.loading && !historyStore.records.length)
+const errorMessage = computed(() => (historyStore.records.length ? '' : historyStore.errorMessage))
 const recordCountText = computed(() => (records.value.length ? `共 ${records.value.length} 条` : ''))
 
 function field(value: string | null | undefined, fallback = '待确认') {
@@ -33,23 +34,9 @@ function feeText(value: number | undefined) {
   return `${value} 元`
 }
 
-async function loadRecords() {
-  records.value = []
-  errorMessage.value = ''
-
-  if (!patient.value?.uuid) return
-
-  loading.value = true
-  try {
-    const response = await patientApi.getRegisterHistory(patient.value.uuid)
-    records.value = response.data.data ?? []
-  } catch (error) {
-    errorMessage.value = '挂号记录加载失败，请稍后重试'
-  } finally {
-    loading.value = false
-  }
+async function loadRecords(force = false) {
+  await historyStore.fetchHistory({ force })
 }
-
 
 function goLogin() {
   router.push('/patient/login')
@@ -63,13 +50,22 @@ function goDepartments() {
   router.push('/patient/departments')
 }
 
-onMounted(loadRecords)
-watch(() => patient.value?.uuid, loadRecords)
+onMounted(() => {
+  void loadRecords()
+})
+
+watch(
+  () => patient.value?.uuid,
+  () => {
+    void loadRecords()
+  },
+)
 </script>
 
 <template>
   <div class="patient-register-history-shell">
-    <header class="patient-register-history-hero">      <h1>挂号记录</h1>
+    <header class="patient-register-history-hero">
+      <h1>挂号记录</h1>
       <p>{{ isLoggedIn ? '查看当前患者的线上挂号与候诊信息' : '登录后查看个人挂号历史' }}</p>
     </header>
 
@@ -105,7 +101,7 @@ watch(() => patient.value?.uuid, loadRecords)
             <template #default>
               <div v-if="errorMessage" class="patient-register-history-empty is-error">
                 <strong>{{ errorMessage }}</strong>
-                <button type="button" @click="loadRecords">重新加载</button>
+                <button type="button" @click="loadRecords(true)">重新加载</button>
               </div>
 
               <div v-else-if="records.length" class="patient-register-history-list">
@@ -170,7 +166,6 @@ watch(() => patient.value?.uuid, loadRecords)
   background: linear-gradient(135deg, #087df6 0%, #35a7ff 100%);
   color: #fff;
 }
-
 
 .patient-register-history-hero h1 {
   margin: 0 0 8px;

@@ -1,59 +1,38 @@
 # SmartBrainClinic
 
-智慧云脑诊疗平台项目仓库。
+更新时间：2026-07-10。
 
-项目当前以门诊场景为主，围绕患者端、医生端、管理员端、医技端、药房端和财务端构建 AI 赋能的诊疗闭环。主业务主线固定为脑科 / 神经外科门诊，重点展示 AI 问诊、AI 分诊、医生推荐、检查检验、脑部 CT / MRI 影像辅助、处方审核和缴费发药。
+智慧云脑诊疗平台是一个面向门诊流程的 AI 赋能 HIS / 无人医院实训项目。当前固定演示主线为脑科 / 神经外科门诊，覆盖患者建档、AI 分诊、医生推荐、挂号支付、候诊、医生接诊、检查检验、病历确认、处方与收费等环节。
 
-## 当前实现
+## 技术基线
 
-当前仓库的主实现已经确定为 **Python FastAPI 微服务后端**，不是 Java / Spring Boot。
+当前真实实现是 **Python FastAPI 微服务后端 + Vue 3 前端**，不是早期 Java / Spring Boot 方案。
 
-- 后端主目录：`backend/`
-- 前端目录：`frontend/`，当前已是可运行的 Vue 3 + Vite 工程，患者端第一阶段主链路已落地，且已移除产品级全局角色切换入口
-- 文档目录：`docs/`
-- 旧 `services/` 目录仅为早期占位，不是当前运行实现
+| 模块 | 目录 / 端口 | 职责 |
+| --- | --- | --- |
+| Gateway | `backend/app/main.py` / 8000 | 统一 API 入口与服务转发 |
+| Auth | `backend/app/microservices/auth` / 8001 | 科室、医生、诊室、挂号级别等基础资料 |
+| Patient | `backend/app/microservices/patient` / 8002 | 患者、分诊、推荐、排班、挂号与候诊 |
+| Medical | `backend/app/microservices/medical` / 8003 | 病历、检查、检验、处置和医生 AI 辅助 |
+| Pharmacy | `backend/app/microservices/pharmacy` / 8004 | 药品、处方、发药与退药 |
+| Billing | `backend/app/microservices/billing` / 8005 | 账单、缴费、退费与防重复收费 |
+| Frontend | `frontend/` / 5173 | Vue 3、Vite、Pinia、Vue Router、Element Plus |
 
-## 技术栈
+基础设施包括 PostgreSQL + pgvector、Redis、RabbitMQ、Nacos 和 Docker Compose。
 
-- 后端：FastAPI、Uvicorn、Pydantic v2
-- 数据访问：SQLModel、SQLAlchemy Async、asyncpg
-- 数据库：PostgreSQL、pgvector
-- 中间件：Redis、RabbitMQ、Nacos
-- AI 编排：LangChain、LangGraph、OpenAI-compatible API
-- 前端规划：Vue 3、Pinia、Axios、Element Plus
+## 当前产品状态
 
-## 微服务
+- 根路由 `/` 是三端入口页。
+- 患者端 `/patient/*` 采用首页优先，已打通登录 / 建档、AI 分诊、选科、医生推荐、挂号、支付、候诊、挂号记录和个人中心。
+- 医生端 `/doctor/*` 采用登录优先，已打通真实医生身份、今日候诊队列、挂号状态图表、开始 / 继续接诊、病历草稿确认、相似病例、AI 助手和检查 / 检验 / 处置开单。
+- 管理员端 `/admin/*` 已有独立登录和控制台骨架，但登录仍是演示态，排班、审批和审计尚未接成真实管理闭环。
+- 已提交：医生工作台挂号状态图表、接诊开单和病历确认等医生端主链能力已在当前分支提交。
+- 本地待合并：AI 分诊会话与挂号绑定、Medical 草稿上下文、挂号历史 60 秒共享缓存和共享 `httpx.AsyncClient` 已在工作区实现，但不包含在本次文档提交中。
+- 待验证：医生端直接展示 AI 分诊上下文、历史确认病历融合、结构化决策辅助，以及真实非空队列图表回归。
 
-| 服务 | 目录 | 端口 | 职责 |
-| --- | --- | ---: | --- |
-| Gateway | `backend/app/main.py` | 8000 | 统一入口，按 `/api/v1/{service}` 转发 |
-| Auth | `backend/app/microservices/auth` | 8001 | 医生、科室、诊室、挂号级别、结算类别 |
-| Patient | `backend/app/microservices/patient` | 8002 | 患者建档、AI 分诊、医生推荐、挂号、排班、候诊队列 |
-| Medical | `backend/app/microservices/medical` | 8003 | 病历、检查、检验、处置、影像辅助、医生 AI 助手 |
-| Pharmacy | `backend/app/microservices/pharmacy` | 8004 | 处方推荐、发药、退药、库存 |
-| Billing | `backend/app/microservices/billing` | 8005 | 缴费、退费、账单、退款保护 |
+完整状态和下一步以 [项目规划](docs/项目规划.md) 为准。
 
-## 最近状态
-
-截至 2026-07-06，当前本地已完成这些验证：
-
-- `ai-trust-hardening` 分支已合并到本地 `main`
-- Docker 基础设施已可启动：PostgreSQL、Redis、RabbitMQ、Nacos
-- 数据库备份已导入，`backend/migrations/` 已全部执行
-- 6 个微服务的 `/health` 和 `/docs` 均可访问
-- 前端已明确按 `/patient/*`、`/doctor/*`、`/admin/*` 组织三套路由入口，且不再保留顶部全局角色切换按钮
-- 新增测试中，至少以下两组已通过：
-  - `backend/tests/test_billing_refund_guard.py`
-  - `backend/tests/test_patient_auxiliary_workflows.py`
-
-## 数据库初始化
-
-当前本地运行依赖两部分：
-
-1. 导入基础库和演示数据：`backend/his_db_backup.sql`
-2. 执行增量迁移：`backend/migrations/*.sql`
-
-如果是第一次在空库上启动，建议先启动 PostgreSQL 容器，再导入 `his_db_backup.sql`，最后执行 `backend/migrations/` 下的 SQL。
+状态口径：`已提交` 指已存在于当前 Git 分支的内容；`本地待合并` 指工作区可见但尚未提交的实现；`待验证` 指需要真实数据、浏览器或联调确认的项目。报告引用时应保留这一边界。
 
 ## 本地启动
 
@@ -62,50 +41,50 @@
 ```powershell
 cd backend
 pip install -r requirements.txt
+
+cd ..\frontend
+npm install
 ```
 
-### 2. 配置环境变量
+如果 Windows 下读取 `requirements.txt` 遇到 GBK 编码错误，按文件中的版本逐项安装依赖，不要通过修改系统编码或删除依赖绕过。
 
-建议创建 `backend/.env`，至少包含以下内容：
+### 2. 配置后端
+
+在 `backend/.env` 中配置数据库、中间件和 AI 参数。不要把真实 API Key、Token 或密码提交到仓库。
+
+常用变量：
 
 ```text
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=his_db
-DB_USER=lujuntong
-DB_PASSWORD=his_password
+DB_USER=...
+DB_PASSWORD=...
 
 REDIS_URL=redis://localhost:6379/0
 RABBITMQ_URL=amqp://guest:guest@localhost:5672/
 NACOS_SERVER_ADDR=127.0.0.1:8848
-SERVICE_HOST=127.0.0.1
 
-APP_ENV=development
-APP_DEBUG=true
-AI_ALLOW_MOCK_FALLBACK=true
+LLM_API_KEY=...
+LLM_API_BASE=...
+LLM_MODEL=...
 ```
 
-其他 AI 相关参数可按需继续补充：
-
-```text
-LLM_API_KEY=your-api-key
-LLM_API_BASE=https://api.example.com/v1
-LLM_MODEL=your-chat-model
-LLM_EMBEDDING_MODEL=your-embedding-model
-ADMIN_API_TOKEN=your-admin-token
-AI_AUDIT_ADMIN_TOKEN=your-ai-audit-token
-```
-
-### 3. 启动基础设施
+### 3. 初始化数据库与基础设施
 
 ```powershell
 cd backend
 docker compose up -d postgres redis rabbitmq nacos
 ```
 
-### 4. 启动微服务
+空库需要先导入 `backend/his_db_backup.sql`，再按文件名顺序执行 `backend/migrations/*.sql`。
 
-Windows 本地推荐直接按服务启动，避免 `run_microservices.py` 的控制台编码问题：
+演示数据建议：执行 `backend/scripts/seed_full_demo_data.sql`。
+该脚本提供中文患者、医生、排班、病历、医技、处方和收费的关联样例；不要再与旧最小样例脚本混用。
+
+### 4. 启动服务
+
+Windows 本地建议分别启动，便于查看每个服务日志：
 
 ```powershell
 cd backend
@@ -117,33 +96,55 @@ python -X utf8 -m uvicorn app.microservices.pharmacy.main:app --host 0.0.0.0 --p
 python -X utf8 -m uvicorn app.microservices.billing.main:app --host 0.0.0.0 --port 8005
 ```
 
-### 5. 验证服务
+```powershell
+cd frontend
+npm run dev
+```
 
+入口：
+
+- 前端：<http://localhost:5173>
 - Gateway：<http://localhost:8000/health>
-- Auth：<http://localhost:8001/health>
-- Patient：<http://localhost:8002/health>
-- Medical：<http://localhost:8003/health>
-- Pharmacy：<http://localhost:8004/health>
-- Billing：<http://localhost:8005/health>
+- Swagger：`http://localhost:8000/docs` 至 `http://localhost:8005/docs`
 
-Swagger 文档入口：
+## 验证
 
-- <http://localhost:8000/docs>
-- <http://localhost:8001/docs>
-- <http://localhost:8002/docs>
-- <http://localhost:8003/docs>
-- <http://localhost:8004/docs>
-- <http://localhost:8005/docs>
+```powershell
+cd frontend
+npm run build
+```
 
-## 当前注意事项
+```powershell
+cd backend
+python -m pytest tests
+```
 
-- `backend/app/common/config.py` 里仍有硬编码的 LLM Key 默认值，后续应移出代码并轮换。
-- `run_microservices.py` 和 `verify_services.py` 在 Windows 下存在 emoji / GBK 编码问题。
-- 医学影像当前仍是 Mock 推理，不应对外描述为真实深度学习模型已完成。
-- 前端阶段 0 已完成，当前重点进入患者端主链路联调。
+根据改动范围优先运行相关测试；未执行的验证必须在交付说明中明确指出。
 
-## 重要文档
+## 已知边界
 
-- [项目规划](docs/项目规划.md)
-- [项目结构说明](docs/项目结构说明.md)
-- [GitHub 协作规范](docs/GitHub协作规范.md)
+- 医学影像仍包含 Mock 推理，不应描述为真实影像模型已经完成。
+- 管理员端仍是骨架，不应描述为真实后台闭环。
+- AI 能力依赖有效模型配置；mock、fallback 和规则结果必须明确标识来源。
+- `20260708_01_create_ai_conversation_tables.sql` 必须在目标数据库执行后，会话链路才能完整使用。
+- 当前本地医生今日队列可能为空，非空图表场景需要在存在真实当日挂号时补验。
+
+## 文档导航
+
+- [项目规划](docs/项目规划.md)：当前状态、差距、优先级和阶段路线。
+- [前端实施计划](docs/frontend-plan.md)：三端路由、页面、状态和前端执行切片。
+- [项目结构说明](docs/项目结构说明.md)：仓库、前后端模块和关键入口导航。
+- [数据库表结构说明](docs/数据库表结构说明.md)：当前数据库关系和业务表说明。
+- [全链路演示数据清单](docs/全链路演示数据清单.md)：全链路演示数据的范围、账号和执行前提。
+- [GitHub 协作规范](docs/GitHub协作规范.md)：分支、提交和 PR 约定。
+
+## 历史与报告留档
+
+以下文档保留项目逐步完善的证据，用于阶段汇报、答辩报告和问题复盘；其中的状态以文档标注日期为准，当前实现仍以“文档导航”中的主文档为准。
+
+- [当前项目回顾](docs/当前项目回顾.md)：2026-07-07 阶段快照与当时的下一步建议。
+- [问题记录](docs/问题记录.md)：问题现象、原因、处理方式和后续注意项。
+- [设计图留档](docs/设计图留档.md)：医生端和患者端关键界面设计图及其适用范围。
+- [AI 分诊与病历增强方案](docs/AI分诊与病历增强方案.md)：AI 会话和病历上下文增强的专项设计。
+- [医生工作台挂号可视化改版计划 v2](docs/doctor-workbench-registration-visual-plan-v2.md)：设计图、数据口径、实施过程和验收记录。
+- [历史专项计划](PLAN.md)：医生工作台可视化改造的原始实施计划。

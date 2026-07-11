@@ -34,6 +34,13 @@ def test_medical_api_exposes_tech_list_and_register_request_routes():
     assert '@router.get("/requests/register/{register_uuid}", summary="按挂号单获取检查检验处置队列")' in source
 
 
+def test_medical_api_exposes_unified_order_signing_route():
+    source = Path("app/microservices/medical/api/medical.py").read_text(encoding="utf-8")
+
+    assert 'class OrderSignRequest(BaseModel):' in source
+    assert '@router.post("/orders/sign", summary="统一签署检查检验处置医嘱")' in source
+
+
 def test_medical_order_rejects_unpaid_register():
     data = run_isolated_python(
         """
@@ -255,3 +262,207 @@ def test_list_requests_by_register_returns_grouped_queue_payload():
     assert data["inspections"][0]["tech_name"] == "血常规"
     assert data["inspections"][0]["state"] == "已缴费"
     assert data["disposals"] == []
+
+
+def test_unified_order_signing_creates_mixed_requests_and_dispatches_checks_after_flush():
+    data = run_isolated_python(
+        """
+        import asyncio
+        import json
+        import uuid
+        from types import SimpleNamespace
+        from app.common.enums import VisitState
+        from app.microservices.medical.services import medical_service
+
+        class FakeScalars:
+            def __init__(self, rows):
+                self.rows = rows
+            def all(self):
+                return self.rows
+
+        class FakeResult:
+            def __init__(self, rows):
+                self.rows = rows
+            def scalars(self):
+                return FakeScalars(self.rows)
+
+        class FakeSession:
+            def __init__(self, technologies):
+                self.technologies = technologies
+                self.added = []
+                self.flushed = False
+                self.rolled_back = False
+            async def execute(self, statement):
+                return FakeResult(self.technologies)
+            def add(self, value):
+                self.added.append(value)
+            async def flush(self):
+                self.flushed = True
+            async def rollback(self):
+                self.rolled_back = True
+
+        class FakeTasks:
+            def __init__(self):
+                self.calls = []
+            def add_task(self, task, *args):
+                self.calls.append((task.__name__, args))
+
+        async def fake_get_register(register_uuid):
+            return {"uuid": str(register_uuid), "visit_state": int(VisitState.RECEPTION)}
+
+        async def main():
+            medical_service.PatientClient.get_register = fake_get_register
+            technologies = [
+                SimpleNamespace(id=101, tech_name="头颅CT", tech_type="check"),
+                SimpleNamespace(id=102, tech_name="血常规", tech_type="inspection"),
+                SimpleNamespace(id=103, tech_name="门诊观察", tech_type="disposal"),
+            ]
+            session = FakeSession(technologies)
+            tasks = FakeTasks()
+            items = await medical_service.create_signed_orders(
+                session,
+                uuid.uuid4(),
+                [
+                    {"type": "check", "medical_technology_id": 101, "check_position": "头部", "check_info": "排查占位"},
+                    {"type": "inspection", "medical_technology_id": 102},
+                    {"type": "disposal", "medical_technology_id": 103},
+                ],
+                tasks,
+            )
+            print(json.dumps({
+                "types": [item["type"] for item in items],
+                "states": [item["state"] for item in items],
+                "created": [type(item).__name__ for item in session.added],
+                "flushed": session.flushed,
+                "task_names": [call[0] for call in tasks.calls],
+            }, ensure_ascii=False))
+
+        asyncio.run(main())
+        """
+    )
+
+    assert data["types"] == ["check", "inspection", "disposal"]
+    assert data["states"] == ["未缴费", "未缴费", "未缴费"]
+    assert data["created"] == ["CheckRequest", "InspectionRequest", "DisposalRequest"]
+    assert data["flushed"] is True
+    assert data["task_names"] == ["assign_tech_to_check_task"]
+
+
+def test_unified_order_signing_rejects_mismatched_type_before_creating_requests():
+    data = run_isolated_python(
+        """
+        import asyncio
+        import json
+        import uuid
+        from types import SimpleNamespace
+        from app.common.enums import VisitState
+        from app.microservices.medical.services import medical_service
+
+        class FakeScalars:
+            def all(self):
+                return [SimpleNamespace(id=101, tech_name="头颅CT", tech_type="check")]
+
+        class FakeResult:
+            def scalars(self):
+                return FakeScalars()
+
+        class FakeSession:
+            def __init__(self):
+                self.added = []
+                self.flushed = False
+            async def execute(self, statement):
+                return FakeResult()
+            def add(self, value):
+                self.added.append(value)
+            async def flush(self):
+                self.flushed = True
+
+        async def fake_get_register(register_uuid):
+            return {"uuid": str(register_uuid), "visit_state": int(VisitState.RECEPTION)}
+
+        async def main():
+            medical_service.PatientClient.get_register = fake_get_register
+            session = FakeSession()
+            try:
+                await medical_service.create_signed_orders(
+                    session,
+                    uuid.uuid4(),
+                    [{"type": "inspection", "medical_technology_id": 101}],
+                )
+            except ValueError as exc:
+                print(json.dumps({
+                    "error": str(exc),
+                    "created": len(session.added),
+                    "flushed": session.flushed,
+                }, ensure_ascii=False))
+                return
+            raise AssertionError("mismatched type should be rejected")
+
+        asyncio.run(main())
+        """
+    )
+
+    assert "类型不匹配" in data["error"]
+    assert data["created"] == 0
+    assert data["flushed"] is False
+
+
+def test_unified_order_signing_rolls_back_when_flush_fails():
+    data = run_isolated_python(
+        """
+        import asyncio
+        import json
+        import uuid
+        from types import SimpleNamespace
+        from app.common.enums import VisitState
+        from app.microservices.medical.services import medical_service
+
+        class FakeScalars:
+            def all(self):
+                return [SimpleNamespace(id=101, tech_name="头颅CT", tech_type="check")]
+
+        class FakeResult:
+            def scalars(self):
+                return FakeScalars()
+
+        class FakeSession:
+            def __init__(self):
+                self.added = []
+                self.rolled_back = False
+            async def execute(self, statement):
+                return FakeResult()
+            def add(self, value):
+                self.added.append(value)
+            async def flush(self):
+                raise RuntimeError("database write failed")
+            async def rollback(self):
+                self.rolled_back = True
+
+        async def fake_get_register(register_uuid):
+            return {"uuid": str(register_uuid), "visit_state": int(VisitState.RECEPTION)}
+
+        async def main():
+            medical_service.PatientClient.get_register = fake_get_register
+            session = FakeSession()
+            try:
+                await medical_service.create_signed_orders(
+                    session,
+                    uuid.uuid4(),
+                    [{"type": "check", "medical_technology_id": 101, "check_position": "头部", "check_info": "排查占位"}],
+                )
+            except RuntimeError as exc:
+                print(json.dumps({
+                    "error": str(exc),
+                    "rolled_back": session.rolled_back,
+                    "created": len(session.added),
+                }, ensure_ascii=False))
+                return
+            raise AssertionError("flush failure should be re-raised")
+
+        asyncio.run(main())
+        """
+    )
+
+    assert data["error"] == "database write failed"
+    assert data["rolled_back"] is True
+    assert data["created"] == 1

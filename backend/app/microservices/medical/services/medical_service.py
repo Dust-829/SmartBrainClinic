@@ -215,6 +215,104 @@ async def create_disposal_request(session: AsyncSession, data: dict) -> Disposal
     return disposal
 
 
+
+async def create_signed_orders(
+    session: AsyncSession,
+    register_uuid: uuid_pkg.UUID | str,
+    items: list[dict],
+    background_tasks=None,
+) -> list[dict]:
+    """Create a mixed order set in one local transaction before downstream dispatch."""
+    if not items:
+        raise ValueError("至少需要开立一项医疗项目")
+
+    normalized_register_uuid = uuid_pkg.UUID(str(register_uuid))
+    await _ensure_register_allows_medical_order(normalized_register_uuid)
+
+    order_types = {"check", "inspection", "disposal"}
+    tech_ids = {item.get("medical_technology_id") for item in items}
+    if not all(isinstance(tech_id, int) and tech_id > 0 for tech_id in tech_ids):
+        raise ValueError("医疗项目不合法")
+
+    for item in items:
+        if item.get("type") not in order_types:
+            raise ValueError("医疗项目类型不支持")
+        if item["type"] == "check":
+            if not str(item.get("check_position") or "").strip():
+                raise ValueError("检查项目需要填写检查部位")
+            if not str(item.get("check_info") or "").strip():
+                raise ValueError("检查项目需要填写检查目的")
+
+    tech_result = await session.execute(
+        select(MedicalTechnology).where(
+            MedicalTechnology.id.in_(tech_ids),
+            MedicalTechnology.delmark == 1,
+        )
+    )
+    tech_map = {tech.id: tech for tech in tech_result.scalars().all()}
+    if len(tech_map) != len(tech_ids):
+        raise ValueError("存在不可用的医疗项目")
+
+    for item in items:
+        tech = tech_map[item["medical_technology_id"]]
+        if tech.tech_type != item["type"]:
+            raise ValueError(f"医疗项目“{tech.tech_name}”与开单类型不匹配")
+
+    created_items: list[tuple[str, CheckRequest | InspectionRequest | DisposalRequest, MedicalTechnology]] = []
+    try:
+        for item in items:
+            item_type = item["type"]
+            tech = tech_map[item["medical_technology_id"]]
+            if item_type == "check":
+                request_obj = CheckRequest(
+                    register_uuid=normalized_register_uuid,
+                    medical_technology_id=tech.id,
+                    check_info=item["check_info"].strip(),
+                    check_position=item["check_position"].strip(),
+                    check_state=CheckState.UNPAID,
+                    inputcheck_employee_uuid=None,
+                )
+            elif item_type == "inspection":
+                request_obj = InspectionRequest(
+                    register_uuid=normalized_register_uuid,
+                    medical_technology_id=tech.id,
+                    inspection_state=InspectionState.UNPAID,
+                )
+            else:
+                request_obj = DisposalRequest(
+                    register_uuid=normalized_register_uuid,
+                    medical_technology_id=tech.id,
+                    disposal_state=DisposalState.UNPAID,
+                )
+            session.add(request_obj)
+            created_items.append((item_type, request_obj, tech))
+
+        await session.flush()
+    except Exception:
+        await session.rollback()
+        raise
+
+    if background_tasks:
+        for item_type, request_obj, tech in created_items:
+            if item_type == "check":
+                background_tasks.add_task(assign_tech_to_check_task, str(request_obj.uuid), tech.tech_name)
+
+    return [
+        {
+            "uuid": str(request_obj.uuid),
+            "type": item_type,
+            "state": (
+                request_obj.check_state
+                if item_type == "check"
+                else request_obj.inspection_state
+                if item_type == "inspection"
+                else request_obj.disposal_state
+            ),
+        }
+        for item_type, request_obj, _ in created_items
+    ]
+
+
 async def _load_tech_map(session: AsyncSession, tech_ids: set[int]) -> dict[int, MedicalTechnology]:
     if not tech_ids:
         return {}
