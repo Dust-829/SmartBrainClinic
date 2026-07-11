@@ -41,7 +41,6 @@ const reviewForm = reactive({
   review_note: '',
 })
 
-const tokenConfigured = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
 const currentPage = computed(() => Math.floor(pagination.offset / pagination.limit) + 1)
 const totalPages = computed(() => Math.max(1, Math.ceil(pagination.total / pagination.limit)))
 const pageStart = computed(() => (pagination.total ? pagination.offset + 1 : 0))
@@ -56,12 +55,6 @@ const reviewApprovalRatio = computed(() => {
 })
 
 async function search(resetPage = true) {
-  if (!tokenConfigured.value) {
-    clearAuditState()
-    configMessage.value = '当前未配置 VITE_ADMIN_API_TOKEN，审计页仅显示配置提示。'
-    return
-  }
-
   if (resetPage) {
     pagination.offset = 0
   }
@@ -319,16 +312,15 @@ search()
             v-model="filters.module_name"
             type="text"
             placeholder="patient.triage / medical.draft"
-            :disabled="!tokenConfigured"
           />
         </label>
         <label>
           <span>来源</span>
-          <input v-model="filters.source" type="text" placeholder="llm / rule / fallback" :disabled="!tokenConfigured" />
+          <input v-model="filters.source" type="text" placeholder="llm / rule / fallback" />
         </label>
         <label>
           <span>校验状态</span>
-          <select v-model="filters.validated" :disabled="!tokenConfigured">
+          <select v-model="filters.validated">
             <option value="all">全部</option>
             <option value="true">已验证</option>
             <option value="false">待复核</option>
@@ -336,31 +328,29 @@ search()
         </label>
         <label>
           <span>开始日期</span>
-          <input v-model="filters.created_from" type="date" :disabled="!tokenConfigured" />
+          <input v-model="filters.created_from" type="date" />
         </label>
         <label>
           <span>结束日期</span>
-          <input v-model="filters.created_to" type="date" :disabled="!tokenConfigured" />
+          <input v-model="filters.created_to" type="date" />
         </label>
         <div class="audit-form__actions">
-          <button type="submit" :disabled="loading || !tokenConfigured">
-            {{ tokenConfigured ? (loading ? '查询中...' : '查询日志') : '等待配置' }}
+          <button type="submit" :disabled="loading">
+            {{ loading ? '查询中...' : '查询日志' }}
           </button>
-          <button type="button" class="is-secondary" :disabled="exporting || !tokenConfigured" @click="exportCurrentAudits">
+          <button type="button" class="is-secondary" :disabled="exporting" @click="exportCurrentAudits">
             {{ exporting ? '导出中...' : '导出 CSV' }}
           </button>
-          <button type="button" class="is-secondary" :disabled="loading || !tokenConfigured" @click="resetFilters">
+          <button type="button" class="is-secondary" :disabled="loading" @click="resetFilters">
             重置
           </button>
         </div>
       </form>
 
-      <p class="audit-note" :class="{ 'is-warning': !tokenConfigured || Boolean(configMessage) }">
+      <p class="audit-note" :class="{ 'is-warning': Boolean(configMessage) }">
         {{
           configMessage ||
-          (tokenConfigured
-            ? '已检测到 VITE_ADMIN_API_TOKEN。审计查询只读，不会修改复核状态。'
-            : '当前未检测到 VITE_ADMIN_API_TOKEN，审计页不会主动请求接口。')
+          '当前审计页直接使用管理员页面访问能力；后续再接真实后端登录鉴权。'
         }}
       </p>
     </SectionCard>
@@ -370,7 +360,7 @@ search()
         <span>显示 {{ pageStart }}-{{ pageEnd }} / {{ pagination.total }}</span>
         <label>
           每页
-          <select :value="pagination.limit" :disabled="loading || !tokenConfigured" @change="updateLimit">
+          <select :value="pagination.limit" :disabled="loading" @change="updateLimit">
             <option :value="10">10</option>
             <option :value="20">20</option>
             <option :value="50">50</option>

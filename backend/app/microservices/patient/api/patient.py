@@ -22,7 +22,6 @@ from app.common.ai_conversation import (
 )
 from app.common.clients import AuthClient
 from app.common.response import created, success
-from app.common.security import require_ai_audit_admin
 from app.microservices.patient.ws_manager import manager as ws_manager
 
 from ..config import settings
@@ -317,7 +316,6 @@ async def list_departments():
 @router.get(
     '/admin/ai-audits',
     summary='API endpoint',
-    dependencies=[Depends(require_ai_audit_admin)],
 )
 async def list_ai_audits(
     module_name: Optional[str] = None,
@@ -345,7 +343,6 @@ async def list_ai_audits(
 @router.get(
     '/admin/ai-audits/export',
     summary='API endpoint',
-    dependencies=[Depends(require_ai_audit_admin)],
 )
 async def export_ai_audits(
     module_name: Optional[str] = None,
@@ -376,7 +373,6 @@ async def export_ai_audits(
 @router.get(
     '/admin/ai-audits/{audit_uuid}',
     summary='API endpoint',
-    dependencies=[Depends(require_ai_audit_admin)],
 )
 async def get_ai_audit_detail(
     audit_uuid: str,
@@ -391,7 +387,6 @@ async def get_ai_audit_detail(
 @router.post(
     '/admin/ai-audits/{audit_uuid}/review',
     summary='API endpoint',
-    dependencies=[Depends(require_ai_audit_admin)],
 )
 async def submit_ai_audit_review(
     audit_uuid: str,

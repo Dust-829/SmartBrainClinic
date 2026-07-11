@@ -7,18 +7,17 @@ import { useAdminSessionStore } from '@/stores/adminSession'
 const route = useRoute()
 const router = useRouter()
 const session = useAdminSessionStore()
-const auditConfigured = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
 
-const navItems = computed(() => [
+const navItems = [
   { label: '首页大屏', to: '/admin/dashboard' },
   { label: '账号管理', to: '/admin/accounts' },
   { label: '智能排班', to: '/admin/schedules' },
   { label: '审批中心', to: '/admin/approvals' },
-  { label: auditConfigured.value ? 'AI 审计' : 'AI 审计（需配置）', to: '/admin/audit' },
+  { label: 'AI 审计', to: '/admin/audit' },
   { label: '药房工作台', to: '/admin/pharmacy' },
   { label: '财务账单', to: '/admin/billing' },
   { label: '运营分析', to: '/admin/analytics' },
-])
+]
 
 const staffLabel = computed(() => session.staff?.displayName || '未登录管理员')
 const staffCodeLabel = computed(() => session.staff?.staffCode || 'ADMIN')
@@ -63,10 +62,6 @@ function logout() {
     </aside>
 
     <div class="admin-layout__content">
-      <div v-if="route.path !== '/admin/login' && !auditConfigured" class="admin-layout__banner">
-        当前未配置 `VITE_ADMIN_API_TOKEN`。其余后台模块可正常使用，`AI 审计` 仅显示配置提示。
-      </div>
-
       <header v-if="route.path !== '/admin/login'" class="admin-layout__header">
         <div>
           <div class="admin-layout__eyebrow">后台工作台</div>

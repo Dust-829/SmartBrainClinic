@@ -1,8 +1,8 @@
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 
 from app.common.ai_audit import (
     export_ai_audit_logs_csv,
@@ -10,7 +10,6 @@ from app.common.ai_audit import (
     query_ai_audit_logs,
     review_ai_audit_log,
 )
-from app.common.security import require_ai_audit_admin
 from app.microservices.medical.services.ai_draft import run_ai_medical_draft
 from app.microservices.patient.services.ai_triage import run_ai_triage
 from app.microservices.pharmacy.services.ai_prescription import run_ai_prescription
@@ -200,16 +199,12 @@ def test_review_migration_adds_expected_columns():
     assert "DEFAULT 'pending'" in migration
 
 
-@pytest.mark.asyncio
-async def test_require_ai_audit_admin_rejects_when_token_missing(monkeypatch):
-    monkeypatch.delenv("AI_AUDIT_ADMIN_TOKEN", raising=False)
-    monkeypatch.delenv("ADMIN_API_TOKEN", raising=False)
+def test_ai_audit_endpoints_no_longer_depend_on_token_guard():
+    patient_api = Path("app/microservices/patient/api/patient.py").read_text(encoding="utf-8")
+    admin_api = Path("../frontend/src/api/admin.ts").read_text(encoding="utf-8")
 
-    with pytest.raises(HTTPException) as exc_info:
-        await require_ai_audit_admin()
-
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "AI audit admin token is not configured"
+    assert "require_ai_audit_admin" not in patient_api
+    assert "X-AI-Audit-Token" not in admin_api
 
 
 @pytest.mark.asyncio

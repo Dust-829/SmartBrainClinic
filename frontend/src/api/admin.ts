@@ -1,15 +1,6 @@
 import { http, type ApiEnvelope } from './http'
 import type { PatientCreatePayload, PatientRecord } from './patient'
 
-function getAdminAuthHeaders() {
-  const token = import.meta.env.VITE_ADMIN_API_TOKEN?.trim()
-  return token
-    ? {
-        'X-AI-Audit-Token': token,
-      }
-    : undefined
-}
-
 export interface SchedulingApplicationRecord {
   uuid: string
   employee_uuid: string
@@ -239,7 +230,6 @@ export const adminApi = {
   listAiAudits(query: AuditQuery = {}) {
     return http.get<ApiEnvelope<AuditLogPage>>('/api/v1/patient/admin/ai-audits', {
       params: query,
-      headers: getAdminAuthHeaders(),
     })
   },
   getAiAuditDetail(auditUuid: string) {
@@ -251,13 +241,11 @@ export const adminApi = {
     return http.post<ApiEnvelope<AuditLogRecord>>(
       `/api/v1/patient/admin/ai-audits/${encodeURIComponent(auditUuid)}/review`,
       payload,
-      { headers: getAdminAuthHeaders() },
     )
   },
   exportAiAudits(query: AuditQuery = {}) {
     return http.get<Blob>('/api/v1/patient/admin/ai-audits/export', {
       params: query,
-      headers: getAdminAuthHeaders(),
       responseType: 'blob',
     })
   },
