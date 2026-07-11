@@ -76,6 +76,8 @@ export interface AuditQuery {
   module_name?: string
   source?: string
   validated?: boolean
+  created_from?: string
+  created_to?: string
   limit?: number
   offset?: number
 }
@@ -170,6 +172,24 @@ export interface PatientAdminListItem {
   created_at?: string | null
 }
 
+export interface AuditPagination {
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface AuditSummary {
+  total_count: number
+  validated_count: number
+  pending_count: number
+}
+
+export interface AuditLogPage {
+  items: AuditLogRecord[]
+  pagination: AuditPagination
+  summary: AuditSummary
+}
+
 export interface PatientAdminUpdatePayload {
   real_name: string
   gender: string
@@ -200,7 +220,7 @@ export const adminApi = {
     return http.post<ApiEnvelope<ApprovalResult>>(`/api/v1/patient/admin/scheduling-applications/${uuid}/reject`, { reason })
   },
   listAiAudits(query: AuditQuery = {}) {
-    return http.get<ApiEnvelope<AuditLogRecord[]>>('/api/v1/patient/admin/ai-audits', {
+    return http.get<ApiEnvelope<AuditLogPage>>('/api/v1/patient/admin/ai-audits', {
       params: query,
       headers: getAdminAuthHeaders(),
     })

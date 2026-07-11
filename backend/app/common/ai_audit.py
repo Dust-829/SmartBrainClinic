@@ -132,29 +132,19 @@ async def query_ai_audit_logs(
     created_to: Optional[datetime] = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    where_sql = ["1 = 1"]
-    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    where_sql, params = _build_audit_filters(
+        module_name=module_name,
+        source=source,
+        validated=validated,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    item_params = {**params, "limit": limit, "offset": offset}
 
-    if module_name:
-        where_sql.append("module_name = :module_name")
-        params["module_name"] = module_name
-    if source:
-        where_sql.append("source = :source")
-        params["source"] = source
-    if validated is not None:
-        where_sql.append("validated = :validated")
-        params["validated"] = validated
-    if created_from:
-        where_sql.append("created_at >= :created_from")
-        params["created_from"] = created_from
-    if created_to:
-        where_sql.append("created_at <= :created_to")
-        params["created_to"] = created_to
-
-    result = await session.execute(
+    item_result = await session.execute(
         text(
             f"""
             SELECT
@@ -176,9 +166,84 @@ async def query_ai_audit_logs(
             LIMIT :limit OFFSET :offset
             """
         ),
+        item_params,
+    )
+    item_rows = item_result.mappings().all()
+    items = [_serialize_audit_row(row) for row in item_rows]
+
+    summary_result = await session.execute(
+        text(
+            f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COALESCE(SUM(CASE WHEN validated THEN 1 ELSE 0 END), 0) AS validated_count,
+                COALESCE(SUM(CASE WHEN validated THEN 0 ELSE 1 END), 0) AS pending_count
+            FROM ai_audit_log
+            WHERE {' AND '.join(where_sql)}
+            """
+        ),
         params,
     )
-    return [_serialize_audit_row(row) for row in result.mappings().all()]
+    summary_row = summary_result.mappings().all()
+    summary = _build_audit_summary(summary_row[0] if summary_row else None, items)
+    return {
+        "items": items,
+        "pagination": {
+            "total": summary["total_count"],
+            "limit": limit,
+            "offset": offset,
+        },
+        "summary": summary,
+    }
+
+
+def _build_audit_filters(
+    *,
+    module_name: Optional[str] = None,
+    source: Optional[str] = None,
+    validated: Optional[bool] = None,
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
+) -> tuple[list[str], dict[str, Any]]:
+    where_sql = ["1 = 1"]
+    params: dict[str, Any] = {}
+
+    if module_name:
+        where_sql.append("module_name = :module_name")
+        params["module_name"] = module_name
+    if source:
+        where_sql.append("source = :source")
+        params["source"] = source
+    if validated is not None:
+        where_sql.append("validated = :validated")
+        params["validated"] = validated
+    if created_from:
+        where_sql.append("created_at >= :created_from")
+        params["created_from"] = created_from
+    if created_to:
+        where_sql.append("created_at <= :created_to")
+        params["created_to"] = created_to
+    return where_sql, params
+
+
+def _build_audit_summary(row: Optional[dict[str, Any]], items: list[dict[str, Any]]) -> dict[str, int]:
+    total_count = _safe_int((row or {}).get("total_count"))
+    validated_count = _safe_int((row or {}).get("validated_count"))
+    pending_count = _safe_int((row or {}).get("pending_count"))
+
+    # Test doubles and degraded queries may not return aggregate aliases.
+    if total_count is None:
+        total_count = len(items)
+    if validated_count is None:
+        validated_count = sum(1 for item in items if item.get("validated"))
+    if pending_count is None:
+        pending_count = max(total_count - validated_count, 0)
+
+    return {
+        "total_count": total_count,
+        "validated_count": validated_count,
+        "pending_count": pending_count,
+    }
 
 
 def _get_engine() -> AsyncEngine:
@@ -263,3 +328,10 @@ def _json_load(value: Any) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return value
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

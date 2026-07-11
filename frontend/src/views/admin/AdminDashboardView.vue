@@ -103,7 +103,7 @@ async function loadDashboard() {
     ])
 
     pendingApplications.value = results[0].status === 'fulfilled' ? results[0].value.data.data ?? [] : []
-    auditLogs.value = results[1].status === 'fulfilled' && results[1].value ? results[1].value.data.data ?? [] : []
+    auditLogs.value = results[1].status === 'fulfilled' && results[1].value ? results[1].value.data.data?.items ?? [] : []
     lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
     recentBills.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []
     doctors.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? [] : []

@@ -38,7 +38,7 @@ async function loadAnalytics() {
       adminApi.listPendingApplications(),
     ])
 
-    audits.value = results[0].status === 'fulfilled' && results[0].value ? results[0].value.data.data ?? [] : []
+    audits.value = results[0].status === 'fulfilled' && results[0].value ? results[0].value.data.data?.items ?? [] : []
     bills.value = results[1].status === 'fulfilled' ? results[1].value.data.data ?? [] : []
     lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
     approvals.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []

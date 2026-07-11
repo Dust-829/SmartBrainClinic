@@ -52,7 +52,7 @@ async function loadDashboard() {
 
     const [applicationsResult, auditsResult] = await Promise.allSettled(tasks)
     pendingApplications.value = applicationsResult.status === 'fulfilled' ? applicationsResult.value.data.data ?? [] : []
-    auditLogs.value = auditsResult.status === 'fulfilled' && auditsResult.value ? auditsResult.value.data.data ?? [] : []
+    auditLogs.value = auditsResult.status === 'fulfilled' && auditsResult.value ? auditsResult.value.data.data?.items ?? [] : []
   } catch {
     pendingApplications.value = []
     auditLogs.value = []
