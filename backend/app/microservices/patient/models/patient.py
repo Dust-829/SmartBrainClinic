@@ -98,7 +98,9 @@ class SchedulingApplication(SQLModel, table=True):
     employee_uuid: uuid_pkg.UUID = Field(nullable=False, index=True, description="提交申请的医生UUID")
     prompt: str = Field(sa_column=Column(Text, nullable=False), description="医生的排班诉求")
     status: str = Field(default="pending", max_length=20, index=True, description="状态: pending/approved/rejected")
+    reject_reason: Optional[str] = Field(default=None, sa_column=Column(Text))
     created_at: Optional[datetime] = Field(default_factory=datetime.now)
+    processed_at: Optional[datetime] = Field(default=None)
 
 class ScheduleDisruption(SQLModel, table=True):
     __tablename__ = "schedule_disruption"

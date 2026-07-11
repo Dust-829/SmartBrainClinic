@@ -885,7 +885,9 @@ CREATE TABLE public.scheduling_application (
     employee_uuid uuid NOT NULL,
     prompt text NOT NULL,
     status character varying(20) NOT NULL,
-    created_at timestamp without time zone
+    reject_reason text,
+    created_at timestamp without time zone,
+    processed_at timestamp without time zone
 );
 
 

@@ -6,7 +6,9 @@ export interface SchedulingApplicationRecord {
   employee_uuid: string
   prompt: string
   status: string
+  reject_reason?: string | null
   created_at?: string | null
+  processed_at?: string | null
 }
 
 export interface ScheduleGeneratePayload {
@@ -18,6 +20,7 @@ export interface ScheduleGenerateResult {
   start_date: string
   end_date: string
   generated_count: number
+  skipped_count: number
   success: boolean
 }
 
@@ -37,6 +40,9 @@ export interface ScheduleRulePayload {
 
 export interface ScheduleRuleResult {
   employee_uuid: string
+  week_rule?: string
+  regist_quota?: number
+  clinic_room_uuid?: string | null
   success: boolean
 }
 
@@ -53,6 +59,33 @@ export interface ScheduleActualResult {
   schedule_date?: string
   noon?: string
   regist_quota?: number
+  registered_count?: number
+  disruptions_created?: number
+  status?: string
+  clinic_room_uuid?: string | null
+  success: boolean
+}
+
+export interface ScheduleAiActionSummary {
+  action_type: string
+  target_date: string
+  noon: string
+  status: string
+  changed: boolean
+  final_regist_quota: number
+  registered_count: number
+  disruptions_created: number
+  clinic_room_uuid?: string | null
+  clamped_to_registered_count?: boolean
+}
+
+export interface ScheduleAiAdjustResult {
+  employee_uuid: string
+  employee_name?: string
+  llm_text_rule: string
+  actions_applied: number
+  disruptions_created: number
+  action_summaries: ScheduleAiActionSummary[]
   success: boolean
 }
 
@@ -60,7 +93,9 @@ export interface ApprovalResult {
   uuid: string
   status: string
   reason?: string
-  ai_result?: unknown
+  reject_reason?: string | null
+  processed_at?: string | null
+  ai_result?: ScheduleAiAdjustResult | Record<string, unknown>
 }
 
 export interface AuditQuery {
@@ -210,7 +245,7 @@ export const adminApi = {
     return http.post<ApiEnvelope<ScheduleGenerateResult>>('/api/v1/patient/schedule/generate', payload)
   },
   adjustScheduleWithAi(payload: ScheduleAiAdjustPayload) {
-    return http.post<ApiEnvelope<Record<string, unknown>>>('/api/v1/patient/ai-schedule', payload)
+    return http.post<ApiEnvelope<ScheduleAiAdjustResult>>('/api/v1/patient/ai-schedule', payload)
   },
   updateSchedulingRule(payload: ScheduleRulePayload) {
     return http.post<ApiEnvelope<ScheduleRuleResult>>('/api/v1/patient/admin/scheduling-rules', payload)
@@ -233,15 +268,10 @@ export const adminApi = {
     })
   },
   getAiAuditDetail(auditUuid: string) {
-    return http.get<ApiEnvelope<AuditLogRecord>>(`/api/v1/patient/admin/ai-audits/${encodeURIComponent(auditUuid)}`, {
-      headers: getAdminAuthHeaders(),
-    })
+    return http.get<ApiEnvelope<AuditLogRecord>>(`/api/v1/patient/admin/ai-audits/${encodeURIComponent(auditUuid)}`)
   },
   reviewAiAudit(auditUuid: string, payload: AuditReviewPayload) {
-    return http.post<ApiEnvelope<AuditLogRecord>>(
-      `/api/v1/patient/admin/ai-audits/${encodeURIComponent(auditUuid)}/review`,
-      payload,
-    )
+    return http.post<ApiEnvelope<AuditLogRecord>>(`/api/v1/patient/admin/ai-audits/${encodeURIComponent(auditUuid)}/review`, payload)
   },
   exportAiAudits(query: AuditQuery = {}) {
     return http.get<Blob>('/api/v1/patient/admin/ai-audits/export', {

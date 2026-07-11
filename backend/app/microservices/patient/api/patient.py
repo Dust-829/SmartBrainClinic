@@ -134,6 +134,7 @@ class AdminUpdateRuleRequest(BaseModel):
     week_rule: Optional[str] = None
     llm_text_rule: Optional[str] = None
     regist_quota: Optional[int] = None
+    clinic_room_uuid: Optional[uuid_pkg.UUID] = None
 
 
 class AdminUpdateActualRequest(BaseModel):
@@ -141,6 +142,7 @@ class AdminUpdateActualRequest(BaseModel):
     schedule_date: str
     noon: str
     regist_quota: int
+    clinic_room_uuid: Optional[uuid_pkg.UUID] = None
 
 
 class AuditReviewRequest(BaseModel):
@@ -581,15 +583,22 @@ async def create_scheduling_application(data: SchedulingApplicationCreate, sessi
     try:
         res = await svc.create_scheduling_application(session, data.employee_uuid, data.prompt)
         return success(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get('/admin/scheduling-applications', summary='API endpoint')
-async def get_pending_applications(session: AsyncSession = Depends(get_session)):
+async def get_pending_applications(
+    status: Optional[str] = 'pending',
+    session: AsyncSession = Depends(get_session),
+):
     try:
-        res = await svc.get_pending_scheduling_applications(session)
+        res = await svc.get_pending_scheduling_applications(session, status=status)
         return success(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -629,6 +638,8 @@ async def admin_update_scheduling_rule(data: AdminUpdateRuleRequest, session: As
     try:
         res = await svc.admin_update_scheduling_rule(session, data.model_dump(exclude_unset=True))
         return success(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -638,6 +649,8 @@ async def admin_update_scheduling_actual(data: AdminUpdateActualRequest, session
     try:
         res = await svc.admin_update_scheduling_actual(session, data.model_dump())
         return success(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

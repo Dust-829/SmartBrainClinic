@@ -10,6 +10,11 @@ const loading = ref(false)
 const workingUuid = ref('')
 const rejectReasons = ref<Record<string, string>>({})
 
+function formatDateTime(value?: string | null) {
+  if (!value) return '暂无创建时间'
+  return value.replace('T', ' ').slice(0, 16)
+}
+
 async function loadApplications() {
   loading.value = true
   try {
@@ -26,8 +31,12 @@ async function approve(uuid: string) {
   if (workingUuid.value) return
   workingUuid.value = uuid
   try {
-    await adminApi.approveSchedulingApplication(uuid)
-    ElMessage.success('审批通过，已触发后续排班处理')
+    const response = await adminApi.approveSchedulingApplication(uuid)
+    const result = response.data.data
+    const applied = typeof result.ai_result === 'object' && result.ai_result && 'actions_applied' in result.ai_result
+      ? (result.ai_result as { actions_applied?: number }).actions_applied ?? 0
+      : 0
+    ElMessage.success(`审批通过，已应用 ${applied} 个排班动作`)
     await loadApplications()
   } finally {
     workingUuid.value = ''
@@ -38,8 +47,9 @@ async function reject(uuid: string) {
   if (workingUuid.value) return
   workingUuid.value = uuid
   try {
-    await adminApi.rejectSchedulingApplication(uuid, rejectReasons.value[uuid] || '')
-    ElMessage.success('申请已驳回')
+    const response = await adminApi.rejectSchedulingApplication(uuid, rejectReasons.value[uuid] || '')
+    const result = response.data.data
+    ElMessage.success(`申请已驳回${result.reject_reason ? `：${result.reject_reason}` : ''}`)
     await loadApplications()
   } finally {
     workingUuid.value = ''
@@ -68,7 +78,7 @@ loadApplications()
           <div class="approval-card__head">
             <div>
               <strong>{{ item.employee_uuid }}</strong>
-              <span>{{ item.created_at?.replace('T', ' ').slice(0, 16) || '暂无创建时间' }}</span>
+              <span>{{ formatDateTime(item.created_at) }}</span>
             </div>
             <em>{{ item.status }}</em>
           </div>
