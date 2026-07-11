@@ -85,15 +85,15 @@ function logout() {
 .admin-layout {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 248px minmax(0, 1fr);
   background: var(--admin-page-bg);
 }
 
 .admin-layout__aside {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  gap: 18px;
-  padding: 88px 24px 24px;
+  gap: 14px;
+  padding: 72px 18px 18px;
   border-right: 1px solid var(--admin-border);
   background: var(--admin-surface);
   color: var(--admin-text);
@@ -106,7 +106,7 @@ function logout() {
 }
 
 .admin-layout__brand strong {
-  font-size: 28px;
+  font-size: 24px;
   line-height: 1.1;
 }
 
@@ -120,12 +120,12 @@ function logout() {
 .admin-layout__nav {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 6px;
 }
 
 .admin-layout__nav-link {
   display: block;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: var(--admin-radius-md);
   color: var(--admin-text);
   border: 1px solid transparent;
@@ -144,7 +144,7 @@ function logout() {
 }
 
 .admin-layout__session {
-  padding: 16px;
+  padding: 14px;
   border-radius: var(--admin-radius-lg);
   background: linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%);
   border: 1px solid var(--admin-border);
@@ -157,8 +157,8 @@ function logout() {
 }
 
 .admin-layout__session button {
-  min-height: 40px;
-  margin-top: 8px;
+  min-height: 36px;
+  margin-top: 6px;
   border: 0;
   border-radius: var(--admin-radius-sm);
   background: var(--admin-accent);
@@ -171,20 +171,20 @@ function logout() {
 }
 
 .admin-layout__banner {
-  margin: 18px 28px 0;
-  padding: 12px 16px;
+  margin: 10px 16px 0;
+  padding: 8px 12px;
   border-radius: var(--admin-radius-md);
   border: 1px solid rgba(245, 158, 11, 0.18);
   background: var(--admin-warn-soft);
   color: #92400e;
-  line-height: 1.6;
+  line-height: 1.35;
 }
 
 .admin-layout__header {
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  padding: 28px 28px 8px;
+  padding: 10px 16px 2px;
 }
 
 .admin-layout__eyebrow {
@@ -195,13 +195,13 @@ function logout() {
 }
 
 .admin-layout__header h1 {
-  margin: 8px 0 0;
-  font-size: 30px;
+  margin: 2px 0 0;
+  font-size: 20px;
   color: var(--admin-text);
 }
 
 .admin-layout__main {
-  padding: 24px 28px 32px;
+  padding: 8px 16px 16px;
 }
 
 .admin-layout__main.is-login {

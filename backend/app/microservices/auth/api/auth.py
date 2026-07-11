@@ -182,6 +182,15 @@ async def list_doctors(dept_uuid: str = None, session: AsyncSession = Depends(ge
     return success(docs)
 
 
+@router.get("/admin/resource-stats", summary="管理员首页资源统计")
+async def get_admin_resource_stats(session: AsyncSession = Depends(get_session)):
+    try:
+        stats = await svc.get_admin_resource_stats(session)
+        return success(stats)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/doctors/by-dept-code/{code}", summary="通过科室编码获取医生列表")
 async def list_doctors_by_dept_code(code: str, session: AsyncSession = Depends(get_session)):
     dept = await svc.get_department_by_code(session, code)

@@ -40,6 +40,13 @@ export interface EmployeeRecord {
   ai_eval_score?: string | number | null
 }
 
+export interface AdminResourceStats {
+  doctor_total: number
+  outpatient_employee_total: number
+  department_total: number
+  clinic_room_total: number
+}
+
 export interface DoctorProfileUpdatePayload {
   realname: string
   dept_code?: string
@@ -51,6 +58,9 @@ export interface DoctorProfileUpdatePayload {
 export const authApi = {
   listDoctorAccounts(params: { keyword?: string; limit?: number } = {}) {
     return http.get<ApiEnvelope<DoctorDirectoryItem[]>>('/api/v1/auth/admin/doctors', { params })
+  },
+  getAdminResourceStats() {
+    return http.get<ApiEnvelope<AdminResourceStats>>('/api/v1/auth/admin/resource-stats')
   },
   listDoctorsByDepartmentCode(deptCode: string) {
     return http.get<ApiEnvelope<DoctorDirectoryItem[]>>(`/api/v1/auth/doctors/by-dept-code/${encodeURIComponent(deptCode)}`)

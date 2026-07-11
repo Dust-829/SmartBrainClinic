@@ -193,6 +193,13 @@ async def list_admin_patients(session: AsyncSession, keyword: str = "", limit: i
     return [_serialize_patient(patient) for patient in result.scalars().all()]
 
 
+async def get_admin_patient_stats(session: AsyncSession) -> dict[str, int]:
+    patient_total = (
+        await session.execute(select(func.count()).select_from(Patient))
+    ).scalar_one()
+    return {"patient_total": int(patient_total or 0)}
+
+
 async def update_admin_patient(session: AsyncSession, patient_uuid: uuid_pkg.UUID, data: dict) -> dict:
     patient = await get_patient_by_uuid(session, patient_uuid)
     if not patient:

@@ -576,6 +576,15 @@ async def list_admin_patients(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get('/admin/stats', summary='API endpoint')
+async def get_admin_patient_stats(session: AsyncSession = Depends(get_session)):
+    try:
+        stats = await svc.get_admin_patient_stats(session)
+        return success(stats)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.put('/admin/patients/{uuid}', summary='API endpoint')
 async def update_admin_patient(
     uuid: uuid_pkg.UUID,

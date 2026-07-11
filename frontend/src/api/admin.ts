@@ -197,6 +197,10 @@ export interface PatientAdminUpdatePayload {
   home_address?: string
 }
 
+export interface PatientAdminStats {
+  patient_total: number
+}
+
 export const adminApi = {
   generateSchedule(payload: ScheduleGeneratePayload) {
     return http.post<ApiEnvelope<ScheduleGenerateResult>>('/api/v1/patient/schedule/generate', payload)
@@ -251,6 +255,9 @@ export const adminApi = {
   },
   listPatients(params: { keyword?: string; limit?: number } = {}) {
     return http.get<ApiEnvelope<PatientAdminListItem[]>>('/api/v1/patient/admin/patients', { params })
+  },
+  getPatientAdminStats() {
+    return http.get<ApiEnvelope<PatientAdminStats>>('/api/v1/patient/admin/stats')
   },
   createPatient(payload: PatientCreatePayload) {
     return http.post<ApiEnvelope<PatientRecord>>('/api/v1/patient', payload)

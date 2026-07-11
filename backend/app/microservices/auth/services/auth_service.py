@@ -1,6 +1,6 @@
 import uuid as uuid_pkg
 from typing import Optional
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.auth import Employee, Department, RegistLevel, SettleCategory, ClinicRoom
 import json
@@ -143,6 +143,49 @@ async def get_employees_by_dept_type(session: AsyncSession, dept_type: str) -> l
         emp_dict = emp.model_dump(exclude={"password", "expertise_vector"}, mode="json")
         emps.append(emp_dict)
     return emps
+
+
+async def get_admin_resource_stats(session: AsyncSession) -> dict[str, int]:
+    doctor_total = (
+        await session.execute(
+            select(func.count()).select_from(Employee).where(
+                Employee.delmark == 1,
+                Employee.regist_level_id.isnot(None),
+            )
+        )
+    ).scalar_one()
+
+    outpatient_employee_total = (
+        await session.execute(
+            select(func.count())
+            .select_from(Employee)
+            .join(Department, Employee.dept_id == Department.id)
+            .where(
+                Employee.delmark == 1,
+                Department.delmark == 1,
+                Department.dept_type == "outpatient",
+            )
+        )
+    ).scalar_one()
+
+    department_total = (
+        await session.execute(
+            select(func.count()).select_from(Department).where(Department.delmark == 1)
+        )
+    ).scalar_one()
+
+    clinic_room_total = (
+        await session.execute(
+            select(func.count()).select_from(ClinicRoom).where(ClinicRoom.delmark == 1)
+        )
+    ).scalar_one()
+
+    return {
+        "doctor_total": int(doctor_total or 0),
+        "outpatient_employee_total": int(outpatient_employee_total or 0),
+        "department_total": int(department_total or 0),
+        "clinic_room_total": int(clinic_room_total or 0),
+    }
 
 async def search_similar_doctors(session: AsyncSession, dept_id: int, gender_preference: str, query_vector: list[float], limit: int = 5) -> list:
 

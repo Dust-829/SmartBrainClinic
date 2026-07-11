@@ -1,91 +1,325 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import * as echarts from 'echarts'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import {
   adminApi,
   type AuditLogRecord,
   type BillRecord,
   type DrugListItem,
+  type PatientAdminListItem,
+  type PatientAdminStats,
   type SchedulingApplicationRecord,
 } from '@/api/admin'
-import {
-  authApi,
-  type ClinicRoomRecord,
-  type DepartmentRecord,
-  type DoctorDirectoryItem,
-  type EmployeeRecord,
-} from '@/api/auth'
-import { http, type ApiEnvelope } from '@/api/http'
+import { authApi, type AdminResourceStats, type DepartmentRecord } from '@/api/auth'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useAdminSessionStore } from '@/stores/adminSession'
 
 const session = useAdminSessionStore()
+
+const DEFAULT_RESOURCE_STATS: AdminResourceStats = {
+  doctor_total: 0,
+  outpatient_employee_total: 0,
+  department_total: 0,
+  clinic_room_total: 0,
+}
+
+const DEFAULT_PATIENT_STATS: PatientAdminStats = {
+  patient_total: 0,
+}
+
+const REFUND_PRIORITY_STATES = new Set(['退款中', '退款失败', 'REFUNDING', 'REFUND_FAILED'])
+
 const loading = ref(false)
+const lastUpdatedAt = ref('')
 const pendingApplications = ref<SchedulingApplicationRecord[]>([])
 const auditLogs = ref<AuditLogRecord[]>([])
 const lowStockDrugs = ref<DrugListItem[]>([])
 const recentBills = ref<BillRecord[]>([])
-const doctors = ref<DoctorDirectoryItem[]>([])
-const outpatientEmployees = ref<EmployeeRecord[]>([])
-const department = ref<DepartmentRecord | null>(null)
-const room = ref<ClinicRoomRecord | null>(null)
+const recentPatients = ref<PatientAdminListItem[]>([])
+const resourceStats = ref<AdminResourceStats>({ ...DEFAULT_RESOURCE_STATS })
+const patientStats = ref<PatientAdminStats>({ ...DEFAULT_PATIENT_STATS })
+const defaultDepartment = ref<DepartmentRecord | null>(null)
+
+const resourceChartRef = ref<HTMLDivElement | null>(null)
+const stockChartRef = ref<HTMLDivElement | null>(null)
+const riskChartRef = ref<HTMLDivElement | null>(null)
+
+const resourceChartInstance = ref<any>(null)
+const stockChartInstance = ref<any>(null)
+const riskChartInstance = ref<any>(null)
 
 const auditAvailable = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
+const aiRiskLogs = computed(() => auditLogs.value.filter((item) => !item.validated))
+const aiRiskMetric = computed(() => (auditAvailable.value ? aiRiskLogs.value.length : '未配置'))
 
-const metricCards = computed(() => [
-  { label: '待审批排班', value: pendingApplications.value.length, tone: 'indigo' },
-  { label: 'AI 审计记录', value: auditAvailable.value ? auditLogs.value.length : '未配置', tone: 'sky' },
-  { label: '低库存药品', value: lowStockDrugs.value.length, tone: 'amber' },
-  { label: '最近账单', value: recentBills.value.length, tone: 'emerald' },
-  { label: '医生账号', value: doctors.value.length, tone: 'slate' },
+const heroMetrics = computed(() => [
+  { label: '待审批', value: pendingApplications.value.length },
+  { label: 'AI 风险', value: aiRiskMetric.value },
+  { label: '低库存', value: lowStockDrugs.value.length },
+  { label: '患者总量', value: patientStats.value.patient_total },
 ])
 
-const insightItems = computed(() => {
-  const items = [
-    { label: '待复核 AI 建议', value: auditLogs.value.filter((item) => !item.validated).length, max: Math.max(auditLogs.value.length, 1) },
-    { label: '待审批动作', value: pendingApplications.value.length, max: Math.max(pendingApplications.value.length, 1) },
-    { label: '低库存药品', value: lowStockDrugs.value.length, max: Math.max(lowStockDrugs.value.length, 1) },
-    { label: '门诊人员资源', value: outpatientEmployees.value.length, max: Math.max(outpatientEmployees.value.length, 1) },
-  ]
+const resourceMetrics = computed(() => [
+  { label: '医生总量', value: resourceStats.value.doctor_total },
+  { label: '门诊人员', value: resourceStats.value.outpatient_employee_total },
+  { label: '科室总量', value: resourceStats.value.department_total },
+  { label: '诊室总量', value: resourceStats.value.clinic_room_total },
+])
 
+const lowStockChartData = computed(() => {
+  const items = lowStockDrugs.value.slice(0, 5)
   return items.map((item) => ({
-    ...item,
-    ratio: Math.min(100, Math.round((item.value / item.max) * 100)),
+    uuid: item.uuid,
+    label: item.drug_name,
+    stock: Math.max(item.stock, 0),
+    limit: Math.max(item.min_stock_limit ?? 0, 1),
   }))
 })
 
-const moduleSummary = computed(() => {
-  const counts = new Map<string, number>()
-  for (const item of auditLogs.value) {
-    counts.set(item.module_name, (counts.get(item.module_name) ?? 0) + 1)
+const aiRiskChartData = computed(() => {
+  if (!auditAvailable.value) {
+    return { total: 0, pending: 0, validated: 0, pendingRatio: 0 }
   }
-
-  return [
-    { label: 'triage', value: counts.get('triage') ?? 0 },
-    { label: 'scheduling', value: counts.get('scheduling') ?? 0 },
-    { label: 'prescription', value: counts.get('prescription') ?? 0 },
-  ]
+  const total = auditLogs.value.length
+  const pending = aiRiskLogs.value.length
+  const validated = Math.max(total - pending, 0)
+  const pendingRatio = total ? Math.round((pending / total) * 100) : 0
+  return { total, pending, validated, pendingRatio }
 })
 
-const roomCandidates = ['CT一室', '门诊一诊室', '脑电图室'] as const
+const keyBills = computed(() => {
+  const prioritized = recentBills.value.filter((item) => REFUND_PRIORITY_STATES.has(item.bill_state))
+  if (prioritized.length >= 2) return prioritized.slice(0, 2)
+  if (prioritized.length === 1) {
+    const fallback = recentBills.value.find((item) => item.uuid !== prioritized[0].uuid)
+    return fallback ? [...prioritized, fallback] : prioritized
+  }
+  return recentBills.value.slice(0, 2)
+})
 
 function formatDateTime(value?: string | null) {
   if (!value) return '暂无时间'
   return value.replace('T', ' ').slice(0, 16)
 }
 
-async function tryGetClinicRoomByName(name: string) {
-  const response = await http.get<ApiEnvelope<ClinicRoomRecord>>(`/api/v1/auth/clinic-room/name/${encodeURIComponent(name)}`, {
-    validateStatus: (status) => status === 200 || status === 404,
-  })
-
-  return response.status === 200 ? response.data.data ?? null : null
+function formatGender(value?: string | null) {
+  if (!value) return '未知'
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'female' || normalized === '女') return '女'
+  if (normalized === 'male' || normalized === '男') return '男'
+  return value
 }
 
-async function loadRoomSnapshot() {
-  const results = await Promise.allSettled(roomCandidates.map((name) => tryGetClinicRoomByName(name)))
-  const found = results.find((result) => result.status === 'fulfilled' && result.value)
-  room.value = found && found.status === 'fulfilled' ? found.value : null
+function maskPatientName(value?: string | null) {
+  const name = value?.trim() || '匿名患者'
+  if (name.length <= 1) return name
+  if (name.length === 2) return `${name[0]}*`
+  return `${name[0]}${'*'.repeat(name.length - 2)}${name[name.length - 1]}`
+}
+
+function getWarningText(item: AuditLogRecord) {
+  if (Array.isArray(item.warnings)) return item.warnings[0] || '待管理员复核'
+  if (typeof item.warnings === 'string' && item.warnings.trim()) return item.warnings.trim()
+  return '待管理员复核'
+}
+
+function ensureChart(target: HTMLDivElement | null, current: any) {
+  if (!target) return null
+  if (current && !current.isDisposed() && current.getDom() === target) return current
+  current?.dispose()
+  return echarts.init(target)
+}
+
+function renderResourceChart() {
+  resourceChartInstance.value = ensureChart(resourceChartRef.value, resourceChartInstance.value)
+  if (!resourceChartInstance.value) return
+
+  resourceChartInstance.value.setOption({
+    animationDuration: 350,
+    grid: { left: 8, right: 8, top: 18, bottom: 6, containLabel: true },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    xAxis: {
+      type: 'category',
+      data: resourceMetrics.value.map((item) => item.label),
+      axisTick: { show: false },
+      axisLine: { lineStyle: { color: '#dbe5f0' } },
+      axisLabel: { color: '#64748b', fontSize: 11 },
+    },
+    yAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: '#e2e8f0' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11 },
+    },
+    series: [
+      {
+        type: 'bar',
+        barWidth: 20,
+        data: resourceMetrics.value.map((item) => item.value),
+        itemStyle: {
+          borderRadius: [8, 8, 0, 0],
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: '#14b8a6' },
+            { offset: 1, color: '#0f766e' },
+          ]),
+        },
+      },
+    ],
+  })
+}
+
+function renderStockChart() {
+  if (!lowStockChartData.value.length) {
+    stockChartInstance.value?.dispose()
+    stockChartInstance.value = null
+    return
+  }
+
+  stockChartInstance.value = ensureChart(stockChartRef.value, stockChartInstance.value)
+  if (!stockChartInstance.value) return
+
+  stockChartInstance.value.setOption({
+    animationDuration: 350,
+    grid: { left: 82, right: 18, top: 6, bottom: 0 },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    xAxis: {
+      type: 'value',
+      splitLine: { lineStyle: { color: '#e2e8f0' } },
+      axisLabel: { color: '#94a3b8', fontSize: 11 },
+    },
+    yAxis: {
+      type: 'category',
+      data: lowStockChartData.value.map((item) => item.label),
+      axisTick: { show: false },
+      axisLine: { show: false },
+      axisLabel: { color: '#64748b', fontSize: 11 },
+    },
+    series: [
+      {
+        name: '预警值',
+        type: 'bar',
+        data: lowStockChartData.value.map((item) => item.limit),
+        barWidth: 12,
+        itemStyle: {
+          borderRadius: 999,
+          color: '#fed7aa',
+        },
+        z: 1,
+      },
+      {
+        name: '当前库存',
+        type: 'bar',
+        data: lowStockChartData.value.map((item) => item.stock),
+        barWidth: 12,
+        barGap: '-100%',
+        label: {
+          show: true,
+          position: 'right',
+          color: '#0f172a',
+          fontSize: 11,
+          formatter: ({ dataIndex }: { dataIndex: number }) => {
+            const item = lowStockChartData.value[dataIndex]
+            return `${item.stock}/${item.limit}`
+          },
+        },
+        itemStyle: {
+          borderRadius: 999,
+          color: new echarts.graphic.LinearGradient(1, 0, 0, 0, [
+            { offset: 0, color: '#f97316' },
+            { offset: 1, color: '#f59e0b' },
+          ]),
+        },
+        z: 2,
+      },
+    ],
+  })
+}
+
+function renderRiskChart() {
+  riskChartInstance.value = ensureChart(riskChartRef.value, riskChartInstance.value)
+  if (!riskChartInstance.value) return
+
+  const hasData = auditAvailable.value && aiRiskChartData.value.total > 0
+  const seriesData = hasData
+    ? [
+        { value: aiRiskChartData.value.pending, name: '待复核', itemStyle: { color: '#f59e0b' } },
+        { value: aiRiskChartData.value.validated, name: '已验证', itemStyle: { color: '#bfdbfe' } },
+      ]
+    : [{ value: 1, name: auditAvailable.value ? '暂无记录' : '未配置', itemStyle: { color: '#e2e8f0' } }]
+
+  riskChartInstance.value.setOption({
+    animationDuration: 350,
+    tooltip: { trigger: 'item' },
+    legend: {
+      bottom: 0,
+      icon: 'circle',
+      itemWidth: 8,
+      itemHeight: 8,
+      textStyle: { color: '#64748b', fontSize: 11 },
+    },
+    series: [
+      {
+        type: 'pie',
+        radius: ['60%', '82%'],
+        center: ['50%', '42%'],
+        label: { show: false },
+        labelLine: { show: false },
+        data: seriesData,
+      },
+    ],
+    graphic: [
+      {
+        type: 'group',
+        left: 'center',
+        top: '30%',
+        children: [
+          {
+            type: 'text',
+            left: -24,
+            style: {
+              text: hasData ? `${aiRiskChartData.value.pendingRatio}%` : '--',
+              fill: '#0f172a',
+              fontSize: 24,
+              fontWeight: 700,
+              textAlign: 'center',
+            },
+          },
+          {
+            type: 'text',
+            left: -34,
+            top: 28,
+            style: {
+              text: hasData ? '待复核占比' : auditAvailable.value ? '暂无审计记录' : 'AI 未配置',
+              fill: '#64748b',
+              fontSize: 11,
+              textAlign: 'center',
+            },
+          },
+        ],
+      },
+    ],
+  })
+}
+
+function renderCharts() {
+  renderResourceChart()
+  renderStockChart()
+  renderRiskChart()
+}
+
+function resizeCharts() {
+  resourceChartInstance.value?.resize()
+  stockChartInstance.value?.resize()
+  riskChartInstance.value?.resize()
+}
+
+function disposeCharts() {
+  resourceChartInstance.value?.dispose()
+  stockChartInstance.value?.dispose()
+  riskChartInstance.value?.dispose()
+  resourceChartInstance.value = null
+  stockChartInstance.value = null
+  riskChartInstance.value = null
 }
 
 async function loadDashboard() {
@@ -96,128 +330,642 @@ async function loadDashboard() {
       auditAvailable.value ? adminApi.listAiAudits({ limit: 12 }) : Promise.resolve(null),
       adminApi.listDrugs({ low_stock_only: true, limit: 12 }),
       adminApi.listBills({ limit: 12 }),
-      authApi.listDoctorsByDepartmentCode('SJWK'),
-      authApi.getEmployeesByDeptType('outpatient'),
+      authApi.getAdminResourceStats(),
+      adminApi.getPatientAdminStats(),
+      adminApi.listPatients({ limit: 4 }),
       authApi.getDepartmentByCode('SJWK'),
-      loadRoomSnapshot(),
     ])
 
     pendingApplications.value = results[0].status === 'fulfilled' ? results[0].value.data.data ?? [] : []
     auditLogs.value = results[1].status === 'fulfilled' && results[1].value ? results[1].value.data.data?.items ?? [] : []
     lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
     recentBills.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []
-    doctors.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? [] : []
-    outpatientEmployees.value = results[5].status === 'fulfilled' ? results[5].value.data.data ?? [] : []
-    department.value = results[6].status === 'fulfilled' ? results[6].value.data.data ?? null : null
+    resourceStats.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? { ...DEFAULT_RESOURCE_STATS } : { ...DEFAULT_RESOURCE_STATS }
+    patientStats.value = results[5].status === 'fulfilled' ? results[5].value.data.data ?? { ...DEFAULT_PATIENT_STATS } : { ...DEFAULT_PATIENT_STATS }
+    recentPatients.value = results[6].status === 'fulfilled' ? results[6].value.data.data ?? [] : []
+    defaultDepartment.value = results[7].status === 'fulfilled' ? results[7].value.data.data ?? null : null
+    lastUpdatedAt.value = new Date().toLocaleString('zh-CN', { hour12: false })
   } finally {
     loading.value = false
   }
 }
 
+watch([resourceStats, lowStockDrugs, auditLogs, auditAvailable], async () => {
+  await nextTick()
+  renderCharts()
+}, { deep: true })
+
 onMounted(() => {
-  loadDashboard()
+  void loadDashboard()
+  window.addEventListener('resize', resizeCharts)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', resizeCharts)
+  disposeCharts()
 })
 </script>
 
 <template>
-  <div class="admin-dashboard">
-    <section class="admin-dashboard__hero">
-      <div>
-        <span>首页大屏</span>
+  <div class="admin-dashboard admin-dashboard--workbench">
+    <section class="admin-dashboard__hero-shell">
+      <div class="admin-dashboard__hero-copy">
+        <span class="admin-dashboard__eyebrow">Admin Workbench</span>
         <h2>{{ session.staff?.displayName || '值班管理员' }}</h2>
-        <p>聚合审批、AI 审计、药房账单与资源摘要，作为管理员端主屏使用。</p>
+        <p>以待办与风险为第一优先级，整合审批、AI 审计、资源承载与库存账单预警。</p>
       </div>
-      <button type="button" :disabled="loading" @click="loadDashboard">
-        {{ loading ? '刷新中...' : '刷新看板' }}
-      </button>
+
+      <div class="admin-dashboard__hero-middle">
+        <div class="admin-dashboard__hero-meta admin-dashboard__hero-meta--audit">
+          <span>AI 审计</span>
+          <strong>{{ auditAvailable ? '已接入' : '未配置' }}</strong>
+        </div>
+      </div>
+
+      <div class="admin-dashboard__hero-side">
+        <div class="admin-dashboard__hero-meta">
+          <span>最近刷新</span>
+          <strong>{{ lastUpdatedAt || '尚未刷新' }}</strong>
+        </div>
+        <button type="button" :disabled="loading" @click="loadDashboard">
+          {{ loading ? '刷新中...' : '刷新看板' }}
+        </button>
+      </div>
+
+      <section class="admin-dashboard__hero-metrics">
+        <article v-for="metric in heroMetrics" :key="metric.label" class="admin-dashboard__metric-card">
+          <span>{{ metric.label }}</span>
+          <strong>{{ metric.value }}</strong>
+        </article>
+      </section>
     </section>
 
-    <section class="admin-dashboard__metrics">
-      <article v-for="metric in metricCards" :key="metric.label" :class="['admin-dashboard__metric', `is-${metric.tone}`]">
-        <span>{{ metric.label }}</span>
-        <strong>{{ metric.value }}</strong>
-      </article>
-    </section>
+    <div class="admin-dashboard__top-grid">
+      <SectionCard title="待办 / 风险" subtitle="将排班审批与 AI 风险放在首页的第一处理优先级。" class="admin-dashboard__top-main">
+        <div class="admin-dashboard__focus-grid">
+          <section class="admin-dashboard__focus-panel">
+            <header class="admin-dashboard__panel-head">
+              <div>
+                <strong>待审批排班</strong>
+                <p>优先处理影响排班主链路的待审批请求。</p>
+              </div>
+              <span class="admin-dashboard__pill">{{ pendingApplications.length }}</span>
+            </header>
 
-    <div class="admin-dashboard__grid">
-      <SectionCard title="运营态势" subtitle="按现有真实接口聚合后台关键状态。">
-        <div class="admin-dashboard__insights">
-          <article v-for="item in insightItems" :key="item.label" class="admin-dashboard__insight">
-            <div>
-              <strong>{{ item.label }}</strong>
-              <span>{{ item.value }}</span>
+            <div v-if="pendingApplications.length" class="admin-dashboard__compact-list">
+              <article v-for="item in pendingApplications.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item">
+                <div>
+                  <strong>{{ item.employee_uuid }}</strong>
+                  <p>{{ item.prompt }}</p>
+                </div>
+                <span>{{ formatDateTime(item.created_at) }}</span>
+              </article>
             </div>
-            <div class="admin-dashboard__bar">
-              <i :style="{ width: `${item.ratio}%` }" />
+            <div v-else class="admin-empty">当前没有待审批排班申请。</div>
+          </section>
+
+          <section class="admin-dashboard__focus-panel is-risk">
+            <header class="admin-dashboard__panel-head">
+              <div>
+                <strong>AI 风险摘要</strong>
+                <p>突出待复核 AI 建议，保留模块与风险说明。</p>
+              </div>
+              <span class="admin-dashboard__pill is-warning">{{ auditAvailable ? aiRiskLogs.length : '未配置' }}</span>
+            </header>
+
+            <div v-if="auditAvailable && aiRiskLogs.length" class="admin-dashboard__compact-list">
+              <article v-for="item in aiRiskLogs.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item">
+                <div>
+                  <strong>{{ item.module_name }}</strong>
+                  <p>{{ item.source || '未知来源' }} · {{ getWarningText(item) }}</p>
+                </div>
+                <span>{{ formatDateTime(item.created_at) }}</span>
+              </article>
             </div>
+            <div v-else-if="auditAvailable" class="admin-empty">当前没有待复核的 AI 风险记录。</div>
+            <div v-else class="admin-empty">未配置 `VITE_ADMIN_API_TOKEN`，首页不主动请求 AI 审计数据。</div>
+          </section>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="资源总量图" subtitle="把资源图表直接抬到首屏。" class="admin-dashboard__top-chart-card">
+        <div class="admin-dashboard__resource-metrics admin-dashboard__resource-metrics--compact">
+          <article v-for="metric in resourceMetrics" :key="metric.label" class="admin-dashboard__resource-stat">
+            <span>{{ metric.label }}</span>
+            <strong>{{ metric.value }}</strong>
+          </article>
+        </div>
+        <div ref="resourceChartRef" class="admin-dashboard__echart admin-dashboard__echart--top" />
+      </SectionCard>
+
+      <div class="admin-dashboard__top-side">
+        <SectionCard title="AI 风险占比" subtitle="首屏直接看到结构。" class="admin-dashboard__top-side-card">
+          <div ref="riskChartRef" class="admin-dashboard__echart admin-dashboard__echart--side" />
+        </SectionCard>
+      </div>
+    </div>
+
+    <div class="admin-dashboard__bottom-grid">
+      <SectionCard title="资源 / 患者" subtitle="资源摘要和最近患者切片继续保留，但不再占用过高首屏空间。">
+        <div class="admin-dashboard__resource-body">
+          <article class="admin-dashboard__resource-spotlight">
+            <span>资源总览</span>
+            <strong>{{ defaultDepartment?.dept_name || '默认科室摘要' }}</strong>
+            <p>{{ defaultDepartment?.dept_address || '首页聚合展示真实资源统计，不再使用样本数量冒充总量。' }}</p>
+            <dl class="admin-dashboard__resource-detail">
+              <div>
+                <dt>科室类型</dt>
+                <dd>{{ defaultDepartment?.dept_type || 'outpatient' }}</dd>
+              </div>
+              <div>
+                <dt>诊室总量</dt>
+                <dd>{{ resourceStats.clinic_room_total }}</dd>
+              </div>
+            </dl>
+          </article>
+
+          <article class="admin-dashboard__patient-slice">
+            <header class="admin-dashboard__panel-head">
+              <div>
+                <strong>最近患者记录</strong>
+                <p>首页只展示脱敏后的患者切片，不展示证件号和住址。</p>
+              </div>
+              <span class="admin-dashboard__pill">{{ recentPatients.length }}</span>
+            </header>
+
+            <div v-if="recentPatients.length" class="admin-dashboard__compact-list">
+              <article v-for="patient in recentPatients" :key="patient.uuid" class="admin-dashboard__compact-item">
+                <div>
+                  <strong>{{ maskPatientName(patient.real_name) }}</strong>
+                  <p>{{ patient.case_number }} · {{ formatGender(patient.gender) }}</p>
+                </div>
+                <span>{{ formatDateTime(patient.created_at) }}</span>
+              </article>
+            </div>
+            <div v-else class="admin-empty">当前没有可展示的患者记录。</div>
           </article>
         </div>
       </SectionCard>
 
-      <SectionCard
-        title="AI 模块统计"
-        :subtitle="auditAvailable ? '展示 AI 审计中已留下证据链的模块记录。' : '当前未配置 AI 审计 token。'"
-      >
-        <div class="admin-dashboard__module-list">
-          <article v-for="item in moduleSummary" :key="item.label">
-            <strong>{{ item.label }}</strong>
-            <p>{{ item.value }} 条</p>
+      <SectionCard title="库存 / 账单" subtitle="把库存图表也压缩到更高位置。">
+        <div class="admin-dashboard__risk-grid">
+          <article class="admin-dashboard__risk-panel">
+            <header class="admin-dashboard__panel-head">
+              <div>
+                <strong>低库存药品</strong>
+                <p>优先暴露需要补货或进一步关注的库存项。</p>
+              </div>
+              <span class="admin-dashboard__pill is-warning">{{ lowStockDrugs.length }}</span>
+            </header>
+
+            <div v-if="lowStockChartData.length" ref="stockChartRef" class="admin-dashboard__echart admin-dashboard__echart--stock" />
+
+            <div v-if="lowStockDrugs.length" class="admin-dashboard__compact-list">
+              <article v-for="drug in lowStockDrugs.slice(0, 3)" :key="drug.uuid" class="admin-dashboard__compact-item">
+                <div>
+                  <strong>{{ drug.drug_name }}</strong>
+                  <p>库存 {{ drug.stock }} / 预警 {{ drug.min_stock_limit ?? 0 }}</p>
+                </div>
+                <span>{{ drug.unit }}</span>
+              </article>
+            </div>
+            <div v-else class="admin-empty">当前没有低库存药品预警。</div>
+          </article>
+
+          <article class="admin-dashboard__risk-panel">
+            <header class="admin-dashboard__panel-head">
+              <div>
+                <strong>关键账单</strong>
+                <p>优先展示退款相关异常状态，否则回退到最近账单。</p>
+              </div>
+              <span class="admin-dashboard__pill">{{ keyBills.length }}</span>
+            </header>
+
+            <div v-if="keyBills.length" class="admin-dashboard__compact-list">
+              <article v-for="bill in keyBills" :key="bill.uuid" class="admin-dashboard__compact-item">
+                <div>
+                  <strong>{{ bill.bill_code }}</strong>
+                  <p>{{ bill.bill_state }} · {{ bill.total_amount }}</p>
+                </div>
+                <span>{{ formatDateTime(bill.pay_time) }}</span>
+              </article>
+            </div>
+            <div v-else class="admin-empty">当前没有可展示的关键账单记录。</div>
           </article>
         </div>
       </SectionCard>
     </div>
-
-    <div class="admin-dashboard__grid">
-      <SectionCard title="待办快照" subtitle="优先关注会影响主链路演示的后台动作。">
-        <div v-if="pendingApplications.length" class="admin-dashboard__list">
-          <article v-for="item in pendingApplications.slice(0, 4)" :key="item.uuid" class="admin-dashboard__list-item">
-            <strong>{{ item.employee_uuid }}</strong>
-            <p>{{ item.prompt }}</p>
-            <span>{{ formatDateTime(item.created_at) }}</span>
-          </article>
-        </div>
-        <div v-else class="admin-empty">当前没有待审批排班申请。</div>
-      </SectionCard>
-
-      <SectionCard title="账单与库存" subtitle="把药房和财务的风险信号收束到首页。">
-        <div class="admin-dashboard__stack">
-          <article class="admin-dashboard__stat-card">
-            <strong>低库存药品</strong>
-            <p>{{ lowStockDrugs[0]?.drug_name || '暂无低库存药品' }}</p>
-            <span v-if="lowStockDrugs[0]">库存 {{ lowStockDrugs[0].stock }} / 预警 {{ lowStockDrugs[0].min_stock_limit ?? 0 }}</span>
-          </article>
-          <article class="admin-dashboard__stat-card">
-            <strong>最近账单</strong>
-            <p>{{ recentBills[0]?.bill_code || '暂无账单记录' }}</p>
-            <span v-if="recentBills[0]">{{ recentBills[0].bill_state }} | {{ recentBills[0].total_amount }}</span>
-          </article>
-        </div>
-      </SectionCard>
-    </div>
-
-    <SectionCard title="资源概览" subtitle="复用基础资料能力，只展示资源摘要，不再承担维护入口。">
-      <div class="admin-dashboard__resources">
-        <article class="admin-dashboard__resource-card">
-          <span>医生资源</span>
-          <strong>{{ doctors.length }} 名</strong>
-          <p>默认按神经外科（SJWK）医生账号统计。</p>
-        </article>
-        <article class="admin-dashboard__resource-card">
-          <span>科室概览</span>
-          <strong>{{ department?.dept_name || '未加载' }}</strong>
-          <p>{{ department?.dept_address || '当前没有可展示的科室地址信息。' }}</p>
-        </article>
-        <article class="admin-dashboard__resource-card">
-          <span>门诊人员</span>
-          <strong>{{ outpatientEmployees.length }} 人</strong>
-          <p>按 `outpatient` 类型汇总人员资源。</p>
-        </article>
-        <article class="admin-dashboard__resource-card">
-          <span>诊室样本</span>
-          <strong>{{ room?.room_name || '未命中样本' }}</strong>
-          <p>{{ room?.room_code || '若后端无样本诊室，这里不再报错。' }}</p>
-        </article>
-      </div>
-    </SectionCard>
   </div>
 </template>
+
+<style scoped>
+.admin-dashboard--workbench {
+  gap: 12px;
+}
+
+.admin-dashboard__hero-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) 240px 280px;
+  grid-template-areas:
+    'copy audit side'
+    'metrics metrics metrics';
+  align-items: start;
+  justify-content: stretch;
+  column-gap: 20px;
+  row-gap: 10px;
+  padding: 16px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.22), transparent 34%),
+    linear-gradient(135deg, #0f766e 0%, #115e59 55%, #164e63 100%);
+  color: #ffffff;
+  box-shadow: 0 22px 48px rgba(15, 23, 42, 0.16);
+}
+
+.admin-dashboard__hero-copy,
+.admin-dashboard__hero-middle,
+.admin-dashboard__hero-side {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.admin-dashboard__hero-copy {
+  grid-area: copy;
+}
+
+.admin-dashboard__eyebrow {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-dashboard__hero-copy h2,
+.admin-dashboard__hero-copy p,
+.admin-dashboard__hero-meta span,
+.admin-dashboard__hero-meta strong,
+.admin-dashboard__metric-card span,
+.admin-dashboard__metric-card strong {
+  margin: 0;
+}
+
+.admin-dashboard__hero-copy h2 {
+  font-size: 28px;
+  line-height: 1.05;
+}
+
+.admin-dashboard__hero-copy p {
+  max-width: 48ch;
+  color: rgba(255, 255, 255, 0.88);
+  line-height: 1.4;
+}
+
+.admin-dashboard__hero-middle {
+  grid-area: audit;
+  align-items: stretch;
+}
+
+.admin-dashboard__hero-side {
+  grid-area: side;
+  justify-items: stretch;
+}
+
+.admin-dashboard__hero-meta {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.admin-dashboard__hero-meta--audit {
+  min-height: 100%;
+  align-content: center;
+}
+
+.admin-dashboard__hero-meta span {
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 12px;
+}
+
+.admin-dashboard__hero-meta strong {
+  font-size: 14px;
+}
+
+.admin-dashboard__hero-side button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+}
+
+.admin-dashboard__hero-side button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.admin-dashboard__hero-metrics {
+  grid-area: metrics;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.admin-dashboard__metric-card {
+  display: grid;
+  gap: 2px;
+  min-height: 72px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(10px);
+}
+
+.admin-dashboard__metric-card span {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-dashboard__metric-card strong {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.admin-dashboard__top-grid,
+.admin-dashboard__bottom-grid,
+.admin-dashboard__focus-grid,
+.admin-dashboard__risk-grid,
+.admin-dashboard__resource-body,
+.admin-dashboard__summary-list,
+.admin-dashboard__top-side {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-dashboard__top-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(332px, 0.86fr) minmax(280px, 0.74fr);
+}
+
+.admin-dashboard__bottom-grid {
+  grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
+}
+
+.admin-dashboard__focus-grid,
+.admin-dashboard__risk-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-dashboard__focus-panel,
+.admin-dashboard__risk-panel,
+.admin-dashboard__summary-card,
+.admin-dashboard__resource-spotlight,
+.admin-dashboard__patient-slice,
+.admin-dashboard__resource-stat {
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid var(--admin-border);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.admin-dashboard__focus-panel.is-risk {
+  background: linear-gradient(180deg, #fffaf0 0%, #ffffff 100%);
+}
+
+.admin-dashboard__panel-head,
+.admin-dashboard__compact-item,
+.admin-dashboard__resource-detail div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-dashboard__panel-head strong,
+.admin-dashboard__compact-item strong,
+.admin-dashboard__summary-card strong,
+.admin-dashboard__resource-spotlight strong,
+.admin-dashboard__resource-stat strong {
+  margin: 0;
+  color: var(--admin-text);
+}
+
+.admin-dashboard__panel-head p,
+.admin-dashboard__compact-item p,
+.admin-dashboard__summary-card p,
+.admin-dashboard__resource-spotlight p,
+.admin-dashboard__resource-stat span,
+.admin-dashboard__resource-detail dt,
+.admin-dashboard__resource-detail dd,
+.admin-dashboard__compact-item span,
+.admin-dashboard__summary-card span {
+  margin: 0;
+  color: var(--admin-text-muted);
+  line-height: 1.45;
+}
+
+.admin-dashboard__pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--admin-accent-soft);
+  color: var(--admin-accent-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.admin-dashboard__pill.is-warning {
+  background: var(--admin-warn-soft);
+  color: #b45309;
+}
+
+.admin-dashboard__compact-list,
+.admin-dashboard__resource-metrics,
+.admin-dashboard__summary-list--compact {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-dashboard__resource-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-dashboard__resource-metrics--compact {
+  gap: 8px;
+}
+
+.admin-dashboard__resource-stat {
+  display: grid;
+  gap: 4px;
+  min-height: 68px;
+}
+
+.admin-dashboard__resource-stat span {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-dashboard__resource-stat strong {
+  font-size: 20px;
+}
+
+.admin-dashboard__echart {
+  width: 100%;
+  height: 156px;
+  margin-top: 4px;
+}
+
+.admin-dashboard__echart--top {
+  height: 156px;
+}
+
+.admin-dashboard__echart--side {
+  height: 140px;
+}
+
+.admin-dashboard__echart--stock {
+  height: 128px;
+}
+
+.admin-dashboard__resource-body {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+  gap: 10px;
+}
+
+.admin-dashboard__resource-spotlight {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-dashboard__resource-spotlight span {
+  color: var(--admin-accent);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.admin-dashboard__resource-spotlight strong {
+  font-size: 22px;
+}
+
+.admin-dashboard__resource-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-dashboard__resource-detail dd {
+  color: var(--admin-text);
+  font-weight: 700;
+}
+
+.admin-dashboard__compact-item {
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid #dbe5f0;
+  background: #ffffff;
+}
+
+.admin-dashboard__compact-item strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.admin-dashboard__compact-item span {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.admin-dashboard__summary-card strong {
+  font-size: 18px;
+}
+
+.admin-dashboard__summary-list--compact .admin-dashboard__summary-card {
+  padding: 10px;
+}
+
+@media (max-width: 1440px) {
+  .admin-dashboard__hero-shell {
+    grid-template-columns: minmax(0, 1.1fr) 220px 240px;
+    column-gap: 16px;
+  }
+
+  .admin-dashboard__top-grid {
+    grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.65fr) minmax(240px, 0.65fr);
+  }
+
+  .admin-dashboard__top-side {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1280px) {
+  .admin-dashboard__hero-shell {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      'copy copy'
+      'audit side'
+      'metrics metrics';
+  }
+
+  .admin-dashboard__top-grid,
+  .admin-dashboard__top-grid,
+  .admin-dashboard__bottom-grid,
+  .admin-dashboard__resource-body,
+  .admin-dashboard__top-side {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1080px) {
+  .admin-dashboard__hero-metrics,
+  .admin-dashboard__resource-metrics,
+  .admin-dashboard__focus-grid,
+  .admin-dashboard__risk-grid,
+  .admin-dashboard__resource-detail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-dashboard--workbench {
+    gap: 12px;
+  }
+
+  .admin-dashboard__hero-shell {
+    padding: 14px;
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'copy'
+      'audit'
+      'side'
+      'metrics';
+  }
+
+  .admin-dashboard__hero-metrics,
+  .admin-dashboard__resource-metrics,
+  .admin-dashboard__focus-grid,
+  .admin-dashboard__risk-grid,
+  .admin-dashboard__resource-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-dashboard__panel-head,
+  .admin-dashboard__compact-item {
+    flex-direction: column;
+  }
+}
+</style>
