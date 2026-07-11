@@ -185,6 +185,7 @@ async function submit() {
       patient_uuid: session.patient.uuid,
       employee_uuid: flow.selectedDoctor.doctor_uuid,
       scheduling_time_slot_uuid: flow.selectedTimeSlotUuid,
+      triage_session_uuid: flow.triageSessionUuid || undefined,
       symptoms: flow.symptoms,
       is_emergency: false,
     })

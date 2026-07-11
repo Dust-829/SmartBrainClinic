@@ -1,7 +1,42 @@
+import asyncio
 import sys
-import httpx
 import uuid as uuid_pkg
+
+import httpx
+
 from app.common.nacos_client import nacos_manager
+
+_DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
+_DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+_client_lock = asyncio.Lock()
+_shared_async_client: httpx.AsyncClient | None = None
+
+
+async def get_shared_async_client() -> httpx.AsyncClient:
+    global _shared_async_client
+    if _shared_async_client is not None:
+        return _shared_async_client
+
+    async with _client_lock:
+        if _shared_async_client is None:
+            _shared_async_client = httpx.AsyncClient(
+                timeout=_DEFAULT_TIMEOUT,
+                limits=_DEFAULT_LIMITS,
+            )
+    return _shared_async_client
+
+
+async def close_shared_async_client() -> None:
+    global _shared_async_client
+    if _shared_async_client is None:
+        return
+
+    async with _client_lock:
+        if _shared_async_client is None:
+            return
+        client = _shared_async_client
+        _shared_async_client = None
+        await client.aclose()
 
 class BaseClient:
     @staticmethod
@@ -47,51 +82,51 @@ class BaseClient:
 
     @staticmethod
     async def get(url: str, params: dict = None):
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, params=params)
-            if resp.status_code == 200:
-                return resp.json()["data"]
-            return None
+        client = await get_shared_async_client()
+        resp = await client.get(url, params=params)
+        if resp.status_code == 200:
+            return resp.json()["data"]
+        return None
 
     @staticmethod
     async def get_required(url: str, params: dict = None):
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, params=params)
-            if resp.status_code == 200:
-                return resp.json()["data"]
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise ValueError(f"下游服务调用失败 {resp.status_code}: {detail}")
+        client = await get_shared_async_client()
+        resp = await client.get(url, params=params)
+        if resp.status_code == 200:
+            return resp.json()["data"]
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        raise ValueError(f"下游服务调用失败 {resp.status_code}: {detail}")
 
     @staticmethod
     async def put(url: str, params: dict = None):
-        async with httpx.AsyncClient() as client:
-            resp = await client.put(url, params=params)
-            if resp.status_code == 200:
-                return resp.json()["data"]
-            return None
+        client = await get_shared_async_client()
+        resp = await client.put(url, params=params)
+        if resp.status_code == 200:
+            return resp.json()["data"]
+        return None
 
     @staticmethod
     async def post(url: str, json_data: dict = None):
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=json_data)
-            if resp.status_code in (200, 201):
-                return resp.json()["data"]
-            return None
+        client = await get_shared_async_client()
+        resp = await client.post(url, json=json_data)
+        if resp.status_code in (200, 201):
+            return resp.json()["data"]
+        return None
 
     @staticmethod
     async def post_required(url: str, json_data: dict = None):
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=json_data)
-            if resp.status_code in (200, 201):
-                return resp.json()["data"]
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise ValueError(f"下游服务调用失败 {resp.status_code}: {detail}")
+        client = await get_shared_async_client()
+        resp = await client.post(url, json=json_data)
+        if resp.status_code in (200, 201):
+            return resp.json()["data"]
+        try:
+            detail = resp.json().get("detail", resp.text)
+        except Exception:
+            detail = resp.text
+        raise ValueError(f"下游服务调用失败 {resp.status_code}: {detail}")
 
 
 class AuthClient:
@@ -159,6 +194,11 @@ class PatientClient:
     @staticmethod
     async def get_register(uuid: uuid_pkg.UUID):
         url = f"{BaseClient.get_url('patient')}/register/{uuid}"
+        return await BaseClient.get(url)
+
+    @staticmethod
+    async def get_register_ai_context(register_uuid: uuid_pkg.UUID):
+        url = f"{BaseClient.get_url('patient')}/register/{register_uuid}/ai-context"
         return await BaseClient.get(url)
 
     @staticmethod

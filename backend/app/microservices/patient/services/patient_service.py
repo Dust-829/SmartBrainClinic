@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.patient import Patient, Register, SchedulingActual, SchedulingTimeSlot, SchedulingRule, PatientFeedback, OutboxEvent, SchedulingApplication, ScheduleDisruption
 from .internal_client import AuthClient
 from .ai_scheduling import run_ai_scheduling
+from app.common.ai_conversation import get_ai_conversation_session, update_ai_conversation_session
 from app.common.enums import BillState, VisitState
 from app.common.idempotency import begin_idempotency, complete_idempotency
 from app.common.state_machine import ensure_visit_transition
@@ -655,6 +656,15 @@ async def create_online_register(session: AsyncSession, data: dict) -> dict:
     if not patient:
         raise ValueError("患者不存在")
 
+    triage_session_uuid = data.get("triage_session_uuid")
+    triage_session = None
+    if triage_session_uuid:
+        triage_session = await get_ai_conversation_session(session, triage_session_uuid)
+        if not triage_session:
+            raise ValueError("AI 分诊会话不存在，请重新开始分诊")
+        if triage_session.patient_uuid and triage_session.patient_uuid != patient.uuid:
+            raise ValueError("AI 分诊会话与当前患者不匹配，请重新开始分诊")
+
     employee = await AuthClient.get_employee(data["employee_uuid"])
     if not employee:
         raise ValueError("医生不存在")
@@ -760,6 +770,15 @@ async def create_online_register(session: AsyncSession, data: dict) -> dict:
     )
     session.add(register)
     await session.flush()
+
+    if triage_session:
+        await update_ai_conversation_session(
+            session,
+            triage_session.uuid,
+            patient_uuid=patient.uuid,
+            register_uuid=register.uuid,
+            status="linked",
+        )
 
     return {
         "register_uuid": str(register.uuid),

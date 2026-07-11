@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from app.common.clients import close_shared_async_client
 from app.common.nacos_client import nacos_manager
 from .api.auth import router
 from .config import settings
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
     yield
     worker_task.cancel()
     outbox_task.cancel()
+    await close_shared_async_client()
     nacos_manager.deregister_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
 
 app = FastAPI(title="Auth Service", version="1.0.0", lifespan=lifespan)

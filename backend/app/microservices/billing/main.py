@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from app.common.clients import close_shared_async_client
 from app.common.nacos_client import nacos_manager
 from .api.billing import router
 import asyncio
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI):
     outbox_task = asyncio.create_task(sweep_outbox_events())
     yield
     outbox_task.cancel()
+    await close_shared_async_client()
     nacos_manager.deregister_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
 
 app = FastAPI(title="Billing Service", version="1.0.0", lifespan=lifespan)

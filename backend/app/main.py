@@ -1,14 +1,24 @@
 import os
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.common.clients import close_shared_async_client, get_shared_async_client
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await close_shared_async_client()
+
 app = FastAPI(
     title="智慧云脑诊疗平台 - 微服务网关",
     description="统一入口，负责将请求转发至各领域微服务",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -57,31 +67,31 @@ async def gateway_proxy(service: str, path: str, request: Request):
     headers = dict(request.headers)
     headers.pop("host", None)
 
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                params=request.query_params,
-                content=body,
-                headers=headers,
-                timeout=60.0,
-            )
-            return Response(
-                content=resp.content,
-                status_code=resp.status_code,
-                headers=dict(resp.headers),
-            )
-        except httpx.ConnectError:
-            return JSONResponse(
-                status_code=503,
-                content={"code": 503, "message": f"Service '{service}' is unavailable", "data": None},
-            )
-        except Exception as exc:
-            return JSONResponse(
-                status_code=500,
-                content={"code": 500, "message": f"Gateway error: {str(exc)}", "data": None},
-            )
+    client = await get_shared_async_client()
+    try:
+        resp = await client.request(
+            method=request.method,
+            url=target_url,
+            params=request.query_params,
+            content=body,
+            headers=headers,
+            timeout=60.0,
+        )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+        )
+    except httpx.ConnectError:
+        return JSONResponse(
+            status_code=503,
+            content={"code": 503, "message": f"Service '{service}' is unavailable", "data": None},
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={"code": 500, "message": f"Gateway error: {str(exc)}", "data": None},
+        )
 
 
 @app.get("/health", tags=["网关健康检查"])

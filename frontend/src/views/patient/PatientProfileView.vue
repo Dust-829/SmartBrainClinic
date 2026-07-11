@@ -3,20 +3,21 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
-import { patientApi, type RegisterDetail } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientRegisterHistoryStore } from '@/stores/patientRegisterHistory'
 import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
 const session = usePatientSessionStore()
-const history = ref<RegisterDetail[]>([])
+const historyStore = usePatientRegisterHistoryStore()
 const historyLoading = ref(false)
 const visitCodeVisible = ref(false)
 
 const patient = computed(() => session.patient)
 const isLoggedIn = computed(() => Boolean(patient.value))
 const patientDisplayName = computed(() => patient.value?.real_name || '\u5c1a\u672a\u767b\u5f55')
+const history = computed(() => historyStore.records)
 const maskedCardNumber = computed(() => {
   const value = patient.value?.card_number || ''
   if (!value) return '--'
@@ -35,8 +36,7 @@ async function loadHistory() {
   if (!patient.value?.uuid) return
   historyLoading.value = true
   try {
-    const response = await patientApi.getRegisterHistory(patient.value.uuid)
-    history.value = response.data.data || []
+    await historyStore.fetchHistory()
   } finally {
     historyLoading.value = false
   }
@@ -156,7 +156,7 @@ async function logout() {
           <span v-if="history.length">&#20849; {{ history.length }} &#26465;</span>
         </div>
 
-        <el-skeleton :loading="historyLoading" animated :rows="2">
+        <el-skeleton :loading="historyLoading && !history.length" animated :rows="2">
           <template #default>
             <div v-if="recentHistory.length" class="patient-profile-record-list">
               <article v-for="item in recentHistory" :key="item.uuid">

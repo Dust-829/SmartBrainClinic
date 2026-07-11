@@ -3,16 +3,18 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import SectionCard from '@/components/common/SectionCard.vue'
 import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
-import { patientApi, type RegisterDetail } from '@/api/patient'
+import { patientApi } from '@/api/patient'
 import { usePatientFlowStore } from '@/stores/patientFlow'
+import { usePatientRegisterHistoryStore } from '@/stores/patientRegisterHistory'
 import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
 const flow = usePatientFlowStore()
 const session = usePatientSessionStore()
+const historyStore = usePatientRegisterHistoryStore()
 const loading = ref(false)
 const historyLoading = ref(false)
-const history = ref<RegisterDetail[]>([])
+const history = computed(() => historyStore.records)
 
 const registerUuid = computed(() => flow.payment?.register_uuid || flow.onlineRegister?.register_uuid || '')
 const statusText = computed(() => {
@@ -51,8 +53,7 @@ async function loadHistory() {
   if (!session.patient?.uuid) return
   historyLoading.value = true
   try {
-    const response = await patientApi.getRegisterHistory(session.patient.uuid)
-    history.value = response.data.data || []
+    await historyStore.fetchHistory()
   } finally {
     historyLoading.value = false
   }
@@ -104,8 +105,8 @@ async function loadHistory() {
       </div>
       </SectionCard>
 
-      <SectionCard title="历史挂号" subtitle="来自 /registers/detail">
-      <el-skeleton :loading="historyLoading" animated>
+      <SectionCard title="历史挂号">
+      <el-skeleton :loading="historyLoading && !history.length" animated>
         <template #template>
           <el-skeleton-item variant="rect" style="height: 100px; border-radius: 8px" />
         </template>

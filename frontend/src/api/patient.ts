@@ -100,6 +100,7 @@ export interface OnlineRegisterPayload {
   patient_uuid: string
   employee_uuid: string
   scheduling_time_slot_uuid?: string
+  triage_session_uuid?: string
   is_emergency?: boolean
   symptoms?: string
 }

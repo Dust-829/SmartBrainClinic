@@ -79,6 +79,9 @@ docker compose up -d postgres redis rabbitmq nacos
 
 空库需要先导入 `backend/his_db_backup.sql`，再按文件名顺序执行 `backend/migrations/*.sql`。
 
+演示数据建议：执行 `backend/scripts/seed_full_demo_data.sql`。
+该脚本提供中文患者、医生、排班、病历、医技、处方和收费的关联样例；不要再与旧最小样例脚本混用。
+
 ### 4. 启动服务
 
 Windows 本地建议分别启动，便于查看每个服务日志：
@@ -132,7 +135,7 @@ python -m pytest tests
 - [前端实施计划](docs/frontend-plan.md)：三端路由、页面、状态和前端执行切片。
 - [项目结构说明](docs/项目结构说明.md)：仓库、前后端模块和关键入口导航。
 - [数据库表结构说明](docs/数据库表结构说明.md)：当前数据库关系和业务表说明。
-- [医生端演示数据清单](docs/医生端演示数据清单.md)：演示账号、患者、排班和脚本。
+- [全链路演示数据清单](docs/全链路演示数据清单.md)：全链路演示数据的范围、账号和执行前提。
 - [GitHub 协作规范](docs/GitHub协作规范.md)：分支、提交和 PR 约定。
 
 ## 历史与报告留档
