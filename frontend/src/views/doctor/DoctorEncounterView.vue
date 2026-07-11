@@ -19,6 +19,16 @@ import { useDoctorSessionStore } from '@/stores/doctorSession'
 
 type OrderType = MedicalTechnologyType
 
+interface PendingOrder {
+  localId: number
+  type: OrderType
+  medicalTechnologyId: number
+  technologyName: string
+  price: string
+  checkInfo?: string
+  checkPosition?: string
+}
+
 const route = useRoute()
 const router = useRouter()
 const session = useDoctorSessionStore()
@@ -38,8 +48,10 @@ const technologyLoading = ref(false)
 const technologyErrorMessage = ref('')
 const queueLoading = ref(false)
 const queueErrorMessage = ref('')
+const signingOrders = ref(false)
 
 let queuePollTimer: number | null = null
+let pendingOrderSequence = 0
 
 const technologyOptions = reactive<Record<OrderType, MedicalTechnologyOption[]>>({
   check: [],
@@ -53,25 +65,12 @@ const requestQueue = reactive<RegisterMedicalRequests>({
   disposals: [],
 })
 
-const submittingOrder = reactive<Record<OrderType, boolean>>({
-  check: false,
-  inspection: false,
-  disposal: false,
+const orderDraft = reactive({
+  medicalTechnologyId: null as number | null,
+  checkInfo: '',
+  checkPosition: '',
 })
-
-const orderForms = reactive({
-  check: {
-    medicalTechnologyId: null as number | null,
-    checkInfo: '',
-    checkPosition: '',
-  },
-  inspection: {
-    medicalTechnologyId: null as number | null,
-  },
-  disposal: {
-    medicalTechnologyId: null as number | null,
-  },
-})
+const pendingOrders = ref<PendingOrder[]>([])
 
 const encounterForm = reactive<MedicalRecordDraftConfirmPayload>({
   readme: '',
@@ -88,9 +87,21 @@ const registerId = computed(() => String(route.params.registerId ?? ''))
 const doctor = computed(() => session.staff)
 const pageTitle = computed(() => registerDetail.value?.patient_name || '接诊详情')
 const doctorDisplay = computed(() => doctor.value?.displayName || '当前医生')
-const canSubmitCheck = computed(() => Boolean(orderForms.check.medicalTechnologyId) && !submittingOrder.check)
-const canSubmitInspection = computed(() => Boolean(orderForms.inspection.medicalTechnologyId) && !submittingOrder.inspection)
-const canSubmitDisposal = computed(() => Boolean(orderForms.disposal.medicalTechnologyId) && !submittingOrder.disposal)
+const allTechnologyOptions = computed(() => [
+  ...technologyOptions.check.map((item) => ({ ...item, orderType: 'check' as const })),
+  ...technologyOptions.inspection.map((item) => ({ ...item, orderType: 'inspection' as const })),
+  ...technologyOptions.disposal.map((item) => ({ ...item, orderType: 'disposal' as const })),
+])
+const selectedTechnology = computed(
+  () => allTechnologyOptions.value.find((item) => item.id === orderDraft.medicalTechnologyId) ?? null,
+)
+const selectedOrderType = computed(() => selectedTechnology.value?.orderType ?? null)
+const canAddPendingOrder = computed(() => {
+  if (!selectedTechnology.value || signingOrders.value) return false
+  if (selectedOrderType.value !== 'check') return true
+  return Boolean(orderDraft.checkPosition.trim() && orderDraft.checkInfo.trim())
+})
+const canSignOrders = computed(() => pendingOrders.value.length > 0 && !signingOrders.value)
 const totalRequestCount = computed(
   () => requestQueue.checks.length + requestQueue.inspections.length + requestQueue.disposals.length,
 )
@@ -133,29 +144,16 @@ function resetEncounterForm(detail: RegisterDetail | null, draft?: MedicalRecord
   encounterForm.cure = draft?.cure ?? ''
 }
 
-function syncOrderSelection(type: OrderType) {
-  const selectedId =
-    type === 'check'
-      ? orderForms.check.medicalTechnologyId
-      : type === 'inspection'
-      ? orderForms.inspection.medicalTechnologyId
-      : orderForms.disposal.medicalTechnologyId
+function resetOrderDraft() {
+  orderDraft.medicalTechnologyId = null
+  orderDraft.checkInfo = ''
+  orderDraft.checkPosition = ''
+}
 
-  if (!selectedId) {
-    return
-  }
-
-  const exists = technologyOptions[type].some((item) => item.id === selectedId)
-  if (exists) {
-    return
-  }
-
-  if (type === 'check') {
-    orderForms.check.medicalTechnologyId = null
-  } else if (type === 'inspection') {
-    orderForms.inspection.medicalTechnologyId = null
-  } else {
-    orderForms.disposal.medicalTechnologyId = null
+function syncOrderSelection() {
+  if (!orderDraft.medicalTechnologyId) return
+  if (!allTechnologyOptions.value.some((item) => item.id === orderDraft.medicalTechnologyId)) {
+    resetOrderDraft()
   }
 }
 
@@ -174,9 +172,7 @@ async function loadMedicalTechnologies() {
     technologyOptions.inspection = inspections.data.data ?? []
     technologyOptions.disposal = disposals.data.data ?? []
 
-    syncOrderSelection('check')
-    syncOrderSelection('inspection')
-    syncOrderSelection('disposal')
+    syncOrderSelection()
   } catch (error) {
     technologyOptions.check = []
     technologyOptions.inspection = []
@@ -360,87 +356,76 @@ async function askAssistant() {
   }
 }
 
-function resetCheckOrderForm() {
-  orderForms.check.medicalTechnologyId = null
-  orderForms.check.checkInfo = ''
-  orderForms.check.checkPosition = ''
+function addPendingOrder() {
+  const technology = selectedTechnology.value
+  if (!technology || !canAddPendingOrder.value) return
+
+  pendingOrders.value.push({
+    localId: ++pendingOrderSequence,
+    type: technology.orderType,
+    medicalTechnologyId: technology.id,
+    technologyName: technology.tech_name,
+    price: technology.price,
+    checkInfo: technology.orderType === 'check' ? orderDraft.checkInfo.trim() : undefined,
+    checkPosition: technology.orderType === 'check' ? orderDraft.checkPosition.trim() : undefined,
+  })
+  resetOrderDraft()
 }
 
-function resetInspectionOrderForm() {
-  orderForms.inspection.medicalTechnologyId = null
+function removePendingOrder(localId: number) {
+  if (signingOrders.value) return
+  pendingOrders.value = pendingOrders.value.filter((item) => item.localId !== localId)
 }
 
-function resetDisposalOrderForm() {
-  orderForms.disposal.medicalTechnologyId = null
+function editPendingOrder(localId: number) {
+  if (signingOrders.value) return
+  const index = pendingOrders.value.findIndex((item) => item.localId === localId)
+  if (index < 0) return
+
+  const [item] = pendingOrders.value.splice(index, 1)
+  orderDraft.medicalTechnologyId = item.medicalTechnologyId
+  orderDraft.checkInfo = item.checkInfo ?? ''
+  orderDraft.checkPosition = item.checkPosition ?? ''
 }
 
-async function submitCheckOrder() {
-  if (!registerId.value || !orderForms.check.medicalTechnologyId || submittingOrder.check) {
-    return
-  }
+async function signPendingOrders() {
+  if (!registerId.value || !canSignOrders.value) return
 
-  submittingOrder.check = true
+  signingOrders.value = true
   try {
-    await medicalApi.createCheck({
+    const response = await medicalApi.signOrders({
       register_uuid: registerId.value,
-      medical_technology_id: orderForms.check.medicalTechnologyId,
-      check_info: orderForms.check.checkInfo.trim() || undefined,
-      check_position: orderForms.check.checkPosition.trim() || undefined,
+      items: pendingOrders.value.map((item) => ({
+        type: item.type,
+        medical_technology_id: item.medicalTechnologyId,
+        check_info: item.checkInfo,
+        check_position: item.checkPosition,
+      })),
     })
-    ElMessage.success('检查单已开立。')
-    resetCheckOrderForm()
+    const count = response.data.data?.count ?? pendingOrders.value.length
+    pendingOrders.value = []
+    ElMessage.success(`已一次签署并开立 ${count} 项医疗项目。`)
     await loadRequestQueue()
   } catch (error) {
-    ElMessage.error(getErrorMessage(error, '检查单开立失败，请稍后重试。'))
+    ElMessage.error(getErrorMessage(error, '统一签署失败，待签清单已保留，请修正后重试。'))
   } finally {
-    submittingOrder.check = false
-  }
-}
-
-async function submitInspectionOrder() {
-  if (!registerId.value || !orderForms.inspection.medicalTechnologyId || submittingOrder.inspection) {
-    return
-  }
-
-  submittingOrder.inspection = true
-  try {
-    await medicalApi.createInspection({
-      register_uuid: registerId.value,
-      medical_technology_id: orderForms.inspection.medicalTechnologyId,
-    })
-    ElMessage.success('检验单已开立。')
-    resetInspectionOrderForm()
-    await loadRequestQueue()
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error, '检验单开立失败，请稍后重试。'))
-  } finally {
-    submittingOrder.inspection = false
-  }
-}
-
-async function submitDisposalOrder() {
-  if (!registerId.value || !orderForms.disposal.medicalTechnologyId || submittingOrder.disposal) {
-    return
-  }
-
-  submittingOrder.disposal = true
-  try {
-    await medicalApi.createDisposal({
-      register_uuid: registerId.value,
-      medical_technology_id: orderForms.disposal.medicalTechnologyId,
-    })
-    ElMessage.success('处置单已开立。')
-    resetDisposalOrderForm()
-    await loadRequestQueue()
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error, '处置单开立失败，请稍后重试。'))
-  } finally {
-    submittingOrder.disposal = false
+    signingOrders.value = false
   }
 }
 
 function goBack() {
   router.push({ name: 'doctor-home' })
+}
+
+function medicalTypeLabel(type: OrderType | string) {
+  if (type === 'check') return '检查'
+  if (type === 'inspection') return '检验'
+  return '处置'
+}
+
+function pendingOrderSummary(item: PendingOrder) {
+  if (item.type !== 'check') return '无需补充信息'
+  return [item.checkPosition, item.checkInfo].filter(Boolean).join(' · ')
 }
 
 function formatPrice(price?: string | null) {
@@ -577,12 +562,12 @@ onBeforeUnmount(() => {
 
           <div class="doctor-encounter__workspace">
             <div class="doctor-encounter__main">
-              <SectionCard title="检查检验处置" subtitle="左侧主工作区先收口真实开单和已开单状态回看。">
+              <SectionCard title="统一开单" subtitle="连续添加医疗项目，确认后一次签署；后续按类型进入各自业务链路。">
                 <template #extra>
                   <div class="doctor-encounter__card-extra">
-                    <span class="doctor-encounter__badge is-progress">计划推进中</span>
+                    <span class="doctor-encounter__badge is-progress">待签 {{ pendingOrders.length }} 项</span>
                     <button type="button" class="doctor-encounter__secondary" :disabled="queueLoading" @click="loadRequestQueue()">
-                      {{ queueLoading ? '刷新中...' : '刷新开单队列' }}
+                      {{ queueLoading ? '刷新中...' : '刷新已开项目' }}
                     </button>
                   </div>
                 </template>
@@ -595,84 +580,91 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
 
-                  <div class="doctor-encounter__order-grid">
-                    <article class="doctor-encounter__order-panel">
-                      <div class="doctor-encounter__order-panel-head">
-                        <strong>检查开单</strong>
-                        <span>适合影像、功能检查等项目。</span>
-                      </div>
-                      <label class="doctor-encounter__field">
-                        <span>检查项目</span>
-                        <select v-model.number="orderForms.check.medicalTechnologyId" :disabled="technologyLoading || !technologyOptions.check.length">
-                          <option :value="null">请选择检查项目</option>
-                          <option v-for="item in technologyOptions.check" :key="item.uuid" :value="item.id">
-                            {{ item.tech_name }} · {{ formatPrice(item.price) }}
-                          </option>
-                        </select>
-                      </label>
+                  <section class="doctor-encounter__order-composer" aria-label="添加医疗项目">
+                    <label class="doctor-encounter__field doctor-encounter__technology-field">
+                      <span>医疗项目</span>
+                      <el-select
+                        v-model="orderDraft.medicalTechnologyId"
+                        filterable
+                        clearable
+                        placeholder="搜索医疗项目、拼音或编码"
+                        :disabled="technologyLoading || !allTechnologyOptions.length || signingOrders"
+                      >
+                        <el-option
+                          v-for="item in allTechnologyOptions"
+                          :key="item.uuid"
+                          :label="`${medicalTypeLabel(item.orderType)} · ${item.tech_name} · ${formatPrice(item.price)}`"
+                          :value="item.id"
+                        >
+                          <div class="doctor-encounter__technology-option">
+                            <span>{{ item.tech_name }}</span>
+                            <span class="doctor-encounter__type-tag" :class="`is-${item.orderType}`">
+                              {{ medicalTypeLabel(item.orderType) }}
+                            </span>
+                            <small>{{ formatPrice(item.price) }}</small>
+                          </div>
+                        </el-option>
+                      </el-select>
+                    </label>
+
+                    <div v-if="selectedOrderType === 'check'" class="doctor-encounter__order-detail-grid">
                       <label class="doctor-encounter__field">
                         <span>检查部位</span>
-                        <input v-model="orderForms.check.checkPosition" type="text" placeholder="例如：头部" />
+                        <input v-model="orderDraft.checkPosition" type="text" placeholder="例如：头部" :disabled="signingOrders" />
                       </label>
                       <label class="doctor-encounter__field">
                         <span>检查目的</span>
-                        <textarea v-model="orderForms.check.checkInfo" rows="3" placeholder="例如：排查颅内占位性病变。"></textarea>
+                        <input
+                          v-model="orderDraft.checkInfo"
+                          type="text"
+                          placeholder="例如：排查颅内占位性病变"
+                          :disabled="signingOrders"
+                        />
                       </label>
-                      <button type="button" class="doctor-encounter__primary" :disabled="!canSubmitCheck" @click="submitCheckOrder">
-                        {{ submittingOrder.check ? '开立中...' : '开立检查单' }}
-                      </button>
-                    </article>
+                    </div>
 
-                    <article class="doctor-encounter__order-panel">
-                      <div class="doctor-encounter__order-panel-head">
-                        <strong>检验开单</strong>
-                        <span>适合血液、生化等基础检验。</span>
-                      </div>
-                      <label class="doctor-encounter__field">
-                        <span>检验项目</span>
-                        <select
-                          v-model.number="orderForms.inspection.medicalTechnologyId"
-                          :disabled="technologyLoading || !technologyOptions.inspection.length"
-                        >
-                          <option :value="null">请选择检验项目</option>
-                          <option v-for="item in technologyOptions.inspection" :key="item.uuid" :value="item.id">
-                            {{ item.tech_name }} · {{ formatPrice(item.price) }}
-                          </option>
-                        </select>
-                      </label>
-                      <div class="doctor-encounter__hint">
-                        当前版本先聚焦真实接口下单，具体检验结果由后续检验端或模拟流程回填。
-                      </div>
-                      <button type="button" class="doctor-encounter__primary" :disabled="!canSubmitInspection" @click="submitInspectionOrder">
-                        {{ submittingOrder.inspection ? '开立中...' : '开立检验单' }}
+                    <div class="doctor-encounter__composer-actions">
+                      <span v-if="selectedTechnology" class="doctor-encounter__type-tag" :class="`is-${selectedOrderType}`">
+                        {{ medicalTypeLabel(selectedOrderType || '') }}
+                      </span>
+                      <button type="button" class="doctor-encounter__add-order" :disabled="!canAddPendingOrder" @click="addPendingOrder">
+                        + 加入待签清单
                       </button>
-                    </article>
+                    </div>
+                  </section>
 
-                    <article class="doctor-encounter__order-panel">
-                      <div class="doctor-encounter__order-panel-head">
-                        <strong>处置开单</strong>
-                        <span>适合门诊即时治疗和观察性处置。</span>
+                  <section class="doctor-encounter__pending-orders" aria-label="本次待签医嘱">
+                    <header class="doctor-encounter__pending-header">
+                      <div>
+                        <strong>本次待签医嘱 {{ pendingOrders.length }} 项</strong>
+                        <p>加入清单后不会立即开立，确认签署时才会统一提交。</p>
                       </div>
-                      <label class="doctor-encounter__field">
-                        <span>处置项目</span>
-                        <select
-                          v-model.number="orderForms.disposal.medicalTechnologyId"
-                          :disabled="technologyLoading || !technologyOptions.disposal.length"
-                        >
-                          <option :value="null">请选择处置项目</option>
-                          <option v-for="item in technologyOptions.disposal" :key="item.uuid" :value="item.id">
-                            {{ item.tech_name }} · {{ formatPrice(item.price) }}
-                          </option>
-                        </select>
-                      </label>
-                      <div class="doctor-encounter__hint">
-                        开立后将进入收费与执行链路，当前接诊页先承担医生端入口和状态回显。
-                      </div>
-                      <button type="button" class="doctor-encounter__primary" :disabled="!canSubmitDisposal" @click="submitDisposalOrder">
-                        {{ submittingOrder.disposal ? '开立中...' : '开立处置单' }}
-                      </button>
-                    </article>
-                  </div>
+                    </header>
+
+                    <div v-if="!pendingOrders.length" class="doctor-encounter__pending-empty">
+                      请选择医疗项目后加入待签清单。
+                    </div>
+                    <div v-else class="doctor-encounter__pending-list">
+                      <article v-for="item in pendingOrders" :key="item.localId" class="doctor-encounter__pending-item">
+                        <div>
+                          <div class="doctor-encounter__pending-title">
+                            <span class="doctor-encounter__type-tag" :class="`is-${item.type}`">{{ medicalTypeLabel(item.type) }}</span>
+                            <strong>{{ item.technologyName }}</strong>
+                          </div>
+                          <p>{{ pendingOrderSummary(item) }} · {{ formatPrice(item.price) }}</p>
+                        </div>
+                        <div class="doctor-encounter__pending-actions">
+                          <button type="button" :disabled="signingOrders" @click="editPendingOrder(item.localId)">编辑</button>
+                          <button type="button" :disabled="signingOrders" @click="removePendingOrder(item.localId)">删除</button>
+                        </div>
+                      </article>
+                    </div>
+
+                    <button type="button" class="doctor-encounter__primary doctor-encounter__sign-order" :disabled="!canSignOrders" @click="signPendingOrders">
+                      {{ signingOrders ? '签署中...' : `确认签署并开立（${pendingOrders.length} 项）` }}
+                    </button>
+                    <p class="doctor-encounter__sign-hint">一次签署，分型留痕；检查、检验、处置分别进入后续流程。</p>
+                  </section>
 
                   <div class="doctor-encounter__queue-summary">
                     <div>
@@ -986,13 +978,6 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
-.doctor-encounter__order-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.doctor-encounter__order-panel,
 .doctor-encounter__request-group,
 .doctor-encounter__similar-item,
 .doctor-encounter__request-item {
@@ -1004,7 +989,6 @@ onBeforeUnmount(() => {
   background: #f8fafc;
 }
 
-.doctor-encounter__order-panel-head,
 .doctor-encounter__queue-summary,
 .doctor-encounter__request-header,
 .doctor-encounter__request-footer,
@@ -1015,12 +999,6 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
-.doctor-encounter__order-panel-head {
-  align-items: flex-start;
-  flex-direction: column;
-}
-
-.doctor-encounter__order-panel-head strong,
 .doctor-encounter__queue-summary strong,
 .doctor-encounter__request-header strong,
 .doctor-encounter__request-group strong,
@@ -1030,7 +1008,6 @@ onBeforeUnmount(() => {
   color: #0f172a;
 }
 
-.doctor-encounter__order-panel-head span,
 .doctor-encounter__queue-summary p,
 .doctor-encounter__request-header p,
 .doctor-encounter__request-group span,
@@ -1088,6 +1065,172 @@ onBeforeUnmount(() => {
   outline: none;
   border-color: #0f766e;
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.doctor-encounter__order-composer,
+.doctor-encounter__pending-orders {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dbe5f0;
+  border-radius: 16px;
+  background: #f8fafc;
+}
+
+.doctor-encounter__technology-field {
+  max-width: 100%;
+}
+
+.doctor-encounter__technology-field :deep(.el-select) {
+  width: 100%;
+}
+
+.doctor-encounter__technology-field :deep(.el-select__wrapper) {
+  min-height: 46px;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px #cbd5e1 inset;
+}
+
+.doctor-encounter__technology-field :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #0f766e inset, 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.doctor-encounter__technology-option,
+.doctor-encounter__composer-actions,
+.doctor-encounter__pending-header,
+.doctor-encounter__pending-item,
+.doctor-encounter__pending-actions,
+.doctor-encounter__pending-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.doctor-encounter__technology-option small {
+  margin-left: auto;
+  color: #64748b;
+}
+
+.doctor-encounter__order-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.doctor-encounter__composer-actions {
+  justify-content: space-between;
+}
+
+.doctor-encounter__type-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.doctor-encounter__type-tag.is-check {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.doctor-encounter__type-tag.is-inspection {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.doctor-encounter__type-tag.is-disposal {
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.doctor-encounter__add-order,
+.doctor-encounter__pending-actions button {
+  border: 1px solid #0f766e;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0f766e;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.doctor-encounter__add-order {
+  min-height: 40px;
+  padding: 0 16px;
+}
+
+.doctor-encounter__add-order:disabled,
+.doctor-encounter__pending-actions button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.doctor-encounter__pending-header {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.doctor-encounter__pending-header strong {
+  color: #0f172a;
+}
+
+.doctor-encounter__pending-header p,
+.doctor-encounter__pending-item p,
+.doctor-encounter__sign-hint {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doctor-encounter__pending-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #dbe5f0;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.doctor-encounter__pending-item {
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.doctor-encounter__pending-item:last-child {
+  border-bottom: 0;
+}
+
+.doctor-encounter__pending-actions button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-color: #cbd5e1;
+  color: #475569;
+}
+
+.doctor-encounter__pending-actions button:last-child {
+  color: #b45309;
+}
+
+.doctor-encounter__pending-empty {
+  padding: 14px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.doctor-encounter__sign-order {
+  width: 100%;
+  background: #0f766e;
+}
+
+.doctor-encounter__sign-hint {
+  margin: -4px 0 0;
 }
 
 .doctor-encounter__queue-summary {
@@ -1208,7 +1351,6 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1180px) {
   .doctor-encounter__workspace,
-  .doctor-encounter__order-grid,
   .doctor-encounter__summary-grid {
     grid-template-columns: 1fr;
   }
@@ -1225,7 +1367,9 @@ onBeforeUnmount(() => {
   .doctor-encounter__queue-summary,
   .doctor-encounter__request-header,
   .doctor-encounter__request-footer,
-  .doctor-encounter__request-group header {
+  .doctor-encounter__request-group header,
+  .doctor-encounter__composer-actions,
+  .doctor-encounter__pending-item {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1237,6 +1381,10 @@ onBeforeUnmount(() => {
   }
 
   .doctor-encounter__form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .doctor-encounter__order-detail-grid {
     grid-template-columns: 1fr;
   }
 }

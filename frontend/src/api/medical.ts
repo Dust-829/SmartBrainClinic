@@ -81,6 +81,29 @@ export interface DisposalRequestCreatePayload {
   medical_technology_id: number
 }
 
+export interface OrderSignItemPayload {
+  type: MedicalTechnologyType
+  medical_technology_id: number
+  check_info?: string
+  check_position?: string
+}
+
+export interface OrderSignPayload {
+  register_uuid: string
+  items: OrderSignItemPayload[]
+}
+
+export interface OrderSignResultItem {
+  uuid: string
+  type: MedicalTechnologyType
+  state: string
+}
+
+export interface OrderSignResult {
+  count: number
+  items: OrderSignResultItem[]
+}
+
 export interface MedicalRequestItem {
   uuid: string
   register_uuid: string
@@ -139,6 +162,9 @@ export const medicalApi = {
   },
   createDisposal(payload: DisposalRequestCreatePayload) {
     return http.post<ApiEnvelope<{ uuid: string }>>('/api/v1/medical/disposal', payload)
+  },
+  signOrders(payload: OrderSignPayload) {
+    return http.post<ApiEnvelope<OrderSignResult>>('/api/v1/medical/orders/sign', payload)
   },
   getRegisterRequests(registerUuid: string) {
     return http.get<ApiEnvelope<RegisterMedicalRequests>>(`/api/v1/medical/requests/register/${registerUuid}`)
