@@ -65,6 +65,10 @@ class FakeSession:
         return None
 
 
+def _mojibake(text: str) -> str:
+    return text.encode("utf-8").decode("latin-1")
+
+
 def test_resolve_relative_date_uses_current_week_or_next_occurrence():
     base_date = date(2026, 7, 11)
 
@@ -288,6 +292,41 @@ async def test_approve_and_reject_scheduling_application_persist_fields(monkeypa
     assert rejected["reason"] == "诊室冲突"
 
 
+def test_serialize_scheduling_application_repairs_mojibake_prompt():
+    expected_prompt = "\u8bf7\u5c062026-08-15\u4e0b\u5348\u95e8\u8bca\u9650\u989d\u8c03\u6574\u4e3a7\u4e2a"
+    app = SimpleNamespace(
+        uuid=uuid.uuid4(),
+        employee_uuid=uuid.uuid4(),
+        prompt=_mojibake(expected_prompt),
+        status="approved",
+        reject_reason=None,
+        created_at=datetime(2026, 7, 11, 15, 9, 19),
+        processed_at=None,
+    )
+
+    serialized = patient_service._serialize_scheduling_application(app)
+
+    assert serialized["prompt"] == expected_prompt
+
+
+@pytest.mark.asyncio
+async def test_create_scheduling_application_normalizes_prompt_before_persisting(monkeypatch):
+    employee_uuid = uuid.uuid4()
+    expected_prompt = "\u7533\u8bf7\u5c062026-08-16\u4e0a\u5348\u95e8\u8bca\u6392\u73ed\u9650\u989d\u8c03\u6574\u4e3a6\u4eba\u3002"
+
+    async def fake_get_employee(target_employee_uuid):
+        assert str(target_employee_uuid) == str(employee_uuid)
+        return {"uuid": str(employee_uuid), "realname": "doctor"}
+
+    monkeypatch.setattr(patient_service.AuthClient, "get_employee", fake_get_employee)
+
+    session = FakeSession()
+    result = await patient_service.create_scheduling_application(session, employee_uuid, _mojibake(expected_prompt))
+
+    assert result["status"] == "pending"
+    assert session.added[0].prompt == expected_prompt
+
+
 @pytest.mark.asyncio
 async def test_processed_scheduling_application_cannot_be_reprocessed():
     app_uuid = uuid.uuid4()
@@ -314,12 +353,14 @@ async def test_get_pending_scheduling_applications_rejects_unknown_status():
 @pytest.mark.asyncio
 async def test_ai_schedule_returns_action_summaries(monkeypatch):
     employee_uuid = uuid.uuid4()
+    expected_prompt = "\u8bf7\u5e2e\u6211\u4e0b\u5468\u8c03\u73ed"
 
     async def fake_get_employee(target_employee_uuid):
         assert str(target_employee_uuid) == str(employee_uuid)
         return {"uuid": str(employee_uuid), "realname": "张医生"}
 
     async def fake_run_ai_scheduling(prompt, employee_uuid_str):
+        assert prompt == expected_prompt
         return {
             "source": "rule",
             "data": {
@@ -356,7 +397,7 @@ async def test_ai_schedule_returns_action_summaries(monkeypatch):
     monkeypatch.setattr(patient_service, "run_ai_scheduling", fake_run_ai_scheduling)
     monkeypatch.setattr(patient_service, "_apply_scheduling_actual_change", fake_apply_scheduling_actual_change)
 
-    result = await patient_service.ai_schedule(FakeSession(), employee_uuid, "请帮我下周调班")
+    result = await patient_service.ai_schedule(FakeSession(), employee_uuid, _mojibake(expected_prompt))
 
     assert result["actions_applied"] == 4
     assert result["disruptions_created"] == 2

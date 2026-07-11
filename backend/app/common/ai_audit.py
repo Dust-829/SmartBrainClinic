@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.config import BaseMicroserviceSettings
+from app.common.text_normalization import normalize_text_value, repair_mojibake_text
 
 logger = logging.getLogger("common.ai_audit")
 
@@ -419,7 +420,7 @@ def _get_engine() -> AsyncEngine:
 
 
 def _summarize(value: Any, max_len: int = 1000) -> str:
-    value = redact_sensitive_data(value)
+    value = normalize_text_value(redact_sensitive_data(value))
     if isinstance(value, str):
         text_value = value
     else:
@@ -466,16 +467,16 @@ def _serialize_audit_row(row: dict[str, Any]) -> dict[str, Any]:
         "module_name": row.get("module_name"),
         "source": row.get("source"),
         "model": row.get("model"),
-        "input_summary": row.get("input_summary"),
-        "output_summary": row.get("output_summary"),
+        "input_summary": repair_mojibake_text(row.get("input_summary") or ""),
+        "output_summary": repair_mojibake_text(row.get("output_summary") or ""),
         "warnings": _json_load(row.get("warnings")),
         "validated": bool(row.get("validated")),
         "validator_messages": _json_load(row.get("validator_messages")),
         "latency_ms": row.get("latency_ms"),
         "context": _json_load(row.get("context")),
         "review_status": row.get("review_status") or REVIEW_PENDING,
-        "review_note": row.get("review_note"),
-        "reviewer": row.get("reviewer"),
+        "review_note": repair_mojibake_text(row.get("review_note") or "") or None,
+        "reviewer": repair_mojibake_text(row.get("reviewer") or "") or None,
         "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
         "created_at": created_at.isoformat() if created_at else None,
     }
@@ -492,11 +493,11 @@ def _json_load(value: Any) -> Any:
     if value in (None, ""):
         return []
     if not isinstance(value, str):
-        return value
+        return normalize_text_value(value)
     try:
-        return json.loads(value)
+        return normalize_text_value(json.loads(value))
     except json.JSONDecodeError:
-        return value
+        return repair_mojibake_text(value)
 
 
 def _safe_int(value: Any) -> Optional[int]:
@@ -510,5 +511,5 @@ def _csv_value(value: Any) -> str:
     if value in (None, ""):
         return ""
     if isinstance(value, str):
-        return value
-    return _json_dump(value)
+        return repair_mojibake_text(value)
+    return _json_dump(normalize_text_value(value))

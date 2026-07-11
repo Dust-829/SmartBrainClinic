@@ -17,6 +17,7 @@ from app.common.ai_conversation import get_ai_conversation_session, update_ai_co
 from app.common.enums import BillState, VisitState
 from app.common.idempotency import begin_idempotency, complete_idempotency
 from app.common.state_machine import ensure_visit_transition
+from app.common.text_normalization import repair_mojibake_text
 from app.microservices.patient.ws_manager import manager as ws_manager
 
 from ..models.patient import (
@@ -190,9 +191,9 @@ def _serialize_scheduling_application(app: SchedulingApplication) -> dict:
     return {
         "uuid": str(app.uuid),
         "employee_uuid": str(app.employee_uuid),
-        "prompt": app.prompt,
+        "prompt": repair_mojibake_text(app.prompt),
         "status": app.status,
-        "reject_reason": app.reject_reason,
+        "reject_reason": repair_mojibake_text(app.reject_reason) if app.reject_reason else app.reject_reason,
         "created_at": app.created_at.isoformat() if app.created_at else None,
         "processed_at": app.processed_at.isoformat() if app.processed_at else None,
     }
@@ -1462,11 +1463,15 @@ async def ai_schedule(session: AsyncSession, employee_uuid: uuid_pkg.UUID, promp
     """
     通过自然语言智能微调排班
     """
+    normalized_prompt = repair_mojibake_text(" ".join(str(prompt or "").split()))
+    if not normalized_prompt:
+        raise ValueError("AI 排班指令不能为空")
+
     employee = await AuthClient.get_employee(str(employee_uuid))
     if not employee:
         raise ValueError("医生不存在")
 
-    ai_res = await run_ai_scheduling(prompt, str(employee_uuid))
+    ai_res = await run_ai_scheduling(normalized_prompt, str(employee_uuid))
     res = unwrap_ai_data(ai_res)
     if not isinstance(res, dict):
         raise ValueError("AI 排班结果格式异常")
@@ -1669,7 +1674,7 @@ async def create_patient_feedback(session: AsyncSession, data: dict) -> dict:
 
 
 async def create_scheduling_application(session: AsyncSession, employee_uuid: uuid_pkg.UUID, prompt: str) -> dict:
-    normalized_prompt = " ".join(str(prompt or "").split())
+    normalized_prompt = repair_mojibake_text(" ".join(str(prompt or "").split()))
     if not normalized_prompt:
         raise ValueError("排班申请内容不能为空")
 

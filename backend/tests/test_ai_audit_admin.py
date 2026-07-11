@@ -41,6 +41,10 @@ class FakeSession:
         self.committed = True
 
 
+def _mojibake(text: str) -> str:
+    return text.encode("utf-8").decode("latin-1")
+
+
 @pytest.mark.asyncio
 async def test_query_ai_audit_logs_returns_summary_and_pagination():
     session = FakeSession(
@@ -82,6 +86,37 @@ async def test_query_ai_audit_logs_returns_summary_and_pagination():
     assert result["pagination"] == {"total": 1, "limit": 200, "offset": 0}
     assert result["summary"]["validated_count"] == 1
     assert result["summary"]["review_pending_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_query_ai_audit_logs_repairs_mojibake_input_summary():
+    expected_input = "\u8bf7\u5c062026-08-15\u4e0b\u5348\u95e8\u8bca\u9650\u989d\u8c03\u6574\u4e3a7\u4e2a"
+    session = FakeSession(
+        [
+            {
+                "uuid": "00000000-0000-0000-0000-000000000115",
+                "module_name": "patient.scheduling",
+                "source": "llm",
+                "model": "gpt-test",
+                "input_summary": _mojibake(expected_input),
+                "output_summary": '{"actions":[]}',
+                "warnings": "[]",
+                "validated": True,
+                "validator_messages": "[]",
+                "latency_ms": 77,
+                "context": "{}",
+                "review_status": "pending",
+                "review_note": None,
+                "reviewer": None,
+                "reviewed_at": None,
+                "created_at": datetime(2026, 7, 11, 15, 9, 19),
+            }
+        ]
+    )
+
+    result = await query_ai_audit_logs(session)
+
+    assert result["items"][0]["input_summary"] == expected_input
 
 
 @pytest.mark.asyncio
