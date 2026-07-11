@@ -1,12 +1,18 @@
 import uuid as uuid_pkg
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.common.ai_audit import query_ai_audit_logs
+from app.common.ai_audit import (
+    export_ai_audit_logs_csv,
+    get_ai_audit_log,
+    query_ai_audit_logs,
+    review_ai_audit_log,
+)
 from app.common.ai_conversation import (
     append_ai_conversation_messages,
     create_ai_conversation_session,
@@ -136,6 +142,12 @@ class AdminUpdateActualRequest(BaseModel):
     schedule_date: str
     noon: str
     regist_quota: int
+
+
+class AuditReviewRequest(BaseModel):
+    review_status: Literal['approved', 'rejected']
+    review_note: str | None = None
+    reviewer: str | None = None
 
 
 async def _sync_triage_session_messages(
@@ -328,6 +340,78 @@ async def list_ai_audits(
         offset=offset,
     )
     return success(logs)
+
+
+@router.get(
+    '/admin/ai-audits/export',
+    summary='API endpoint',
+    dependencies=[Depends(require_ai_audit_admin)],
+)
+async def export_ai_audits(
+    module_name: Optional[str] = None,
+    source: Optional[str] = None,
+    validated: Optional[bool] = None,
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
+    session: AsyncSession = Depends(get_session),
+):
+    csv_text = await export_ai_audit_logs_csv(
+        session,
+        module_name=module_name,
+        source=source,
+        validated=validated,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    return StreamingResponse(
+        iter([csv_text]),
+        media_type='text/csv; charset=utf-8',
+        headers={
+            'Content-Disposition': f'attachment; filename=ai-audits-{timestamp}.csv',
+        },
+    )
+
+
+@router.get(
+    '/admin/ai-audits/{audit_uuid}',
+    summary='API endpoint',
+    dependencies=[Depends(require_ai_audit_admin)],
+)
+async def get_ai_audit_detail(
+    audit_uuid: str,
+    session: AsyncSession = Depends(get_session),
+):
+    log = await get_ai_audit_log(session, audit_uuid)
+    if not log:
+        raise HTTPException(status_code=404, detail='AI 审计记录不存在')
+    return success(log)
+
+
+@router.post(
+    '/admin/ai-audits/{audit_uuid}/review',
+    summary='API endpoint',
+    dependencies=[Depends(require_ai_audit_admin)],
+)
+async def submit_ai_audit_review(
+    audit_uuid: str,
+    data: AuditReviewRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        log = await review_ai_audit_log(
+            session,
+            audit_uuid,
+            review_status=data.review_status,
+            review_note=data.review_note,
+            reviewer=data.reviewer,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not log:
+        raise HTTPException(status_code=404, detail='AI 审计记录不存在')
+    return success(log)
 
 
 @router.post('/recommend-doctors', summary='API endpoint')
