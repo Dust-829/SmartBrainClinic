@@ -94,6 +94,10 @@ export interface AuditLogRecord {
   validator_messages: string[] | string
   latency_ms?: number | null
   context?: Record<string, unknown> | unknown[]
+  review_status?: 'pending' | 'approved' | 'rejected'
+  review_note?: string | null
+  reviewer?: string | null
+  reviewed_at?: string | null
   created_at?: string | null
 }
 
@@ -182,12 +186,21 @@ export interface AuditSummary {
   total_count: number
   validated_count: number
   pending_count: number
+  review_pending_count: number
+  review_approved_count: number
+  review_rejected_count: number
 }
 
 export interface AuditLogPage {
   items: AuditLogRecord[]
   pagination: AuditPagination
   summary: AuditSummary
+}
+
+export interface AuditReviewPayload {
+  review_status: 'approved' | 'rejected'
+  review_note?: string
+  reviewer?: string
 }
 
 export interface PatientAdminUpdatePayload {
@@ -227,6 +240,25 @@ export const adminApi = {
     return http.get<ApiEnvelope<AuditLogPage>>('/api/v1/patient/admin/ai-audits', {
       params: query,
       headers: getAdminAuthHeaders(),
+    })
+  },
+  getAiAuditDetail(auditUuid: string) {
+    return http.get<ApiEnvelope<AuditLogRecord>>(`/api/v1/patient/admin/ai-audits/${encodeURIComponent(auditUuid)}`, {
+      headers: getAdminAuthHeaders(),
+    })
+  },
+  reviewAiAudit(auditUuid: string, payload: AuditReviewPayload) {
+    return http.post<ApiEnvelope<AuditLogRecord>>(
+      `/api/v1/patient/admin/ai-audits/${encodeURIComponent(auditUuid)}/review`,
+      payload,
+      { headers: getAdminAuthHeaders() },
+    )
+  },
+  exportAiAudits(query: AuditQuery = {}) {
+    return http.get<Blob>('/api/v1/patient/admin/ai-audits/export', {
+      params: query,
+      headers: getAdminAuthHeaders(),
+      responseType: 'blob',
     })
   },
   batchImportDrugs(drugs: DrugImportDraft[]) {

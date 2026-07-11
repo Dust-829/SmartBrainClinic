@@ -3,11 +3,17 @@ import { computed, reactive, ref } from 'vue'
 
 import { adminApi, type AuditLogPage, type AuditLogRecord } from '@/api/admin'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { useAdminSessionStore } from '@/stores/adminSession'
 
 const DEFAULT_LIMIT = 20
+const session = useAdminSessionStore()
 
 const loading = ref(false)
+const detailLoading = ref(false)
+const reviewSubmitting = ref(false)
+const exporting = ref(false)
 const logs = ref<AuditLogRecord[]>([])
+const selectedDetail = ref<AuditLogRecord | null>(null)
 const pagination = reactive({
   total: 0,
   limit: DEFAULT_LIMIT,
@@ -17,6 +23,9 @@ const summary = reactive({
   total_count: 0,
   validated_count: 0,
   pending_count: 0,
+  review_pending_count: 0,
+  review_approved_count: 0,
+  review_rejected_count: 0,
 })
 const expandedUuid = ref<string | null>(null)
 const configMessage = ref('')
@@ -27,6 +36,10 @@ const filters = reactive({
   created_from: '',
   created_to: '',
 })
+const reviewForm = reactive({
+  review_status: 'approved' as 'approved' | 'rejected',
+  review_note: '',
+})
 
 const tokenConfigured = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
 const currentPage = computed(() => Math.floor(pagination.offset / pagination.limit) + 1)
@@ -36,6 +49,10 @@ const pageEnd = computed(() => Math.min(pagination.offset + logs.value.length, p
 const validatedRatio = computed(() => {
   const total = summary.total_count || pagination.total
   return total ? Math.round((summary.validated_count / total) * 100) : 0
+})
+const reviewApprovalRatio = computed(() => {
+  const total = summary.total_count || pagination.total
+  return total ? Math.round((summary.review_approved_count / total) * 100) : 0
 })
 
 async function search(resetPage = true) {
@@ -87,6 +104,12 @@ function applyAuditPage(page: AuditLogPage | AuditLogRecord[] | undefined) {
   summary.total_count = page?.summary?.total_count ?? pagination.total
   summary.validated_count = page?.summary?.validated_count ?? logs.value.filter((item) => item.validated).length
   summary.pending_count = page?.summary?.pending_count ?? Math.max(summary.total_count - summary.validated_count, 0)
+  summary.review_pending_count =
+    page?.summary?.review_pending_count ?? logs.value.filter((item) => (item.review_status || 'pending') === 'pending').length
+  summary.review_approved_count =
+    page?.summary?.review_approved_count ?? logs.value.filter((item) => item.review_status === 'approved').length
+  summary.review_rejected_count =
+    page?.summary?.review_rejected_count ?? logs.value.filter((item) => item.review_status === 'rejected').length
 }
 
 function clearAuditState() {
@@ -96,7 +119,13 @@ function clearAuditState() {
   summary.total_count = 0
   summary.validated_count = 0
   summary.pending_count = 0
+  summary.review_pending_count = 0
+  summary.review_approved_count = 0
+  summary.review_rejected_count = 0
   expandedUuid.value = null
+  selectedDetail.value = null
+  reviewForm.review_status = 'approved'
+  reviewForm.review_note = ''
 }
 
 function resetFilters() {
@@ -126,8 +155,27 @@ function updateLimit(event: Event) {
   search(false)
 }
 
-function toggleDetail(uuid: string) {
-  expandedUuid.value = expandedUuid.value === uuid ? null : uuid
+async function toggleDetail(item: AuditLogRecord) {
+  if (expandedUuid.value === item.uuid) {
+    expandedUuid.value = null
+    selectedDetail.value = null
+    reviewForm.review_note = ''
+    return
+  }
+
+  expandedUuid.value = item.uuid
+  selectedDetail.value = item
+  detailLoading.value = true
+  try {
+    const response = await adminApi.getAiAuditDetail(item.uuid)
+    selectedDetail.value = response.data.data
+    primeReviewForm(response.data.data)
+  } catch {
+    selectedDetail.value = item
+    primeReviewForm(item)
+  } finally {
+    detailLoading.value = false
+  }
 }
 
 function asArray(value: unknown) {
@@ -161,6 +209,77 @@ function sourceLabel(source?: string | null) {
   return source ? labels[source] || source : '未知来源'
 }
 
+function reviewStatusLabel(status?: string | null) {
+  const labels: Record<string, string> = {
+    pending: '待人工复核',
+    approved: '人工已通过',
+    rejected: '人工已驳回',
+  }
+  return labels[status || 'pending'] || '待人工复核'
+}
+
+function primeReviewForm(item: AuditLogRecord) {
+  reviewForm.review_status = item.review_status === 'rejected' ? 'rejected' : 'approved'
+  reviewForm.review_note = item.review_note || ''
+}
+
+function currentReviewer() {
+  return session.staff?.displayName?.trim() || session.staff?.staffCode?.trim() || 'ADMIN'
+}
+
+function currentFilters() {
+  return {
+    module_name: filters.module_name.trim() || undefined,
+    source: filters.source.trim() || undefined,
+    validated: filters.validated === 'all' ? undefined : filters.validated === 'true',
+    created_from: toApiDateTime(filters.created_from, false),
+    created_to: toApiDateTime(filters.created_to, true),
+  }
+}
+
+async function submitReview() {
+  if (!expandedUuid.value) return
+
+  reviewSubmitting.value = true
+  try {
+    const response = await adminApi.reviewAiAudit(expandedUuid.value, {
+      review_status: reviewForm.review_status,
+      review_note: reviewForm.review_note.trim() || undefined,
+      reviewer: currentReviewer(),
+    })
+    selectedDetail.value = response.data.data
+    await search(false)
+  } finally {
+    reviewSubmitting.value = false
+  }
+}
+
+async function exportCurrentAudits() {
+  exporting.value = true
+  try {
+    const response = await adminApi.exportAiAudits(currentFilters())
+    const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
+    link.href = url
+    link.download = `ai-audits-${stamp}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+  } finally {
+    exporting.value = false
+  }
+}
+
+function detailValue(item: AuditLogRecord, field: keyof AuditLogRecord) {
+  if (selectedDetail.value && selectedDetail.value.uuid === item.uuid) {
+    return selectedDetail.value[field]
+  }
+  return item[field]
+}
+
 search()
 </script>
 
@@ -184,6 +303,10 @@ search()
         <div>
           <span>验证率</span>
           <strong>{{ validatedRatio }}%</strong>
+        </div>
+        <div>
+          <span>人工通过率</span>
+          <strong>{{ reviewApprovalRatio }}%</strong>
         </div>
       </div>
     </section>
@@ -223,6 +346,9 @@ search()
           <button type="submit" :disabled="loading || !tokenConfigured">
             {{ tokenConfigured ? (loading ? '查询中...' : '查询日志') : '等待配置' }}
           </button>
+          <button type="button" class="is-secondary" :disabled="exporting || !tokenConfigured" @click="exportCurrentAudits">
+            {{ exporting ? '导出中...' : '导出 CSV' }}
+          </button>
           <button type="button" class="is-secondary" :disabled="loading || !tokenConfigured" @click="resetFilters">
             重置
           </button>
@@ -255,15 +381,20 @@ search()
 
       <div v-if="logs.length" class="audit-list">
         <article v-for="item in logs" :key="item.uuid" class="audit-card">
-          <button type="button" class="audit-card__summary" @click="toggleDetail(item.uuid)">
+          <button type="button" class="audit-card__summary" @click="toggleDetail(item)">
             <div>
               <span class="audit-card__module">{{ item.module_name }}</span>
               <strong>{{ sourceLabel(item.source) }} · {{ item.model || '未记录模型' }}</strong>
               <p>{{ formatDateTime(item.created_at) }} · {{ item.latency_ms ? `${item.latency_ms} ms` : '未记录耗时' }}</p>
             </div>
-            <span :class="['audit-card__badge', { 'is-pending': !item.validated }]">
-              {{ item.validated ? '已验证' : '待复核' }}
-            </span>
+            <div class="audit-card__badge-group">
+              <span :class="['audit-card__badge', { 'is-pending': !item.validated }]">
+                {{ item.validated ? '机器已验证' : '机器待校验' }}
+              </span>
+              <span :class="['audit-card__badge', 'is-review', `is-${item.review_status || 'pending'}`]">
+                {{ reviewStatusLabel(item.review_status) }}
+              </span>
+            </div>
           </button>
 
           <div class="audit-card__content">
@@ -278,23 +409,54 @@ search()
           </div>
 
           <div v-if="expandedUuid === item.uuid" class="audit-card__detail">
+            <div v-if="detailLoading" class="audit-card__loading">详情加载中...</div>
             <div>
               <span>Warnings</span>
-              <ul v-if="asArray(item.warnings).length">
-                <li v-for="warning in asArray(item.warnings)" :key="String(warning)">{{ warning }}</li>
+              <ul v-if="asArray(detailValue(item, 'warnings')).length">
+                <li v-for="warning in asArray(detailValue(item, 'warnings'))" :key="String(warning)">{{ warning }}</li>
               </ul>
               <p v-else>无</p>
             </div>
             <div>
               <span>Validator Messages</span>
-              <ul v-if="asArray(item.validator_messages).length">
-                <li v-for="message in asArray(item.validator_messages)" :key="String(message)">{{ message }}</li>
+              <ul v-if="asArray(detailValue(item, 'validator_messages')).length">
+                <li v-for="message in asArray(detailValue(item, 'validator_messages'))" :key="String(message)">{{ message }}</li>
               </ul>
               <p v-else>无</p>
             </div>
             <div class="audit-card__context">
               <span>Context</span>
-              <pre>{{ stringifyDetail(item.context) }}</pre>
+              <pre>{{ stringifyDetail(detailValue(item, 'context')) }}</pre>
+            </div>
+            <div class="audit-card__review">
+              <span>人工复核</span>
+              <div class="audit-card__review-meta">
+                <p>当前状态：{{ reviewStatusLabel(String(detailValue(item, 'review_status') || 'pending')) }}</p>
+                <p>复核人：{{ detailValue(item, 'reviewer') || '未记录' }}</p>
+                <p>复核时间：{{ formatDateTime(String(detailValue(item, 'reviewed_at') || '')) }}</p>
+              </div>
+              <div class="audit-card__review-actions">
+                <label>
+                  <span>复核结论</span>
+                  <select v-model="reviewForm.review_status" :disabled="reviewSubmitting">
+                    <option value="approved">通过</option>
+                    <option value="rejected">驳回</option>
+                  </select>
+                </label>
+                <label class="is-full">
+                  <span>复核备注</span>
+                  <textarea
+                    v-model="reviewForm.review_note"
+                    rows="4"
+                    maxlength="1000"
+                    placeholder="填写人工复核依据、风险结论或后续建议"
+                    :disabled="reviewSubmitting"
+                  />
+                </label>
+                <button type="button" :disabled="reviewSubmitting" @click="submitReview">
+                  {{ reviewSubmitting ? '提交中...' : '提交复核' }}
+                </button>
+              </div>
             </div>
           </div>
         </article>
@@ -319,9 +481,9 @@ search()
 
 .audit-hero__metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(96px, 1fr));
+  grid-template-columns: repeat(4, minmax(96px, 1fr));
   gap: 10px;
-  min-width: 360px;
+  min-width: 460px;
 }
 
 .audit-hero__metrics div {
@@ -375,10 +537,12 @@ search()
 .audit-form__actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .audit-form button,
-.audit-pagination button {
+.audit-pagination button,
+.audit-card__review-actions button {
   min-height: 38px;
   border: 0;
   border-radius: var(--admin-radius-sm);
@@ -486,6 +650,32 @@ search()
   color: #92400e;
 }
 
+.audit-card__badge-group {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.audit-card__badge.is-review {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.audit-card__badge.is-review.is-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.audit-card__badge.is-review.is-approved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.audit-card__badge.is-review.is-rejected {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
 .audit-card__content,
 .audit-card__detail {
   display: grid;
@@ -501,6 +691,60 @@ search()
 
 .audit-card__context {
   grid-column: 1 / -1;
+}
+
+.audit-card__review {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.audit-card__review-meta {
+  display: grid;
+  gap: 4px;
+  color: var(--admin-text-muted);
+}
+
+.audit-card__review-meta p {
+  margin: 0;
+}
+
+.audit-card__review-actions {
+  display: grid;
+  grid-template-columns: 220px 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.audit-card__review-actions label {
+  display: grid;
+  gap: 6px;
+}
+
+.audit-card__review-actions label.is-full {
+  grid-column: auto;
+}
+
+.audit-card__review-actions select,
+.audit-card__review-actions textarea {
+  width: 100%;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-sm);
+  padding: 10px;
+  color: var(--admin-text);
+  background: #ffffff;
+  font: inherit;
+}
+
+.audit-card__review-actions textarea {
+  resize: vertical;
+  min-height: 108px;
+}
+
+.audit-card__loading {
+  grid-column: 1 / -1;
+  color: var(--admin-text-muted);
 }
 
 .audit-card pre {
@@ -549,6 +793,10 @@ search()
 
   .audit-card__content,
   .audit-card__detail {
+    grid-template-columns: 1fr;
+  }
+
+  .audit-card__review-actions {
     grid-template-columns: 1fr;
   }
 }
