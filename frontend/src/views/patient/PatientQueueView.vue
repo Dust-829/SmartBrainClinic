@@ -81,7 +81,7 @@ onBeforeUnmount(() => {
 })
 
 function goBack() {
-  router.push('/patient/registers')
+  router.push('/patient/home')
 }
 
 async function refresh(silent = false) {
@@ -118,7 +118,7 @@ function goToRegisters() {
     <PatientFlowHeader
       title="候诊状态"
       subtitle="候诊进度会自动更新，也可手动刷新"
-      back-label="挂号记录"
+      back-label="返回首页"
       @back="goBack"
     />
 
