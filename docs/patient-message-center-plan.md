@@ -6,6 +6,12 @@
 
 补齐患者端底部导航中的“消息”入口，提供一个与现有患者首页一致的高保真移动端通知中心。该页面仅用于演示通知呈现，不实现即时聊天、消息推送、已读回写或后端接口调用。
 
+## Visual reference
+
+![患者端通知中心设计方向对比图](./assets/patient-message-center-concept-board.png)
+
+已确认采用图中 **A 方案**：以蓝色 Hero、未读标签和纵向通知列表建立首屏层级；B 方案的时间线布局不进入本次实现范围。
+
 ## Current behavior
 
 - `PatientBottomNav.vue` 已展示“消息”Tab，但其 `path` 为空，因此按钮被禁用。
