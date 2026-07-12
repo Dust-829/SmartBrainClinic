@@ -136,6 +136,7 @@ class AdminUpdateRuleRequest(BaseModel):
     week_rule: Optional[str] = None
     llm_text_rule: Optional[str] = None
     regist_quota: Optional[int] = None
+    slot_duration_minutes: Optional[int] = None
     clinic_room_uuid: Optional[uuid_pkg.UUID] = None
 
 
@@ -144,6 +145,7 @@ class AdminUpdateActualRequest(BaseModel):
     schedule_date: str
     noon: str
     regist_quota: int
+    slot_duration_minutes: Optional[int] = None
     clinic_room_uuid: Optional[uuid_pkg.UUID] = None
 
 

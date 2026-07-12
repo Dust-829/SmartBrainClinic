@@ -70,3 +70,40 @@ async def list_bills(
         return success(bills)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/page", summary="管理员分页查询账单工作台数据")
+async def get_admin_bills_page(
+    keyword: str | None = None,
+    state: str | None = None,
+    limit: int = 10,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        result = await svc.get_admin_bills_page(
+            session,
+            keyword=keyword,
+            state=state,
+            limit=limit,
+            offset=offset,
+        )
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{bill_code}/detail", summary="获取账单详情")
+async def get_admin_bill_detail(
+    bill_code: str,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        result = await svc.get_admin_bill_detail(session, bill_code)
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

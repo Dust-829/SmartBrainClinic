@@ -78,6 +78,39 @@ def test_resolve_relative_date_uses_current_week_or_next_occurrence():
     assert ai_scheduling.resolve_relative_date("明天", base_date) == date(2026, 7, 12)
 
 
+def test_get_effective_slot_duration_minutes_falls_back_to_default():
+    actual = SimpleNamespace(slot_duration_minutes=None)
+
+    assert patient_service._get_effective_slot_duration_minutes(actual) == 10
+
+
+@pytest.mark.asyncio
+async def test_run_ai_scheduling_uses_short_llm_timeout_and_falls_back(monkeypatch):
+    captured = {}
+
+    async def fake_chat_json(self, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return None
+
+    async def fake_record_ai_audit(**kwargs):
+        return None
+
+    monkeypatch.setattr(ai_scheduling.AIClient, "chat_json", fake_chat_json)
+    monkeypatch.setattr(ai_scheduling, "record_ai_audit", fake_record_ai_audit)
+
+    result = await ai_scheduling.run_ai_scheduling(
+        "请将2026-08-10下午门诊限额调整为7个",
+        "90000000-0000-0000-0000-000000000101",
+        api_key="test-key",
+        api_base="https://example.com/v1",
+        model="test-model",
+    )
+
+    assert captured["timeout"] == ai_scheduling.SCHEDULING_LLM_TIMEOUT_SECONDS
+    assert result["source"] == "rule"
+    assert result["data"]["actions"]
+
+
 @pytest.mark.asyncio
 async def test_generate_scheduling_actuals_skips_existing_and_uses_sync_time_slots(monkeypatch):
     employee_uuid = uuid.uuid4()
@@ -98,7 +131,7 @@ async def test_generate_scheduling_actuals_skips_existing_and_uses_sync_time_slo
     sync_calls = []
 
     async def fake_sync_time_slots(session, actual, is_new=False):
-        sync_calls.append((actual.schedule_date, actual.noon, actual.regist_quota, is_new))
+        sync_calls.append((actual.schedule_date, actual.noon, actual.regist_quota, actual.slot_duration_minutes, is_new))
 
     monkeypatch.setattr(patient_service, "_find_scheduling_actual", fake_find_scheduling_actual)
     monkeypatch.setattr(patient_service, "_sync_time_slots", fake_sync_time_slots)
@@ -113,7 +146,7 @@ async def test_generate_scheduling_actuals_skips_existing_and_uses_sync_time_slo
         "skipped_count": 1,
         "success": True,
     }
-    assert sync_calls == [(date(2026, 7, 13), "下午", 3, True)]
+    assert sync_calls == [(date(2026, 7, 13), "下午", 3, 10, True)]
 
 
 @pytest.mark.asyncio
@@ -141,15 +174,18 @@ async def test_admin_update_scheduling_rule_persists_clinic_room_uuid(monkeypatc
             "employee_uuid": str(employee_uuid),
             "week_rule": "1,2,2,5",
             "regist_quota": 18,
+            "slot_duration_minutes": 15,
             "clinic_room_uuid": str(room_uuid),
         },
     )
 
     assert rule.week_rule == "1,2,5"
     assert rule.regist_quota == 18
+    assert rule.slot_duration_minutes == 15
     assert rule.clinic_room_uuid == room_uuid
     assert result["clinic_room_uuid"] == str(room_uuid)
     assert result["week_rule"] == "1,2,5"
+    assert result["slot_duration_minutes"] == 15
 
 
 @pytest.mark.asyncio
@@ -163,6 +199,7 @@ async def test_apply_scheduling_actual_change_clamps_quota_and_updates_room(monk
         noon="上午",
         regist_quota=10,
         registered_count=6,
+        slot_duration_minutes=10,
         clinic_room_uuid=None,
     )
 
@@ -184,6 +221,7 @@ async def test_apply_scheduling_actual_change_clamps_quota_and_updates_room(monk
         schedule_date=date(2026, 7, 13),
         noon="上午",
         regist_quota=3,
+        slot_duration_minutes=None,
         clinic_room_uuid=room_uuid,
         action_type="modify",
     )
@@ -206,6 +244,7 @@ async def test_cancel_after_time_creates_disruption_and_trims_quota(monkeypatch)
         noon="下午",
         regist_quota=3,
         registered_count=1,
+        slot_duration_minutes=10,
         clinic_room_uuid=None,
     )
     slots = [
@@ -246,6 +285,82 @@ async def test_cancel_after_time_creates_disruption_and_trims_quota(monkeypatch)
     assert actual.regist_quota == 2
     assert session.deleted == [slots[1]]
     assert sync_calls == [(2, False)]
+
+
+@pytest.mark.asyncio
+async def test_apply_scheduling_actual_change_rebuilds_unbooked_slots_with_new_duration(monkeypatch):
+    employee_uuid = uuid.uuid4()
+    actual = SimpleNamespace(
+        id=1,
+        employee_uuid=employee_uuid,
+        schedule_date=date(2026, 7, 13),
+        noon="下午",
+        regist_quota=4,
+        registered_count=0,
+        slot_duration_minutes=10,
+        clinic_room_uuid=None,
+    )
+
+    async def fake_find_scheduling_actual(session, target_employee_uuid, schedule_date, noon):
+        return actual
+
+    sync_calls = []
+
+    async def fake_sync_time_slots(session, target_actual, is_new=False):
+        sync_calls.append((target_actual.regist_quota, target_actual.slot_duration_minutes, is_new))
+
+    monkeypatch.setattr(patient_service, "_find_scheduling_actual", fake_find_scheduling_actual)
+    monkeypatch.setattr(patient_service, "_sync_time_slots", fake_sync_time_slots)
+
+    summary = await patient_service._apply_scheduling_actual_change(
+        FakeSession(),
+        employee_uuid=employee_uuid,
+        schedule_date=date(2026, 7, 13),
+        noon="下午",
+        regist_quota=4,
+        slot_duration_minutes=20,
+        action_type="modify",
+    )
+
+    assert actual.slot_duration_minutes == 20
+    assert summary["slot_duration_minutes"] == 20
+    assert sync_calls == [(4, 20, False)]
+
+
+@pytest.mark.asyncio
+async def test_admin_update_scheduling_actual_rejects_duration_change_when_booked(monkeypatch):
+    employee_uuid = uuid.uuid4()
+    actual = SimpleNamespace(
+        id=1,
+        employee_uuid=employee_uuid,
+        schedule_date=date(2026, 7, 13),
+        noon="上午",
+        regist_quota=10,
+        registered_count=2,
+        slot_duration_minutes=10,
+        clinic_room_uuid=None,
+    )
+
+    async def fake_get_employee(target_employee_uuid):
+        return {"uuid": str(employee_uuid), "realname": "doctor"}
+
+    async def fake_find_scheduling_actual(session, target_employee_uuid, schedule_date, noon):
+        return actual
+
+    monkeypatch.setattr(patient_service.AuthClient, "get_employee", fake_get_employee)
+    monkeypatch.setattr(patient_service, "_find_scheduling_actual", fake_find_scheduling_actual)
+
+    with pytest.raises(ValueError, match="每号时长"):
+        await patient_service.admin_update_scheduling_actual(
+            FakeSession(),
+            {
+                "employee_uuid": str(employee_uuid),
+                "schedule_date": "2026-07-13",
+                "noon": "上午",
+                "regist_quota": 10,
+                "slot_duration_minutes": 20,
+            },
+        )
 
 
 @pytest.mark.asyncio

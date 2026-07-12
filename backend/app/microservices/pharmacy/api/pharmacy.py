@@ -59,6 +59,63 @@ async def list_prescriptions(
     prescriptions = await svc.list_prescriptions(session, state=state, limit=limit)
     return success(prescriptions)
 
+
+@router.get("/admin/workbench/overview", summary="管理员药房工作台概览")
+async def get_admin_workbench_overview(session: AsyncSession = Depends(get_session)):
+    result = await svc.get_admin_workbench_overview(session)
+    return success(result)
+
+
+@router.get("/admin/workbench/prescriptions", summary="管理员药房工作台处方列表")
+async def list_admin_workbench_prescriptions(
+    state: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    prescription_code: str | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        result = await svc.list_admin_workbench_prescriptions(
+            session,
+            state=state,
+            limit=limit,
+            offset=offset,
+            prescription_code=prescription_code,
+        )
+        return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/admin/workbench/prescriptions/{uuid}", summary="管理员药房工作台处方详情")
+async def get_admin_workbench_prescription_detail(uuid: str, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await svc.get_admin_workbench_prescription_detail(session, uuid)
+        return success(result)
+    except ValueError as e:
+        detail = str(e)
+        if "not found" in detail:
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+
+
+@router.get("/admin/workbench/drugs", summary="管理员药房工作台库存列表")
+async def list_admin_workbench_drugs(
+    keyword: str | None = None,
+    low_stock_only: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+):
+    result = await svc.list_admin_workbench_drugs(
+        session,
+        keyword=keyword,
+        low_stock_only=low_stock_only,
+        limit=limit,
+        offset=offset,
+    )
+    return success(result)
+
 @router.get("/prescription-item/{uuid}", summary="获取处方单明细")
 async def get_prescription_item(uuid: str, session: AsyncSession = Depends(get_session)):
     item = await svc.get_prescription_item_by_uuid(session, uuid)
@@ -150,10 +207,33 @@ class DrugImportInput(BaseModel):
 class BatchImportDrugsRequest(BaseModel):
     drugs: List[DrugImportInput]
 
+
+class DrugStockAdjustmentRequest(BaseModel):
+    mode: str
+    quantity: int
+
 @router.post("/drugs/batch-import", summary="批量入库药品并自动生成向量")
 async def batch_import_drugs(data: BatchImportDrugsRequest, session: AsyncSession = Depends(get_session)):
     try:
         result = await svc.batch_import_drugs(session, [d.model_dump() for d in data.drugs])
         return success(result)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/workbench/drugs/{uuid}/stock-adjustments", summary="管理员药房工作台库存调整")
+async def adjust_drug_stock(
+    uuid: str,
+    data: DrugStockAdjustmentRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        result = await svc.adjust_drug_stock(session, uuid, data.model_dump())
+        return success(result)
+    except ValueError as e:
+        detail = str(e)
+        if "不存在" in detail:
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)

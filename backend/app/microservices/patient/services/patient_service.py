@@ -35,7 +35,7 @@ from .ai_scheduling import run_ai_scheduling
 from .internal_client import AuthClient
 
 async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_new: bool = False):
-    interval = 10  # 强制固定每号 10 分钟
+    interval = _get_effective_slot_duration_minutes(actual)
     start_time_str = "08:00" if actual.noon == "上午" else "13:00"
     dt_start = datetime.strptime(start_time_str, "%H:%M")
 
@@ -52,18 +52,30 @@ async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_n
             )
             session.add(ts)
     else:
-        # 当非新建时（如管理员直接修改额度）
         stmt = select(SchedulingTimeSlot).where(
             SchedulingTimeSlot.scheduling_actual_id == actual.id
         ).order_by(SchedulingTimeSlot.time_range)
         res = await session.execute(stmt)
         existing_slots = res.scalars().all()
-        
+
+        if actual.registered_count == 0:
+            for ts in existing_slots:
+                await session.delete(ts)
+            for i in range(actual.regist_quota):
+                slot_start = dt_start + timedelta(minutes=i * interval)
+                slot_end = dt_start + timedelta(minutes=(i + 1) * interval)
+                ts = SchedulingTimeSlot(
+                    scheduling_actual_id=actual.id,
+                    time_range=f"{slot_start.strftime('%H:%M')}-{slot_end.strftime('%H:%M')}",
+                    is_booked=False
+                )
+                session.add(ts)
+            return
+
         current_total = len(existing_slots)
         target_total = actual.regist_quota
         
         if target_total > current_total:
-            # 追加 slots
             if existing_slots:
                 last_time_str = existing_slots[-1].time_range.split("-")[1]
                 dt_append_start = datetime.strptime(last_time_str, "%H:%M")
@@ -80,7 +92,6 @@ async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_n
                 )
                 session.add(ts)
         elif target_total < current_total:
-            # 从末尾裁剪未被预约的 slots
             to_remove = current_total - target_total
             removed_count = 0
             for ts in reversed(existing_slots):
@@ -90,7 +101,6 @@ async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_n
                     if removed_count == to_remove:
                         break
             
-            # 如果末尾可删的空槽不够，强制让 quota 匹配真实剩余
             if removed_count < to_remove:
                 actual.regist_quota = current_total - removed_count
                 session.add(actual)
@@ -165,6 +175,9 @@ def _serialize_patient(patient: Patient) -> dict:
 _VALID_NOON_VALUES = {"上午", "下午"}
 _VALID_WEEK_RULE_VALUES = {str(i) for i in range(1, 8)}
 _VALID_APPLICATION_STATUSES = {"pending", "approved", "rejected", "duplicate"}
+_DEFAULT_SLOT_DURATION_MINUTES = 10
+_MIN_SLOT_DURATION_MINUTES = 5
+_MAX_SLOT_DURATION_MINUTES = 60
 
 
 def _normalize_noon_value(noon: str) -> str:
@@ -185,6 +198,22 @@ def _normalize_week_rule(week_rule: str) -> str:
         if item not in deduped:
             deduped.append(item)
     return ",".join(deduped)
+
+
+def _normalize_slot_duration_minutes(value: Optional[int], *, default: int = _DEFAULT_SLOT_DURATION_MINUTES) -> int:
+    normalized = int(default if value is None else value)
+    if normalized < _MIN_SLOT_DURATION_MINUTES or normalized > _MAX_SLOT_DURATION_MINUTES:
+        raise ValueError(
+            f"slot_duration_minutes 仅支持 {_MIN_SLOT_DURATION_MINUTES}-{_MAX_SLOT_DURATION_MINUTES} 分钟"
+        )
+    return normalized
+
+
+def _get_effective_slot_duration_minutes(actual: SchedulingActual) -> int:
+    return _normalize_slot_duration_minutes(
+        getattr(actual, "slot_duration_minutes", None),
+        default=_DEFAULT_SLOT_DURATION_MINUTES,
+    )
 
 
 def _serialize_scheduling_application(app: SchedulingApplication) -> dict:
@@ -211,6 +240,20 @@ async def _find_scheduling_actual(
         SchedulingActual.noon == noon,
     )
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _get_rule_slot_duration_minutes(
+    session: AsyncSession,
+    employee_uuid: uuid_pkg.UUID,
+) -> int:
+    stmt = (
+        select(SchedulingRule.slot_duration_minutes)
+        .where(SchedulingRule.employee_uuid == employee_uuid)
+        .order_by(SchedulingRule.id.desc())
+        .limit(1)
+    )
+    value = (await session.execute(stmt)).scalar_one_or_none()
+    return _normalize_slot_duration_minutes(value, default=_DEFAULT_SLOT_DURATION_MINUTES)
 
 
 async def _list_scheduling_time_slots(session: AsyncSession, scheduling_actual_id: int) -> list[SchedulingTimeSlot]:
@@ -394,6 +437,7 @@ async def _apply_scheduling_actual_change(
     schedule_date: date,
     noon: str,
     regist_quota: int,
+    slot_duration_minutes: Optional[int] = None,
     clinic_room_uuid: Optional[uuid_pkg.UUID] = None,
     action_type: str = "modify",
     time_threshold: Optional[str] = None,
@@ -433,12 +477,17 @@ async def _apply_scheduling_actual_change(
                     "registered_count": 0,
                 }
             else:
+                effective_slot_duration = _normalize_slot_duration_minutes(
+                    slot_duration_minutes,
+                    default=await _get_rule_slot_duration_minutes(session, employee_uuid),
+                )
                 actual = SchedulingActual(
                     employee_uuid=employee_uuid,
                     schedule_date=schedule_date,
                     noon=normalized_noon,
                     regist_quota=target_quota,
                     registered_count=0,
+                    slot_duration_minutes=effective_slot_duration,
                     clinic_room_uuid=clinic_room_uuid,
                 )
                 session.add(actual)
@@ -454,6 +503,8 @@ async def _apply_scheduling_actual_change(
         else:
             clamped = target_quota < actual.registered_count
             actual.regist_quota = max(target_quota, actual.registered_count)
+            if slot_duration_minutes is not None:
+                actual.slot_duration_minutes = _normalize_slot_duration_minutes(slot_duration_minutes)
             if clinic_room_uuid is not None:
                 actual.clinic_room_uuid = clinic_room_uuid
             session.add(actual)
@@ -474,6 +525,7 @@ async def _apply_scheduling_actual_change(
         "action_type": action_type,
         "target_date": schedule_date.isoformat(),
         "noon": normalized_noon,
+        "slot_duration_minutes": _get_effective_slot_duration_minutes(actual) if actual else _normalize_slot_duration_minutes(slot_duration_minutes),
         "clinic_room_uuid": str(actual.clinic_room_uuid) if actual and actual.clinic_room_uuid else (str(clinic_room_uuid) if clinic_room_uuid else None),
         **result,
     }
@@ -1598,6 +1650,10 @@ async def generate_scheduling_actuals(session: AsyncSession, start_date_str: str
                         noon=noon,
                         regist_quota=rule.regist_quota,
                         registered_count=0,
+                        slot_duration_minutes=_normalize_slot_duration_minutes(
+                            getattr(rule, "slot_duration_minutes", None),
+                            default=_DEFAULT_SLOT_DURATION_MINUTES,
+                        ),
                         clinic_room_uuid=rule.clinic_room_uuid
                     )
                     session.add(new_actual)
@@ -1786,6 +1842,7 @@ async def admin_update_scheduling_rule(session: AsyncSession, data: dict) -> dic
     regist_quota = data.get("regist_quota", 30)
     if regist_quota is not None and int(regist_quota) < 0:
         raise ValueError("regist_quota 不能小于 0")
+    slot_duration_minutes = _normalize_slot_duration_minutes(data.get("slot_duration_minutes"))
 
     stmt = select(SchedulingRule).where(SchedulingRule.employee_uuid == employee_uuid)
     res = await session.execute(stmt)
@@ -1796,6 +1853,8 @@ async def admin_update_scheduling_rule(session: AsyncSession, data: dict) -> dic
             rule.week_rule = week_rule
         if "regist_quota" in data:
             rule.regist_quota = int(regist_quota)
+        if "slot_duration_minutes" in data:
+            rule.slot_duration_minutes = slot_duration_minutes
         if "llm_text_rule" in data:
             rule.llm_text_rule = data["llm_text_rule"]
         if "rule_name" in data and data["rule_name"]:
@@ -1810,6 +1869,7 @@ async def admin_update_scheduling_rule(session: AsyncSession, data: dict) -> dic
             week_rule=week_rule,
             llm_text_rule=data.get("llm_text_rule", "管理员后台人工介入"),
             regist_quota=int(regist_quota),
+            slot_duration_minutes=slot_duration_minutes,
             clinic_room_uuid=uuid_pkg.UUID(str(data["clinic_room_uuid"])) if data.get("clinic_room_uuid") else None,
             delmark=1
         )
@@ -1820,6 +1880,7 @@ async def admin_update_scheduling_rule(session: AsyncSession, data: dict) -> dic
         "employee_uuid": str(employee_uuid),
         "week_rule": rule.week_rule,
         "regist_quota": rule.regist_quota,
+        "slot_duration_minutes": rule.slot_duration_minutes,
         "clinic_room_uuid": str(rule.clinic_room_uuid) if rule.clinic_room_uuid else None,
         "success": True,
     }
@@ -1832,7 +1893,18 @@ async def admin_update_scheduling_actual(session: AsyncSession, data: dict) -> d
     target_date = date.fromisoformat(data["schedule_date"])
     noon = _normalize_noon_value(data["noon"])
     regist_quota = int(data.get("regist_quota", 0))
+    slot_duration_minutes = data.get("slot_duration_minutes")
     clinic_room_uuid = uuid_pkg.UUID(str(data["clinic_room_uuid"])) if data.get("clinic_room_uuid") else None
+    actual = await _find_scheduling_actual(session, employee_uuid, target_date, noon)
+
+    if actual and slot_duration_minutes is not None:
+        requested_slot_duration_minutes = _normalize_slot_duration_minutes(slot_duration_minutes)
+        current_slot_duration_minutes = _get_effective_slot_duration_minutes(actual)
+        if (
+            requested_slot_duration_minutes != current_slot_duration_minutes
+            and actual.registered_count > 0
+        ):
+            raise ValueError("该班次已有挂号，不能直接调整每号时长，请先处理已挂号患者")
 
     summary = await _apply_scheduling_actual_change(
         session,
@@ -1840,6 +1912,7 @@ async def admin_update_scheduling_actual(session: AsyncSession, data: dict) -> d
         schedule_date=target_date,
         noon=noon,
         regist_quota=regist_quota,
+        slot_duration_minutes=slot_duration_minutes,
         clinic_room_uuid=clinic_room_uuid,
         action_type="cancel" if regist_quota == 0 else "modify",
     )
@@ -1850,6 +1923,7 @@ async def admin_update_scheduling_actual(session: AsyncSession, data: dict) -> d
         "schedule_date": str(target_date),
         "noon": noon,
         "regist_quota": summary.get("final_regist_quota", regist_quota),
+        "slot_duration_minutes": summary.get("slot_duration_minutes"),
         "registered_count": summary.get("registered_count", 0),
         "disruptions_created": summary.get("disruptions_created", 0),
         "status": summary.get("status"),

@@ -47,6 +47,7 @@ const ruleForm = reactive({
   week_rule: '1,2,3,4,5',
   llm_text_rule: '管理员后台人工干预排班规则',
   regist_quota: 20,
+  slot_duration_minutes: 10,
   clinic_room_uuid: '',
 })
 
@@ -54,8 +55,17 @@ const actualForm = reactive({
   schedule_date: new Date().toISOString().slice(0, 10),
   noon: '上午',
   regist_quota: 20,
+  slot_duration_minutes: 10,
   clinic_room_uuid: '',
 })
+
+function extractErrorMessage(error: unknown) {
+  return (
+    (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data?.detail ||
+    (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data?.message ||
+    (error instanceof Error ? error.message : '请求失败')
+  )
+}
 
 const availableDepartments = computed(() => {
   const doctorDeptCodes = new Set(doctors.value.map((doctor) => doctor.deptCode))
@@ -123,6 +133,7 @@ function formatRuleResult(result: ScheduleRuleResult) {
     `排班规则已更新：${result.employee_uuid}`,
     `week_rule：${result.week_rule ?? '未返回'}`,
     `quota：${result.regist_quota ?? '未返回'}`,
+    `每号时长：${result.slot_duration_minutes ?? '未返回'} 分钟`,
     `clinic_room_uuid：${result.clinic_room_uuid ?? '未设置'}`,
   ].join('\n')
 }
@@ -134,6 +145,7 @@ function formatActualResult(result: ScheduleActualResult) {
     `午别：${result.noon ?? '-'}`,
     `状态：${result.status ?? '-'}`,
     `最终 quota：${result.regist_quota ?? '-'}`,
+    `每号时长：${result.slot_duration_minutes ?? '-'} 分钟`,
     `已挂号人数：${result.registered_count ?? '-'}`,
     `产生 disruption：${result.disruptions_created ?? 0}`,
     `clinic_room_uuid：${result.clinic_room_uuid ?? '未设置'}`,
@@ -225,10 +237,13 @@ async function submitRuleUpdate() {
       week_rule: ruleForm.week_rule,
       llm_text_rule: ruleForm.llm_text_rule,
       regist_quota: ruleForm.regist_quota,
+      slot_duration_minutes: ruleForm.slot_duration_minutes,
       clinic_room_uuid: ruleForm.clinic_room_uuid.trim() || undefined,
     })
     lastResult.value = formatRuleResult(response.data.data)
     ElMessage.success('排班规则已更新')
+  } catch (error) {
+    lastResult.value = `排班规则更新失败：${extractErrorMessage(error)}`
   } finally {
     updatingRule.value = false
   }
@@ -243,11 +258,14 @@ async function submitActualUpdate() {
       schedule_date: actualForm.schedule_date,
       noon: actualForm.noon,
       regist_quota: actualForm.regist_quota,
+      slot_duration_minutes: actualForm.slot_duration_minutes,
       clinic_room_uuid: actualForm.clinic_room_uuid.trim() || undefined,
     })
     const result = response.data.data
     lastResult.value = formatActualResult(result)
     ElMessage.success(`实际排班已处理，状态：${result.status ?? 'success'}`)
+  } catch (error) {
+    lastResult.value = `实际排班失败：${extractErrorMessage(error)}`
   } finally {
     updatingActual.value = false
   }
@@ -360,6 +378,10 @@ onMounted(async () => {
             <input v-model.number="ruleForm.regist_quota" type="number" min="0" />
           </label>
           <label>
+            <span>每号时长（分钟）</span>
+            <input v-model.number="ruleForm.slot_duration_minutes" type="number" min="5" max="60" />
+          </label>
+          <label>
             <span>诊室 UUID（可选）</span>
             <input v-model="ruleForm.clinic_room_uuid" type="text" />
           </label>
@@ -389,6 +411,10 @@ onMounted(async () => {
           <label>
             <span>号源数量</span>
             <input v-model.number="actualForm.regist_quota" type="number" min="0" />
+          </label>
+          <label>
+            <span>每号时长（分钟）</span>
+            <input v-model.number="actualForm.slot_duration_minutes" type="number" min="5" max="60" />
           </label>
           <label>
             <span>诊室 UUID（可选）</span>

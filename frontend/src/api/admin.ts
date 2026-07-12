@@ -35,6 +35,7 @@ export interface ScheduleRulePayload {
   week_rule?: string
   llm_text_rule?: string
   regist_quota?: number
+  slot_duration_minutes?: number
   clinic_room_uuid?: string
 }
 
@@ -42,6 +43,7 @@ export interface ScheduleRuleResult {
   employee_uuid: string
   week_rule?: string
   regist_quota?: number
+  slot_duration_minutes?: number
   clinic_room_uuid?: string | null
   success: boolean
 }
@@ -51,6 +53,7 @@ export interface ScheduleActualPayload {
   schedule_date: string
   noon: string
   regist_quota: number
+  slot_duration_minutes?: number
   clinic_room_uuid?: string
 }
 
@@ -59,6 +62,7 @@ export interface ScheduleActualResult {
   schedule_date?: string
   noon?: string
   regist_quota?: number
+  slot_duration_minutes?: number
   registered_count?: number
   disruptions_created?: number
   status?: string
@@ -144,6 +148,22 @@ export interface DrugImportResult {
   drug_code: string
 }
 
+export interface DrugImportFailure {
+  drug_code: string
+  reason: string
+}
+
+export interface DrugImportResponse {
+  successes: DrugImportResult[]
+  failures: DrugImportFailure[]
+}
+
+export interface WorkbenchPagination {
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface DrugListItem {
   uuid: string
   drug_code: string
@@ -163,6 +183,83 @@ export interface PrescriptionListItem {
   creation_time?: string | null
   is_ai_recommended: boolean
   drug_state: string
+}
+
+export interface PharmacyWorkbenchPrescriptionListItem extends PrescriptionListItem {
+  patient_name?: string | null
+  patient_case_number?: string | null
+  employee_name?: string | null
+  dept_name?: string | null
+  actual_time_range?: string | null
+  clinic_room_name?: string | null
+  items_count: number
+  can_dispense: boolean
+  can_return: boolean
+}
+
+export interface PharmacyWorkbenchPrescriptionPage {
+  items: PharmacyWorkbenchPrescriptionListItem[]
+  pagination: WorkbenchPagination
+}
+
+export interface PharmacyWorkbenchPrescriptionDetailItem {
+  uuid: string
+  drug_uuid?: string | null
+  drug_code?: string | null
+  drug_name?: string | null
+  specification?: string | null
+  unit?: string | null
+  price: string
+  stock?: number | null
+  min_stock_limit?: number | null
+  drug_usage: string
+  drug_number: number
+}
+
+export interface PharmacyWorkbenchPrescriptionDetail {
+  header: PrescriptionListItem
+  register_context: {
+    patient_name?: string | null
+    patient_case_number?: string | null
+    employee_name?: string | null
+    dept_name?: string | null
+    actual_time_range?: string | null
+    clinic_room_name?: string | null
+    visit_state_text?: string | null
+  }
+  items: PharmacyWorkbenchPrescriptionDetailItem[]
+  actions: {
+    can_dispense: boolean
+    can_return: boolean
+    primary_action?: 'dispense' | 'return' | null
+  }
+}
+
+export interface PharmacyWorkbenchDrugPage {
+  items: DrugListItem[]
+  pagination: WorkbenchPagination
+}
+
+export interface PharmacyWorkbenchOverview {
+  paid_prescription_count: number
+  dispensed_prescription_count: number
+  low_stock_drug_count: number
+  total_drug_count: number
+  low_stock_drugs: DrugListItem[]
+  actionable_prescriptions: PharmacyWorkbenchPrescriptionListItem[]
+}
+
+export interface DrugStockAdjustmentPayload {
+  mode: 'increase' | 'set'
+  quantity: number
+}
+
+export interface DrugStockAdjustmentResult {
+  drug_uuid: string
+  previous_stock: number
+  current_stock: number
+  mode: 'increase' | 'set'
+  quantity: number
 }
 
 export interface DispenseResult {
@@ -190,6 +287,70 @@ export interface BillRefundResult {
   bill_code: string
   bill_state: string
   refund_amount: string
+}
+
+export interface AdminBillQuery {
+  keyword?: string
+  state?: string
+  limit?: number
+  offset?: number
+}
+
+export interface AdminBillSummary {
+  total_count: number
+  paid_count: number
+  refunding_count: number
+  refunded_count: number
+  refund_failed_count: number
+  state_counts: Record<string, number>
+  total_amount: string
+  refunded_amount: string
+}
+
+export interface AdminBillListItem extends BillRecord {
+  patient_name?: string | null
+  case_number?: string | null
+  card_number_masked?: string | null
+  visit_date?: string | null
+  detail_count: number
+}
+
+export interface AdminBillPage {
+  items: AdminBillListItem[]
+  pagination: {
+    total: number
+    limit: number
+    offset: number
+  }
+  summary: AdminBillSummary
+}
+
+export interface AdminBillDetailItem {
+  uuid: string
+  item_type: string
+  item_source_id: string
+  amount: string
+}
+
+export interface AdminBillRefundStep {
+  step_name: string
+  status: string
+  error_message?: string | null
+  request_payload?: Record<string, unknown> | unknown[] | string | null
+  response_payload?: Record<string, unknown> | unknown[] | string | null
+  updated_at?: string | null
+}
+
+export interface AdminBillDetail extends BillRecord {
+  patient_uuid?: string | null
+  patient_name?: string | null
+  case_number?: string | null
+  card_number_masked?: string | null
+  visit_date?: string | null
+  visit_state?: number | null
+  visit_state_label?: string | null
+  details: AdminBillDetailItem[]
+  refund_steps: AdminBillRefundStep[]
 }
 
 export interface PatientAdminListItem {
@@ -281,8 +442,36 @@ export const adminApi = {
       responseType: 'blob',
     })
   },
+  getPharmacyWorkbenchOverview() {
+    return http.get<ApiEnvelope<PharmacyWorkbenchOverview>>('/api/v1/pharmacy/admin/workbench/overview')
+  },
+  listPharmacyWorkbenchPrescriptions(
+    params: { state?: string; limit?: number; offset?: number; prescription_code?: string } = {},
+  ) {
+    return http.get<ApiEnvelope<PharmacyWorkbenchPrescriptionPage>>('/api/v1/pharmacy/admin/workbench/prescriptions', {
+      params,
+    })
+  },
+  getPharmacyWorkbenchPrescriptionDetail(prescriptionUuid: string) {
+    return http.get<ApiEnvelope<PharmacyWorkbenchPrescriptionDetail>>(
+      `/api/v1/pharmacy/admin/workbench/prescriptions/${encodeURIComponent(prescriptionUuid)}`,
+    )
+  },
+  listPharmacyWorkbenchDrugs(
+    params: { keyword?: string; low_stock_only?: boolean; limit?: number; offset?: number } = {},
+  ) {
+    return http.get<ApiEnvelope<PharmacyWorkbenchDrugPage>>('/api/v1/pharmacy/admin/workbench/drugs', {
+      params,
+    })
+  },
   batchImportDrugs(drugs: DrugImportDraft[]) {
-    return http.post<ApiEnvelope<DrugImportResult[]>>('/api/v1/pharmacy/drugs/batch-import', { drugs })
+    return http.post<ApiEnvelope<DrugImportResponse>>('/api/v1/pharmacy/drugs/batch-import', { drugs })
+  },
+  adjustDrugStock(drugUuid: string, payload: DrugStockAdjustmentPayload) {
+    return http.post<ApiEnvelope<DrugStockAdjustmentResult>>(
+      `/api/v1/pharmacy/admin/workbench/drugs/${encodeURIComponent(drugUuid)}/stock-adjustments`,
+      payload,
+    )
   },
   listDrugs(params: { keyword?: string; low_stock_only?: boolean; limit?: number } = {}) {
     return http.get<ApiEnvelope<DrugListItem[]>>('/api/v1/pharmacy/drugs', { params })
@@ -290,11 +479,23 @@ export const adminApi = {
   listPrescriptions(params: { state?: string; limit?: number } = {}) {
     return http.get<ApiEnvelope<PrescriptionListItem[]>>('/api/v1/pharmacy/prescriptions', { params })
   },
-  dispensePrescription(prescriptionUuid: string) {
-    return http.put<ApiEnvelope<DispenseResult>>(`/api/v1/pharmacy/prescription/${prescriptionUuid}/dispense`)
+  dispensePrescription(prescriptionUuid: string, options: { idempotencyKey?: string } = {}) {
+    return http.put<ApiEnvelope<DispenseResult>>(
+      `/api/v1/pharmacy/prescription/${prescriptionUuid}/dispense`,
+      undefined,
+      {
+        headers: options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
+      },
+    )
   },
-  returnPrescription(prescriptionUuid: string) {
-    return http.put<ApiEnvelope<DispenseResult>>(`/api/v1/pharmacy/prescription/${prescriptionUuid}/return`)
+  returnPrescription(prescriptionUuid: string, options: { idempotencyKey?: string } = {}) {
+    return http.put<ApiEnvelope<DispenseResult>>(
+      `/api/v1/pharmacy/prescription/${prescriptionUuid}/return`,
+      undefined,
+      {
+        headers: options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
+      },
+    )
   },
   getBillsByRegister(registerUuid: string) {
     return http.get<ApiEnvelope<BillRecord[]>>(`/api/v1/bill/register/${registerUuid}`)
@@ -304,6 +505,12 @@ export const adminApi = {
   },
   refundBill(billCode: string) {
     return http.put<ApiEnvelope<BillRefundResult>>(`/api/v1/bill/${encodeURIComponent(billCode)}/refund`)
+  },
+  getAdminBillsPage(params: AdminBillQuery = {}) {
+    return http.get<ApiEnvelope<AdminBillPage>>('/api/v1/bill/admin/page', { params })
+  },
+  getAdminBillDetail(billCode: string) {
+    return http.get<ApiEnvelope<AdminBillDetail>>(`/api/v1/bill/${encodeURIComponent(billCode)}/detail`)
   },
   listPatients(params: { keyword?: string; limit?: number } = {}) {
     return http.get<ApiEnvelope<PatientAdminListItem[]>>('/api/v1/patient/admin/patients', { params })

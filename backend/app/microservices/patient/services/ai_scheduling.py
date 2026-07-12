@@ -15,6 +15,7 @@ from app.common.ai_validator import AIResultValidator
 from ..config import settings
 
 logger = logging.getLogger("patient.ai_scheduling")
+SCHEDULING_LLM_TIMEOUT_SECONDS = 8.0
 
 _WEEKDAY_MAP = {
     "一": 0,
@@ -281,7 +282,7 @@ async def run_ai_scheduling(
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
-                timeout=60.0,
+                timeout=SCHEDULING_LLM_TIMEOUT_SECONDS,
             )
             if isinstance(data, dict) and "actions" in data:
                 payload = SchedulingParseData(**data).model_dump(mode="json")

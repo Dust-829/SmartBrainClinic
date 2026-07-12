@@ -26,6 +26,7 @@ class SchedulingActual(SQLModel, table=True):
     noon: str = Field(max_length=10, nullable=False)
     regist_quota: int = Field(default=30, nullable=False)
     registered_count: int = Field(default=0, nullable=False)
+    slot_duration_minutes: int = Field(default=10, nullable=False)
     clinic_room_uuid: Optional[uuid_pkg.UUID] = Field(default=None, index=True)
 
 class SchedulingTimeSlot(SQLModel, table=True):
@@ -45,6 +46,7 @@ class SchedulingRule(SQLModel, table=True):
     week_rule: str = Field(max_length=14, nullable=False) # e.g. "1,2,3,4,5" bitmap or list
     llm_text_rule: Optional[str] = Field(default=None, sa_column=Column(Text))
     regist_quota: int = Field(default=30, nullable=False)
+    slot_duration_minutes: int = Field(default=10, nullable=False)
     clinic_room_uuid: Optional[uuid_pkg.UUID] = Field(default=None, index=True)
     delmark: Optional[int] = Field(
         default=1, sa_column=Column(SmallInteger, default=1)
