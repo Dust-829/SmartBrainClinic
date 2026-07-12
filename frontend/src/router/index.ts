@@ -44,6 +44,12 @@ const routes: RouteRecordRaw[] = [
         meta: { requiresAuth: true },
       },
       {
+        path: 'messages',
+        name: 'patient-messages',
+        component: () => import('@/views/patient/PatientMessageCenterView.vue'),
+        meta: { requiresAuth: true },
+      },
+      {
         path: 'visit-code',
         name: 'patient-visit-code',
         component: () => import('@/views/patient/PatientVisitCodeView.vue'),

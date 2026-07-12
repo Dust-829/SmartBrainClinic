@@ -7,6 +7,7 @@ const route = useRoute()
 
 const activeTab = computed(() => {
   if (route.name === 'patient-registers') return 'records'
+  if (route.name === 'patient-messages') return 'message'
   if (route.name === 'patient-profile') return 'profile'
   if (String(route.name).includes('department') || String(route.name).includes('doctor')) return 'register'
   return 'home'
@@ -15,7 +16,7 @@ const activeTab = computed(() => {
 const tabs = [
   { key: 'home', label: '\u9996\u9875', icon: 'home', path: '/patient/home' },
   { key: 'records', label: '\u6302\u53f7\u8bb0\u5f55', icon: 'records', path: '/patient/registers' },
-  { key: 'message', label: '\u6d88\u606f', icon: 'message', path: '' },
+  { key: 'message', label: '\u6d88\u606f', icon: 'message', path: '/patient/messages' },
   { key: 'profile', label: '\u6211\u7684', icon: 'profile', path: '/patient/profile' },
 ]
 
