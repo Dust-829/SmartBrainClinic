@@ -5,6 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   adminApi,
   type AuditLogRecord,
+  type AuditSummary,
   type BillRecord,
   type DrugListItem,
   type PatientAdminListItem,
@@ -28,17 +29,28 @@ const DEFAULT_PATIENT_STATS: PatientAdminStats = {
   patient_total: 0,
 }
 
+const DEFAULT_AUDIT_SUMMARY: AuditSummary = {
+  total_count: 0,
+  validated_count: 0,
+  pending_count: 0,
+  not_queued_count: 0,
+  review_pending_count: 0,
+  review_approved_count: 0,
+  review_rejected_count: 0,
+}
+
 const REFUND_PRIORITY_STATES = new Set(['退款中', '退款失败', 'REFUNDING', 'REFUND_FAILED'])
 
 const loading = ref(false)
 const lastUpdatedAt = ref('')
 const pendingApplications = ref<SchedulingApplicationRecord[]>([])
-const auditLogs = ref<AuditLogRecord[]>([])
+const pendingReviewLogs = ref<AuditLogRecord[]>([])
 const lowStockDrugs = ref<DrugListItem[]>([])
 const recentBills = ref<BillRecord[]>([])
 const recentPatients = ref<PatientAdminListItem[]>([])
 const resourceStats = ref<AdminResourceStats>({ ...DEFAULT_RESOURCE_STATS })
 const patientStats = ref<PatientAdminStats>({ ...DEFAULT_PATIENT_STATS })
+const auditSummary = ref<AuditSummary>({ ...DEFAULT_AUDIT_SUMMARY })
 const defaultDepartment = ref<DepartmentRecord | null>(null)
 
 const resourceChartRef = ref<HTMLDivElement | null>(null)
@@ -51,8 +63,7 @@ const riskChartInstance = ref<any>(null)
 
 const auditLoaded = ref(false)
 const auditLoadFailed = ref(false)
-const aiRiskLogs = computed(() => auditLogs.value.filter((item) => (item.review_status || 'pending') === 'pending'))
-const aiRiskMetric = computed(() => (auditLoadFailed.value ? '异常' : aiRiskLogs.value.length))
+const aiRiskMetric = computed(() => (auditLoadFailed.value ? '异常' : auditSummary.value.review_pending_count))
 
 const heroMetrics = computed(() => [
   { label: '待审批', value: pendingApplications.value.length },
@@ -79,8 +90,11 @@ const lowStockChartData = computed(() => {
 })
 
 const aiRiskChartData = computed(() => {
-  const total = auditLogs.value.length
-  const pending = aiRiskLogs.value.length
+  const total =
+    auditSummary.value.review_pending_count +
+    auditSummary.value.review_approved_count +
+    auditSummary.value.review_rejected_count
+  const pending = auditSummary.value.review_pending_count
   const validated = Math.max(total - pending, 0)
   const pendingRatio = total ? Math.round((pending / total) * 100) : 0
   return { total, pending, validated, pendingRatio }
@@ -325,7 +339,8 @@ async function loadDashboard() {
   try {
     const results = await Promise.allSettled([
       adminApi.listPendingApplications(),
-      adminApi.listAiAudits({ limit: 12 }),
+      adminApi.listAiAudits({ limit: 1 }),
+      adminApi.listAiAudits({ limit: 12, review_status: 'pending' }),
       adminApi.listDrugs({ low_stock_only: true, limit: 12 }),
       adminApi.listBills({ limit: 12 }),
       authApi.getAdminResourceStats(),
@@ -335,22 +350,23 @@ async function loadDashboard() {
     ])
 
     pendingApplications.value = results[0].status === 'fulfilled' ? results[0].value.data.data ?? [] : []
-    auditLogs.value = results[1].status === 'fulfilled' ? results[1].value.data.data?.items ?? [] : []
+    auditSummary.value = results[1].status === 'fulfilled' ? results[1].value.data.data?.summary ?? { ...DEFAULT_AUDIT_SUMMARY } : { ...DEFAULT_AUDIT_SUMMARY }
+    pendingReviewLogs.value = results[2].status === 'fulfilled' ? results[2].value.data.data?.items ?? [] : []
     auditLoaded.value = results[1].status === 'fulfilled'
-    auditLoadFailed.value = results[1].status === 'rejected'
-    lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
-    recentBills.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []
-    resourceStats.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? { ...DEFAULT_RESOURCE_STATS } : { ...DEFAULT_RESOURCE_STATS }
-    patientStats.value = results[5].status === 'fulfilled' ? results[5].value.data.data ?? { ...DEFAULT_PATIENT_STATS } : { ...DEFAULT_PATIENT_STATS }
-    recentPatients.value = results[6].status === 'fulfilled' ? results[6].value.data.data ?? [] : []
-    defaultDepartment.value = results[7].status === 'fulfilled' ? results[7].value.data.data ?? null : null
+    auditLoadFailed.value = results[1].status === 'rejected' || results[2].status === 'rejected'
+    lowStockDrugs.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []
+    recentBills.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? [] : []
+    resourceStats.value = results[5].status === 'fulfilled' ? results[5].value.data.data ?? { ...DEFAULT_RESOURCE_STATS } : { ...DEFAULT_RESOURCE_STATS }
+    patientStats.value = results[6].status === 'fulfilled' ? results[6].value.data.data ?? { ...DEFAULT_PATIENT_STATS } : { ...DEFAULT_PATIENT_STATS }
+    recentPatients.value = results[7].status === 'fulfilled' ? results[7].value.data.data ?? [] : []
+    defaultDepartment.value = results[8].status === 'fulfilled' ? results[8].value.data.data ?? null : null
     lastUpdatedAt.value = new Date().toLocaleString('zh-CN', { hour12: false })
   } finally {
     loading.value = false
   }
 }
 
-watch([resourceStats, lowStockDrugs, auditLogs, auditLoadFailed], async () => {
+watch([resourceStats, lowStockDrugs, pendingReviewLogs, auditLoadFailed], async () => {
   await nextTick()
   renderCharts()
 }, { deep: true })
@@ -430,11 +446,11 @@ onBeforeUnmount(() => {
                 <strong>AI 风险摘要</strong>
                 <p>突出待复核 AI 建议，保留模块与风险说明。</p>
               </div>
-              <span class="admin-dashboard__pill is-warning">{{ auditLoadFailed ? '异常' : aiRiskLogs.length }}</span>
+              <span class="admin-dashboard__pill is-warning">{{ auditLoadFailed ? '异常' : auditSummary.review_pending_count }}</span>
             </header>
 
-            <div v-if="aiRiskLogs.length" class="admin-dashboard__compact-list">
-              <article v-for="item in aiRiskLogs.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item">
+            <div v-if="pendingReviewLogs.length" class="admin-dashboard__compact-list">
+              <article v-for="item in pendingReviewLogs.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item">
                 <div>
                   <strong>{{ item.module_name }}</strong>
                   <p>{{ item.source || '未知来源' }} · {{ getWarningText(item) }}</p>

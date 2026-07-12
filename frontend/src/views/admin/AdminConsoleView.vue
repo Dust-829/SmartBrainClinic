@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import { adminApi, type AuditLogRecord, type SchedulingApplicationRecord } from '@/api/admin'
+import { adminApi, type AuditLogRecord, type AuditSummary, type SchedulingApplicationRecord } from '@/api/admin'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useAdminSessionStore } from '@/stores/adminSession'
 
@@ -10,13 +10,22 @@ const loading = ref(false)
 const pendingApplications = ref<SchedulingApplicationRecord[]>([])
 const auditLogs = ref<AuditLogRecord[]>([])
 const auditLoadFailed = ref(false)
+const auditSummary = ref<AuditSummary>({
+  total_count: 0,
+  validated_count: 0,
+  pending_count: 0,
+  not_queued_count: 0,
+  review_pending_count: 0,
+  review_approved_count: 0,
+  review_rejected_count: 0,
+})
 
 const metricCards = computed(() => [
   { label: '待审批排班', value: pendingApplications.value.length, tone: 'indigo' },
-  { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : auditLogs.value.length, tone: 'sky' },
+  { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : auditSummary.value.total_count, tone: 'sky' },
   {
     label: '待人工复核',
-    value: auditLoadFailed.value ? '异常' : auditLogs.value.filter((item) => (item.review_status || 'pending') === 'pending').length,
+    value: auditLoadFailed.value ? '异常' : auditSummary.value.review_pending_count,
     tone: 'amber',
   },
   {
@@ -47,16 +56,36 @@ async function loadDashboard() {
   try {
     const tasks = [
       adminApi.listPendingApplications(),
-      adminApi.listAiAudits({ limit: 8 }),
+      adminApi.listAiAudits({ limit: 200 }),
     ] as const
 
     const [applicationsResult, auditsResult] = await Promise.allSettled(tasks)
     pendingApplications.value = applicationsResult.status === 'fulfilled' ? applicationsResult.value.data.data ?? [] : []
     auditLogs.value = auditsResult.status === 'fulfilled' ? auditsResult.value.data.data?.items ?? [] : []
+    auditSummary.value = auditsResult.status === 'fulfilled'
+      ? auditsResult.value.data.data?.summary ?? auditSummary.value
+      : {
+          total_count: 0,
+          validated_count: 0,
+          pending_count: 0,
+          not_queued_count: 0,
+          review_pending_count: 0,
+          review_approved_count: 0,
+          review_rejected_count: 0,
+        }
     auditLoadFailed.value = auditsResult.status === 'rejected'
   } catch {
     pendingApplications.value = []
     auditLogs.value = []
+    auditSummary.value = {
+      total_count: 0,
+      validated_count: 0,
+      pending_count: 0,
+      not_queued_count: 0,
+      review_pending_count: 0,
+      review_approved_count: 0,
+      review_rejected_count: 0,
+    }
     auditLoadFailed.value = true
   } finally {
     loading.value = false

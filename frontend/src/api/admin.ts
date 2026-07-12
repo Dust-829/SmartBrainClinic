@@ -102,7 +102,7 @@ export interface AuditQuery {
   module_name?: string
   source?: string
   validated?: boolean
-  review_status?: 'pending' | 'approved' | 'rejected'
+  review_status?: 'pending' | 'approved' | 'rejected' | 'none'
   created_from?: string
   created_to?: string
   limit?: number
@@ -121,7 +121,7 @@ export interface AuditLogRecord {
   validator_messages: string[] | string
   latency_ms?: number | null
   context?: Record<string, unknown> | unknown[]
-  review_status?: 'pending' | 'approved' | 'rejected'
+  review_status?: 'pending' | 'approved' | 'rejected' | null
   review_note?: string | null
   reviewer?: string | null
   reviewed_at?: string | null
@@ -213,6 +213,7 @@ export interface AuditSummary {
   total_count: number
   validated_count: number
   pending_count: number
+  not_queued_count: number
   review_pending_count: number
   review_approved_count: number
   review_rejected_count: number

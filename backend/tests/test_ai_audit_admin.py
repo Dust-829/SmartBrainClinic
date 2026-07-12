@@ -7,8 +7,10 @@ import pytest
 from app.common.ai_audit import (
     export_ai_audit_logs_csv,
     get_ai_audit_log,
+    initial_review_status_for_audit,
     query_ai_audit_logs,
     review_ai_audit_log,
+    REVIEW_PENDING,
 )
 from app.microservices.medical.services.ai_draft import run_ai_medical_draft
 from app.microservices.patient.services.ai_triage import run_ai_triage
@@ -120,6 +122,38 @@ async def test_query_ai_audit_logs_supports_review_status_filter():
 
 
 @pytest.mark.asyncio
+async def test_query_ai_audit_logs_supports_not_queued_filter():
+    session = FakeSession(
+        [
+            {
+                "uuid": "00000000-0000-0000-0000-000000000117",
+                "module_name": "patient.triage",
+                "source": "llm",
+                "model": "gpt-test",
+                "input_summary": "患者头痛",
+                "output_summary": '{"reply":"建议就诊"}',
+                "warnings": "[]",
+                "validated": True,
+                "validator_messages": "[]",
+                "latency_ms": 18,
+                "context": "{}",
+                "review_status": None,
+                "review_note": None,
+                "reviewer": None,
+                "reviewed_at": None,
+                "created_at": datetime(2026, 7, 12, 8, 0, 0),
+            }
+        ]
+    )
+
+    result = await query_ai_audit_logs(session, review_status="none")
+
+    assert result["items"][0]["review_status"] is None
+    assert "review_status IS NULL" in session.statements[0][0]
+    assert "review_status" not in session.statements[0][1]
+
+
+@pytest.mark.asyncio
 async def test_query_ai_audit_logs_repairs_mojibake_input_summary():
     expected_input = "\u8bf7\u5c062026-08-15\u4e0b\u5348\u95e8\u8bca\u9650\u989d\u8c03\u6574\u4e3a7\u4e2a"
     session = FakeSession(
@@ -148,6 +182,77 @@ async def test_query_ai_audit_logs_repairs_mojibake_input_summary():
     result = await query_ai_audit_logs(session)
 
     assert result["items"][0]["input_summary"] == expected_input
+
+
+@pytest.mark.asyncio
+async def test_query_ai_audit_logs_reports_not_queued_summary():
+    session = FakeSession(
+        [
+            {
+                "uuid": "00000000-0000-0000-0000-000000000118",
+                "module_name": "patient.triage",
+                "source": "llm",
+                "model": "gpt-test",
+                "input_summary": "患者头痛",
+                "output_summary": '{"reply":"建议就诊"}',
+                "warnings": "[]",
+                "validated": True,
+                "validator_messages": "[]",
+                "latency_ms": 11,
+                "context": "{}",
+                "review_status": None,
+                "review_note": None,
+                "reviewer": None,
+                "reviewed_at": None,
+                "created_at": datetime(2026, 7, 12, 8, 10, 0),
+            },
+            {
+                "uuid": "00000000-0000-0000-0000-000000000119",
+                "module_name": "patient.scheduling",
+                "source": "rule",
+                "model": "rule-engine",
+                "input_summary": "请将明天下午停诊",
+                "output_summary": '{"actions":[]}',
+                "warnings": '["llm_triage_request_failed_fallback"]',
+                "validated": True,
+                "validator_messages": "[]",
+                "latency_ms": 19,
+                "context": "{}",
+                "review_status": "pending",
+                "review_note": None,
+                "reviewer": None,
+                "reviewed_at": None,
+                "created_at": datetime(2026, 7, 12, 8, 11, 0),
+            },
+        ]
+    )
+
+    result = await query_ai_audit_logs(session)
+
+    assert result["summary"]["not_queued_count"] == 1
+    assert result["summary"]["review_pending_count"] == 1
+
+
+def test_initial_review_status_only_enqueues_risk_records():
+    safe_result = {
+        "validated": True,
+        "warnings": ["using_rule_based_scheduling_parser"],
+        "validator_messages": [],
+    }
+    risky_result = {
+        "validated": True,
+        "warnings": ["llm_triage_request_failed_fallback"],
+        "validator_messages": [],
+    }
+    invalid_result = {
+        "validated": False,
+        "warnings": [],
+        "validator_messages": [],
+    }
+
+    assert initial_review_status_for_audit(module_name="patient.scheduling", result=safe_result) is None
+    assert initial_review_status_for_audit(module_name="patient.triage", result=risky_result) == REVIEW_PENDING
+    assert initial_review_status_for_audit(module_name="embedding", result=invalid_result) == REVIEW_PENDING
 
 
 @pytest.mark.asyncio
@@ -263,6 +368,15 @@ def test_review_migration_adds_expected_columns():
     assert "reviewer" in migration
     assert "reviewed_at" in migration
     assert "DEFAULT 'pending'" in migration
+
+
+def test_review_queue_refine_migration_allows_null_and_backfills():
+    migration = open("migrations/20260712_01_refine_ai_audit_review_queue.sql", encoding="utf-8").read()
+
+    assert "DROP NOT NULL" in migration
+    assert "DROP DEFAULT" in migration
+    assert "review_status = 'pending'" in migration
+    assert "ELSE NULL" in migration
 
 
 def test_ai_audit_endpoints_no_longer_depend_on_token_guard():

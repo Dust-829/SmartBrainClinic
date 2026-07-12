@@ -30,6 +30,23 @@ REVIEW_PENDING = "pending"
 REVIEW_APPROVED = "approved"
 REVIEW_REJECTED = "rejected"
 REVIEW_STATUSES = {REVIEW_PENDING, REVIEW_APPROVED, REVIEW_REJECTED}
+REVIEW_STATUS_NONE = "none"
+
+RISK_WARNING_PREFIXES = (
+    "llm_triage_low_quality_fallback",
+    "llm_triage_request_failed_fallback",
+    "llm_triage_no_valid_result_fallback",
+    "llm_triage_not_configured_fallback",
+    "no_valid_draft_context",
+    "agent_execution_failed",
+)
+RISK_WARNING_CONTAINS = (
+    "_llm_second_review_rejected:",
+    "_llm_second_review_schema_invalid:",
+    "allergy_conflict",
+    "stock_insufficient",
+    "not_found_in_db",
+)
 
 AUDIT_SELECT_COLUMNS = """
     uuid,
@@ -114,7 +131,8 @@ async def record_ai_audit(
                         validated,
                         validator_messages,
                         latency_ms,
-                        context
+                        context,
+                        review_status
                     ) VALUES (
                         :uuid,
                         :module_name,
@@ -126,7 +144,8 @@ async def record_ai_audit(
                         :validated,
                         :validator_messages,
                         :latency_ms,
-                        :context
+                        :context,
+                        :review_status
                     )
                     """
                 ),
@@ -142,10 +161,42 @@ async def record_ai_audit(
                     "validator_messages": _json_dump(result.get("validator_messages", [])),
                     "latency_ms": latency_ms,
                     "context": _json_dump(context or {}),
+                    "review_status": initial_review_status_for_audit(
+                        module_name=module_name,
+                        result=result,
+                        context=context,
+                    ),
                 },
             )
     except Exception as exc:
         logger.warning("[AI Audit] Failed to write audit log: %s", exc)
+
+
+def should_enqueue_human_review(
+    *,
+    module_name: str,
+    result: dict[str, Any],
+    context: Optional[dict[str, Any]] = None,
+) -> bool:
+    del module_name, context
+    if not bool(result.get("validated", False)):
+        return True
+
+    validator_messages = _normalize_string_list(result.get("validator_messages"))
+    if validator_messages:
+        return True
+
+    warnings = _normalize_string_list(result.get("warnings"))
+    return any(_is_risk_warning(warning) for warning in warnings)
+
+
+def initial_review_status_for_audit(
+    *,
+    module_name: str,
+    result: dict[str, Any],
+    context: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    return REVIEW_PENDING if should_enqueue_human_review(module_name=module_name, result=result, context=context) else None
 
 
 async def query_ai_audit_logs(
@@ -195,6 +246,7 @@ async def query_ai_audit_logs(
                 COUNT(*) AS total_count,
                 COALESCE(SUM(CASE WHEN validated THEN 1 ELSE 0 END), 0) AS validated_count,
                 COALESCE(SUM(CASE WHEN validated THEN 0 ELSE 1 END), 0) AS pending_count,
+                COALESCE(SUM(CASE WHEN review_status IS NULL THEN 1 ELSE 0 END), 0) AS not_queued_count,
                 COALESCE(SUM(CASE WHEN review_status = 'pending' THEN 1 ELSE 0 END), 0) AS review_pending_count,
                 COALESCE(SUM(CASE WHEN review_status = 'approved' THEN 1 ELSE 0 END), 0) AS review_approved_count,
                 COALESCE(SUM(CASE WHEN review_status = 'rejected' THEN 1 ELSE 0 END), 0) AS review_rejected_count
@@ -376,8 +428,11 @@ def _build_audit_filters(
         where_sql.append("validated = :validated")
         params["validated"] = validated
     if review_status:
-        where_sql.append("review_status = :review_status")
-        params["review_status"] = review_status
+        if review_status == REVIEW_STATUS_NONE:
+            where_sql.append("review_status IS NULL")
+        else:
+            where_sql.append("review_status = :review_status")
+            params["review_status"] = review_status
     if created_from:
         where_sql.append("created_at >= :created_from")
         params["created_from"] = created_from
@@ -391,6 +446,7 @@ def _build_audit_summary(row: Optional[dict[str, Any]], items: list[dict[str, An
     total_count = _safe_int((row or {}).get("total_count"))
     validated_count = _safe_int((row or {}).get("validated_count"))
     pending_count = _safe_int((row or {}).get("pending_count"))
+    not_queued_count = _safe_int((row or {}).get("not_queued_count"))
     review_pending_count = _safe_int((row or {}).get("review_pending_count"))
     review_approved_count = _safe_int((row or {}).get("review_approved_count"))
     review_rejected_count = _safe_int((row or {}).get("review_rejected_count"))
@@ -402,6 +458,8 @@ def _build_audit_summary(row: Optional[dict[str, Any]], items: list[dict[str, An
         validated_count = sum(1 for item in items if item.get("validated"))
     if pending_count is None:
         pending_count = max(total_count - validated_count, 0)
+    if not_queued_count is None:
+        not_queued_count = sum(1 for item in items if item.get("review_status") is None)
     if review_pending_count is None:
         review_pending_count = sum(1 for item in items if item.get("review_status") == REVIEW_PENDING)
     if review_approved_count is None:
@@ -413,6 +471,7 @@ def _build_audit_summary(row: Optional[dict[str, Any]], items: list[dict[str, An
         "total_count": total_count,
         "validated_count": validated_count,
         "pending_count": pending_count,
+        "not_queued_count": not_queued_count,
         "review_pending_count": review_pending_count,
         "review_approved_count": review_approved_count,
         "review_rejected_count": review_rejected_count,
@@ -482,7 +541,7 @@ def _serialize_audit_row(row: dict[str, Any]) -> dict[str, Any]:
         "validator_messages": _json_load(row.get("validator_messages")),
         "latency_ms": row.get("latency_ms"),
         "context": _json_load(row.get("context")),
-        "review_status": row.get("review_status") or REVIEW_PENDING,
+        "review_status": row.get("review_status"),
         "review_note": repair_mojibake_text(row.get("review_note") or "") or None,
         "reviewer": repair_mojibake_text(row.get("reviewer") or "") or None,
         "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
@@ -521,3 +580,25 @@ def _csv_value(value: Any) -> str:
     if isinstance(value, str):
         return repair_mojibake_text(value)
     return _json_dump(normalize_text_value(value))
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        parsed = _json_load(value)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [str(parsed).strip()] if str(parsed).strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _is_risk_warning(value: str) -> bool:
+    warning = str(value or "").strip().lower()
+    if not warning:
+        return False
+    if any(warning.startswith(prefix) for prefix in RISK_WARNING_PREFIXES):
+        return True
+    return any(token in warning for token in RISK_WARNING_CONTAINS)

@@ -23,6 +23,7 @@ const summary = reactive({
   total_count: 0,
   validated_count: 0,
   pending_count: 0,
+  not_queued_count: 0,
   review_pending_count: 0,
   review_approved_count: 0,
   review_rejected_count: 0,
@@ -33,7 +34,7 @@ const filters = reactive({
   module_name: '',
   source: '',
   validated: 'all',
-  review_status: 'all' as 'all' | 'pending' | 'approved' | 'rejected',
+  review_status: 'all' as 'all' | 'pending' | 'approved' | 'rejected' | 'none',
   created_from: '',
   created_to: '',
 })
@@ -49,10 +50,6 @@ const pageEnd = computed(() => Math.min(pagination.offset + logs.value.length, p
 const validatedRatio = computed(() => {
   const total = summary.total_count || pagination.total
   return total ? Math.round((summary.validated_count / total) * 100) : 0
-})
-const reviewApprovalRatio = computed(() => {
-  const total = summary.total_count || pagination.total
-  return total ? Math.round((summary.review_approved_count / total) * 100) : 0
 })
 
 async function search(resetPage = true) {
@@ -89,7 +86,8 @@ function applyAuditPage(page: AuditLogPage | AuditLogRecord[] | undefined) {
     summary.total_count = page.length
     summary.validated_count = page.filter((item) => item.validated).length
     summary.pending_count = page.filter((item) => !item.validated).length
-    summary.review_pending_count = page.filter((item) => (item.review_status || 'pending') === 'pending').length
+    summary.not_queued_count = page.filter((item) => item.review_status == null).length
+    summary.review_pending_count = page.filter((item) => item.review_status === 'pending').length
     summary.review_approved_count = page.filter((item) => item.review_status === 'approved').length
     summary.review_rejected_count = page.filter((item) => item.review_status === 'rejected').length
     return
@@ -102,8 +100,9 @@ function applyAuditPage(page: AuditLogPage | AuditLogRecord[] | undefined) {
   summary.total_count = page?.summary?.total_count ?? pagination.total
   summary.validated_count = page?.summary?.validated_count ?? logs.value.filter((item) => item.validated).length
   summary.pending_count = page?.summary?.pending_count ?? Math.max(summary.total_count - summary.validated_count, 0)
+  summary.not_queued_count = page?.summary?.not_queued_count ?? logs.value.filter((item) => item.review_status == null).length
   summary.review_pending_count =
-    page?.summary?.review_pending_count ?? logs.value.filter((item) => (item.review_status || 'pending') === 'pending').length
+    page?.summary?.review_pending_count ?? logs.value.filter((item) => item.review_status === 'pending').length
   summary.review_approved_count =
     page?.summary?.review_approved_count ?? logs.value.filter((item) => item.review_status === 'approved').length
   summary.review_rejected_count =
@@ -117,6 +116,7 @@ function clearAuditState() {
   summary.total_count = 0
   summary.validated_count = 0
   summary.pending_count = 0
+  summary.not_queued_count = 0
   summary.review_pending_count = 0
   summary.review_approved_count = 0
   summary.review_rejected_count = 0
@@ -210,11 +210,16 @@ function sourceLabel(source?: string | null) {
 
 function reviewStatusLabel(status?: string | null) {
   const labels: Record<string, string> = {
+    none: '仅留痕',
     pending: '待人工复核',
     approved: '人工已通过',
     rejected: '人工已驳回',
   }
-  return labels[status || 'pending'] || '待人工复核'
+  return labels[status || 'none'] || '仅留痕'
+}
+
+function reviewStatusTone(status?: string | null) {
+  return status || 'none'
 }
 
 function primeReviewForm(item: AuditLogRecord) {
@@ -305,8 +310,8 @@ search()
           <strong>{{ validatedRatio }}%</strong>
         </div>
         <div>
-          <span>人工通过率</span>
-          <strong>{{ reviewApprovalRatio }}%</strong>
+          <span>仅留痕未入队</span>
+          <strong>{{ summary.not_queued_count }}</strong>
         </div>
       </div>
     </section>
@@ -340,6 +345,7 @@ search()
             <option value="pending">待人工复核</option>
             <option value="approved">人工已通过</option>
             <option value="rejected">人工已驳回</option>
+            <option value="none">仅留痕（未入队）</option>
           </select>
         </label>
         <label>
@@ -397,7 +403,7 @@ search()
               <span :class="['audit-card__badge', { 'is-pending': !item.validated }]">
                 {{ item.validated ? '机器已验证' : '机器待校验' }}
               </span>
-              <span :class="['audit-card__badge', 'is-review', `is-${item.review_status || 'pending'}`]">
+              <span :class="['audit-card__badge', 'is-review', `is-${reviewStatusTone(item.review_status)}`]">
                 {{ reviewStatusLabel(item.review_status) }}
               </span>
             </div>
@@ -437,7 +443,7 @@ search()
             <div class="audit-card__review">
               <span>人工复核</span>
               <div class="audit-card__review-meta">
-                <p>当前状态：{{ reviewStatusLabel(String(detailValue(item, 'review_status') || 'pending')) }}</p>
+                <p>当前状态：{{ reviewStatusLabel(String(detailValue(item, 'review_status') || '')) }}</p>
                 <p>复核人：{{ detailValue(item, 'reviewer') || '未记录' }}</p>
                 <p>复核时间：{{ formatDateTime(String(detailValue(item, 'reviewed_at') || '')) }}</p>
               </div>
@@ -670,6 +676,11 @@ search()
 .audit-card__badge.is-review.is-pending {
   background: #fef3c7;
   color: #92400e;
+}
+
+.audit-card__badge.is-review.is-none {
+  background: #e5e7eb;
+  color: #4b5563;
 }
 
 .audit-card__badge.is-review.is-approved {

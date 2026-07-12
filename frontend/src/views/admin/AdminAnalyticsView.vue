@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import {
   adminApi,
   type AuditLogRecord,
+  type AuditSummary,
   type BillRecord,
   type DrugListItem,
   type SchedulingApplicationRecord,
@@ -16,13 +17,22 @@ const bills = ref<BillRecord[]>([])
 const lowStockDrugs = ref<DrugListItem[]>([])
 const approvals = ref<SchedulingApplicationRecord[]>([])
 const auditLoadFailed = ref(false)
+const auditSummary = ref<AuditSummary>({
+  total_count: 0,
+  validated_count: 0,
+  pending_count: 0,
+  not_queued_count: 0,
+  review_pending_count: 0,
+  review_approved_count: 0,
+  review_rejected_count: 0,
+})
 
 const analyticsCards = computed(() => [
   { label: '待审批排班', value: approvals.value.length },
-  { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : audits.value.length },
+  { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : auditSummary.value.total_count },
   {
     label: '待复核 AI 建议',
-    value: auditLoadFailed.value ? '异常' : audits.value.filter((item) => (item.review_status || 'pending') === 'pending').length,
+    value: auditLoadFailed.value ? '异常' : auditSummary.value.review_pending_count,
   },
   { label: '低库存药品', value: lowStockDrugs.value.length },
   { label: '最近账单', value: bills.value.length },
@@ -32,13 +42,24 @@ async function loadAnalytics() {
   loading.value = true
   try {
     const results = await Promise.allSettled([
-      adminApi.listAiAudits({ limit: 12 }),
+      adminApi.listAiAudits({ limit: 200 }),
       adminApi.listBills({ limit: 12 }),
       adminApi.listDrugs({ low_stock_only: true, limit: 12 }),
       adminApi.listPendingApplications(),
     ])
 
     audits.value = results[0].status === 'fulfilled' ? results[0].value.data.data?.items ?? [] : []
+    auditSummary.value = results[0].status === 'fulfilled'
+      ? results[0].value.data.data?.summary ?? auditSummary.value
+      : {
+          total_count: 0,
+          validated_count: 0,
+          pending_count: 0,
+          not_queued_count: 0,
+          review_pending_count: 0,
+          review_approved_count: 0,
+          review_rejected_count: 0,
+        }
     auditLoadFailed.value = results[0].status === 'rejected'
     bills.value = results[1].status === 'fulfilled' ? results[1].value.data.data ?? [] : []
     lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
@@ -48,6 +69,15 @@ async function loadAnalytics() {
     bills.value = []
     lowStockDrugs.value = []
     approvals.value = []
+    auditSummary.value = {
+      total_count: 0,
+      validated_count: 0,
+      pending_count: 0,
+      not_queued_count: 0,
+      review_pending_count: 0,
+      review_approved_count: 0,
+      review_rejected_count: 0,
+    }
     auditLoadFailed.value = true
   } finally {
     loading.value = false
