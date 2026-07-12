@@ -146,5 +146,6 @@ python -m pytest tests
 - [问题记录](docs/问题记录.md)：问题现象、原因、处理方式和后续注意项。
 - [设计图留档](docs/设计图留档.md)：医生端和患者端关键界面设计图及其适用范围。
 - [AI 分诊与病历增强方案](docs/AI分诊与病历增强方案.md)：AI 会话和病历上下文增强的专项设计。
+- [患者端动态就诊码实施计划](docs/patient-visit-code-plan.md)：院内动态核验码的范围、安全前置、接口和验收策略。
 - [医生工作台挂号可视化改版计划 v2](docs/doctor-workbench-registration-visual-plan-v2.md)：设计图、数据口径、实施过程和验收记录。
 - [历史专项计划](PLAN.md)：医生工作台可视化改造的原始实施计划。
