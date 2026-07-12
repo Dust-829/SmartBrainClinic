@@ -14,6 +14,7 @@ import {
 } from '@/api/admin'
 import { authApi, type AdminResourceStats, type DepartmentRecord } from '@/api/auth'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { auditModuleLabel, auditSourceLabel } from '@/constants/adminAudit'
 import { useAdminSessionStore } from '@/stores/adminSession'
 
 const session = useAdminSessionStore()
@@ -134,17 +135,6 @@ function getWarningText(item: AuditLogRecord) {
   if (Array.isArray(item.warnings)) return item.warnings[0] || '待管理员复核'
   if (typeof item.warnings === 'string' && item.warnings.trim()) return item.warnings.trim()
   return '待管理员复核'
-}
-
-function sourceLabel(source?: string | null) {
-  const labels: Record<string, string> = {
-    llm: '真实 LLM',
-    rule: '规则引擎',
-    fallback: 'Fallback',
-    mock: 'Mock',
-    embedding: 'Embedding',
-  }
-  return source ? labels[source] || source : '未知来源'
 }
 
 function formatRiskReason(value: string) {
@@ -478,8 +468,8 @@ onBeforeUnmount(() => {
             <div v-if="pendingReviewLogs.length" class="admin-dashboard__compact-list">
               <article v-for="item in pendingReviewLogs.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item admin-dashboard__compact-item--risk">
                 <div>
-                  <strong>{{ item.module_name }}</strong>
-                  <p>{{ sourceLabel(item.source) }}</p>
+                  <strong>{{ auditModuleLabel(item.module_name) }}</strong>
+                  <p>{{ auditSourceLabel(item.source) }}</p>
                   <p class="admin-dashboard__risk-reason">{{ formatRiskReason(getWarningText(item)) }}</p>
                 </div>
                 <span class="admin-dashboard__compact-time">{{ formatDateTime(item.created_at) }}</span>

@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue'
 
 import { adminApi, type AuditLogPage, type AuditLogRecord } from '@/api/admin'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { AUDIT_MODULE_OPTIONS, AUDIT_SOURCE_OPTIONS, auditModuleLabel, auditSourceLabel } from '@/constants/adminAudit'
 import { useAdminSessionStore } from '@/stores/adminSession'
 
 const DEFAULT_LIMIT = 20
@@ -197,17 +198,6 @@ function stringifyDetail(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
-function sourceLabel(source?: string | null) {
-  const labels: Record<string, string> = {
-    llm: '真实 LLM',
-    rule: '规则引擎',
-    mock: 'Mock',
-    fallback: 'Fallback',
-    embedding: 'Embedding',
-  }
-  return source ? labels[source] || source : '未知来源'
-}
-
 function reviewStatusLabel(status?: string | null) {
   const labels: Record<string, string> = {
     none: '仅留痕',
@@ -320,15 +310,21 @@ search()
       <form class="audit-form" @submit.prevent="search(true)">
         <label>
           <span>模块名</span>
-          <input
-            v-model="filters.module_name"
-            type="text"
-            placeholder="patient.triage / medical.draft"
-          />
+          <select v-model="filters.module_name">
+            <option value="">全部</option>
+            <option v-for="item in AUDIT_MODULE_OPTIONS" :key="item.value" :value="item.value">
+              {{ item.label }}
+            </option>
+          </select>
         </label>
         <label>
           <span>来源</span>
-          <input v-model="filters.source" type="text" placeholder="llm / rule / fallback" />
+          <select v-model="filters.source">
+            <option value="">全部</option>
+            <option v-for="item in AUDIT_SOURCE_OPTIONS" :key="item.value" :value="item.value">
+              {{ item.label }}
+            </option>
+          </select>
         </label>
         <label>
           <span>机器校验</span>
@@ -395,8 +391,8 @@ search()
         <article v-for="item in logs" :key="item.uuid" class="audit-card">
           <button type="button" class="audit-card__summary" @click="toggleDetail(item)">
             <div>
-              <span class="audit-card__module">{{ item.module_name }}</span>
-              <strong>{{ sourceLabel(item.source) }} · {{ item.model || '未记录模型' }}</strong>
+              <span class="audit-card__module">{{ auditModuleLabel(item.module_name) }}</span>
+              <strong>{{ auditSourceLabel(item.source) }} · {{ item.model || '未记录模型' }}</strong>
               <p>{{ formatDateTime(item.created_at) }} · {{ item.latency_ms ? `${item.latency_ms} ms` : '未记录耗时' }}</p>
             </div>
             <div class="audit-card__badge-group">

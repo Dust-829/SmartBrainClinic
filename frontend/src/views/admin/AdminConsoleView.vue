@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 
 import { adminApi, type AuditLogRecord, type AuditSummary, type SchedulingApplicationRecord } from '@/api/admin'
 import SectionCard from '@/components/common/SectionCard.vue'
+import { auditModuleLabel, auditSourceLabel } from '@/constants/adminAudit'
 import { useAdminSessionStore } from '@/stores/adminSession'
 
 const session = useAdminSessionStore()
@@ -139,8 +140,8 @@ onMounted(() => {
       >
         <div v-if="auditLogs.length" class="admin-list">
           <article v-for="item in auditLogs.slice(0, 4)" :key="item.uuid" class="admin-console__list-item">
-            <strong>{{ item.module_name }}</strong>
-            <p>{{ item.source || '未知来源' }} | {{ item.model || '未记录模型' }}</p>
+            <strong>{{ auditModuleLabel(item.module_name) }}</strong>
+            <p>{{ auditSourceLabel(item.source) }} | {{ item.model || '未记录模型' }}</p>
             <span>{{ item.validated ? '已验证' : '待复核' }}</span>
           </article>
         </div>
