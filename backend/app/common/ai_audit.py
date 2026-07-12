@@ -154,6 +154,7 @@ async def query_ai_audit_logs(
     module_name: Optional[str] = None,
     source: Optional[str] = None,
     validated: Optional[bool] = None,
+    review_status: Optional[str] = None,
     created_from: Optional[datetime] = None,
     created_to: Optional[datetime] = None,
     limit: int = 50,
@@ -165,6 +166,7 @@ async def query_ai_audit_logs(
         module_name=module_name,
         source=source,
         validated=validated,
+        review_status=review_status,
         created_from=created_from,
         created_to=created_to,
     )
@@ -280,6 +282,7 @@ async def export_ai_audit_logs_csv(
     module_name: Optional[str] = None,
     source: Optional[str] = None,
     validated: Optional[bool] = None,
+    review_status: Optional[str] = None,
     created_from: Optional[datetime] = None,
     created_to: Optional[datetime] = None,
 ) -> str:
@@ -287,6 +290,7 @@ async def export_ai_audit_logs_csv(
         module_name=module_name,
         source=source,
         validated=validated,
+        review_status=review_status,
         created_from=created_from,
         created_to=created_to,
     )
@@ -355,6 +359,7 @@ def _build_audit_filters(
     module_name: Optional[str] = None,
     source: Optional[str] = None,
     validated: Optional[bool] = None,
+    review_status: Optional[str] = None,
     created_from: Optional[datetime] = None,
     created_to: Optional[datetime] = None,
 ) -> tuple[list[str], dict[str, Any]]:
@@ -370,6 +375,9 @@ def _build_audit_filters(
     if validated is not None:
         where_sql.append("validated = :validated")
         params["validated"] = validated
+    if review_status:
+        where_sql.append("review_status = :review_status")
+        params["review_status"] = review_status
     if created_from:
         where_sql.append("created_at >= :created_from")
         params["created_from"] = created_from

@@ -22,7 +22,7 @@ const analyticsCards = computed(() => [
   { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : audits.value.length },
   {
     label: '待复核 AI 建议',
-    value: auditLoadFailed.value ? '异常' : audits.value.filter((item) => !item.validated).length,
+    value: auditLoadFailed.value ? '异常' : audits.value.filter((item) => (item.review_status || 'pending') === 'pending').length,
   },
   { label: '低库存药品', value: lowStockDrugs.value.length },
   { label: '最近账单', value: bills.value.length },

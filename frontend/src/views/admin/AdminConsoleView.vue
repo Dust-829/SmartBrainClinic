@@ -16,7 +16,7 @@ const metricCards = computed(() => [
   { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : auditLogs.value.length, tone: 'sky' },
   {
     label: '待人工复核',
-    value: auditLoadFailed.value ? '异常' : auditLogs.value.filter((item) => !item.validated).length,
+    value: auditLoadFailed.value ? '异常' : auditLogs.value.filter((item) => (item.review_status || 'pending') === 'pending').length,
     tone: 'amber',
   },
   {

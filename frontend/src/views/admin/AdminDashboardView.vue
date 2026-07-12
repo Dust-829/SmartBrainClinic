@@ -51,7 +51,7 @@ const riskChartInstance = ref<any>(null)
 
 const auditLoaded = ref(false)
 const auditLoadFailed = ref(false)
-const aiRiskLogs = computed(() => auditLogs.value.filter((item) => !item.validated))
+const aiRiskLogs = computed(() => auditLogs.value.filter((item) => (item.review_status || 'pending') === 'pending'))
 const aiRiskMetric = computed(() => (auditLoadFailed.value ? '异常' : aiRiskLogs.value.length))
 
 const heroMetrics = computed(() => [
@@ -240,8 +240,8 @@ function renderRiskChart() {
   const hasData = aiRiskChartData.value.total > 0
   const seriesData = hasData
     ? [
-        { value: aiRiskChartData.value.pending, name: '待复核', itemStyle: { color: '#f59e0b' } },
-        { value: aiRiskChartData.value.validated, name: '已验证', itemStyle: { color: '#bfdbfe' } },
+        { value: aiRiskChartData.value.pending, name: '待人工复核', itemStyle: { color: '#f59e0b' } },
+        { value: aiRiskChartData.value.validated, name: '已处理', itemStyle: { color: '#bfdbfe' } },
       ]
     : [{ value: 1, name: auditLoadFailed.value ? '加载异常' : '暂无记录', itemStyle: { color: '#e2e8f0' } }]
 
@@ -287,7 +287,7 @@ function renderRiskChart() {
             left: -34,
             top: 28,
             style: {
-              text: hasData ? '待复核占比' : auditLoadFailed.value ? 'AI 审计异常' : '暂无审计记录',
+              text: hasData ? '待人工复核占比' : auditLoadFailed.value ? 'AI 审计异常' : '暂无审计记录',
               fill: '#64748b',
               fontSize: 11,
               textAlign: 'center',

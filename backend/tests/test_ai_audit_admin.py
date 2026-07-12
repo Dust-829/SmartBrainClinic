@@ -89,6 +89,37 @@ async def test_query_ai_audit_logs_returns_summary_and_pagination():
 
 
 @pytest.mark.asyncio
+async def test_query_ai_audit_logs_supports_review_status_filter():
+    session = FakeSession(
+        [
+            {
+                "uuid": "00000000-0000-0000-0000-000000000116",
+                "module_name": "patient.scheduling",
+                "source": "llm",
+                "model": "gpt-test",
+                "input_summary": "请将下周一下午停诊",
+                "output_summary": '{"actions":[]}',
+                "warnings": "[]",
+                "validated": True,
+                "validator_messages": "[]",
+                "latency_ms": 22,
+                "context": "{}",
+                "review_status": "pending",
+                "review_note": None,
+                "reviewer": None,
+                "reviewed_at": None,
+                "created_at": datetime(2026, 7, 12, 7, 8, 53),
+            }
+        ]
+    )
+
+    result = await query_ai_audit_logs(session, review_status="pending")
+
+    assert result["items"][0]["review_status"] == "pending"
+    assert session.statements[0][1]["review_status"] == "pending"
+
+
+@pytest.mark.asyncio
 async def test_query_ai_audit_logs_repairs_mojibake_input_summary():
     expected_input = "\u8bf7\u5c062026-08-15\u4e0b\u5348\u95e8\u8bca\u9650\u989d\u8c03\u6574\u4e3a7\u4e2a"
     session = FakeSession(

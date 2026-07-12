@@ -33,6 +33,7 @@ const filters = reactive({
   module_name: '',
   source: '',
   validated: 'all',
+  review_status: 'all' as 'all' | 'pending' | 'approved' | 'rejected',
   created_from: '',
   created_to: '',
 })
@@ -65,6 +66,7 @@ async function search(resetPage = true) {
       module_name: filters.module_name.trim() || undefined,
       source: filters.source.trim() || undefined,
       validated: filters.validated === 'all' ? undefined : filters.validated === 'true',
+      review_status: filters.review_status === 'all' ? undefined : filters.review_status,
       created_from: toApiDateTime(filters.created_from, false),
       created_to: toApiDateTime(filters.created_to, true),
       limit: pagination.limit,
@@ -87,6 +89,9 @@ function applyAuditPage(page: AuditLogPage | AuditLogRecord[] | undefined) {
     summary.total_count = page.length
     summary.validated_count = page.filter((item) => item.validated).length
     summary.pending_count = page.filter((item) => !item.validated).length
+    summary.review_pending_count = page.filter((item) => (item.review_status || 'pending') === 'pending').length
+    summary.review_approved_count = page.filter((item) => item.review_status === 'approved').length
+    summary.review_rejected_count = page.filter((item) => item.review_status === 'rejected').length
     return
   }
 
@@ -125,6 +130,7 @@ function resetFilters() {
   filters.module_name = ''
   filters.source = ''
   filters.validated = 'all'
+  filters.review_status = 'all'
   filters.created_from = ''
   filters.created_to = ''
   search(true)
@@ -225,6 +231,7 @@ function currentFilters() {
     module_name: filters.module_name.trim() || undefined,
     source: filters.source.trim() || undefined,
     validated: filters.validated === 'all' ? undefined : filters.validated === 'true',
+    review_status: filters.review_status === 'all' ? undefined : filters.review_status,
     created_from: toApiDateTime(filters.created_from, false),
     created_to: toApiDateTime(filters.created_to, true),
   }
@@ -290,11 +297,11 @@ search()
           <strong>{{ summary.total_count }}</strong>
         </div>
         <div>
-          <span>待复核</span>
-          <strong>{{ summary.pending_count }}</strong>
+          <span>待人工复核</span>
+          <strong>{{ summary.review_pending_count }}</strong>
         </div>
         <div>
-          <span>验证率</span>
+          <span>机器验证率</span>
           <strong>{{ validatedRatio }}%</strong>
         </div>
         <div>
@@ -304,7 +311,7 @@ search()
       </div>
     </section>
 
-    <SectionCard title="审计查询" subtitle="按模块、来源、校验状态和日期范围筛选 AI 运行证据。">
+    <SectionCard title="审计查询" subtitle="按模块、来源、机器校验、人工复核和日期范围筛选 AI 运行证据。">
       <form class="audit-form" @submit.prevent="search(true)">
         <label>
           <span>模块名</span>
@@ -319,11 +326,20 @@ search()
           <input v-model="filters.source" type="text" placeholder="llm / rule / fallback" />
         </label>
         <label>
-          <span>校验状态</span>
+          <span>机器校验</span>
           <select v-model="filters.validated">
             <option value="all">全部</option>
             <option value="true">已验证</option>
-            <option value="false">待复核</option>
+            <option value="false">机器待校验</option>
+          </select>
+        </label>
+        <label>
+          <span>人工复核</span>
+          <select v-model="filters.review_status">
+            <option value="all">全部</option>
+            <option value="pending">待人工复核</option>
+            <option value="approved">人工已通过</option>
+            <option value="rejected">人工已驳回</option>
           </select>
         </label>
         <label>
@@ -501,7 +517,7 @@ search()
 
 .audit-form {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  grid-template-columns: repeat(6, minmax(0, 1fr)) auto;
   gap: 12px;
   align-items: end;
 }

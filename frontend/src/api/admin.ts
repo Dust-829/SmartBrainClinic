@@ -102,6 +102,7 @@ export interface AuditQuery {
   module_name?: string
   source?: string
   validated?: boolean
+  review_status?: 'pending' | 'approved' | 'rejected'
   created_from?: string
   created_to?: string
   limit?: number
