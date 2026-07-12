@@ -155,6 +155,40 @@ watch(selectedQueueUuid, (registerUuid) => {
           </div>
         </section>
 
+        <section v-if="selectedQueueRecord" class="patient-register-history-queue-overview" aria-live="polite">
+          <div class="patient-register-history-queue-overview__head">
+            <div>
+              <span>当前候诊</span>
+              <h2>{{ selectedQueueRecord.dept_name || '科室待确认' }} · {{ selectedQueueRecord.employee_name || '医生待确认' }}</h2>
+              <p>{{ queueStatus?.status === 2 ? '医生正在接诊，请尽快前往诊室。' : '请留意叫号信息，并提前到诊室附近等候。' }}</p>
+            </div>
+            <em :class="{ 'is-reception': queueStatus?.status === 2 }">{{ queueStatusText }}</em>
+          </div>
+
+          <div class="patient-register-history-queue-overview__progress">
+            <span>{{ queueStatus?.status === 2 ? '当前提醒' : '前方等待人数' }}</span>
+            <strong>{{ queueAheadText }}</strong>
+            <p>{{ queueStatus?.status === 2 ? '请尽快前往诊室' : '人数会随医生叫号自动变化' }}</p>
+          </div>
+
+          <div class="patient-register-history-queue-overview__details">
+            <div>
+              <span>诊室</span>
+              <strong>{{ queueStatus?.clinic_room_name || selectedQueueRecord.clinic_room_name || '待分配' }}</strong>
+            </div>
+            <div>
+              <span>位置</span>
+              <strong>{{ queueStatus?.clinic_room_location || '到院后查看导诊屏' }}</strong>
+            </div>
+          </div>
+
+          <div v-if="queueError" class="patient-register-history-queue-overview__error" role="alert">{{ queueError }}</div>
+          <div class="patient-register-history-queue-overview__footer">
+            <span>{{ queueUpdatedText }} · 每 15 秒自动更新</span>
+            <el-button type="primary" plain :loading="queueLoading" @click="refreshQueue()">刷新状态</el-button>
+          </div>
+        </section>
+
         <section class="patient-register-history-panel">
           <div class="patient-register-history-title">
             <div>
@@ -204,30 +238,8 @@ watch(selectedQueueUuid, (registerUuid) => {
                     class="patient-register-history-queue-action"
                     @click="viewQueue(record)"
                   >
-                    查看候诊状态
+                    查看候诊详情
                   </button>
-                  <section v-if="selectedQueueRecord?.uuid === record.uuid" class="patient-register-history-queue" aria-live="polite">
-                    <div class="patient-register-history-queue__head">
-                      <div>
-                        <span>{{ queueStatusText }}</span>
-                        <strong>{{ queueAheadText }}</strong>
-                        <p>{{ queueStatus?.status === 2 ? '医生正在接诊，请尽快前往诊室。' : '前方等待人数会随叫号自动更新。' }}</p>
-                      </div>
-                      <el-button type="primary" plain :loading="queueLoading" @click="refreshQueue()">刷新</el-button>
-                    </div>
-                    <dl>
-                      <div>
-                        <dt>诊室</dt>
-                        <dd>{{ queueStatus?.clinic_room_name || record.clinic_room_name || '待分配' }}</dd>
-                      </div>
-                      <div>
-                        <dt>位置</dt>
-                        <dd>{{ queueStatus?.clinic_room_location || '到院后查看导诊屏' }}</dd>
-                      </div>
-                    </dl>
-                    <p v-if="queueError" class="patient-register-history-queue__error" role="alert">{{ queueError }}</p>
-                    <small>{{ queueUpdatedText }} · 每 15 秒自动更新</small>
-                  </section>
                 </article>
               </div>
 
@@ -369,60 +381,82 @@ watch(selectedQueueUuid, (registerUuid) => {
   font-weight: 700;
 }
 
-.patient-register-history-queue {
+.patient-register-history-queue-overview {
   display: grid;
-  gap: 12px;
-  margin-top: 12px;
-  padding: 14px;
-  border-radius: 12px;
-  background: var(--patient-blue-soft);
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--patient-border);
+  border-radius: var(--patient-radius);
+  background: #fff;
+  box-shadow: 0 14px 36px rgba(54, 121, 190, 0.12);
 }
 
-.patient-register-history-queue__head {
+.patient-register-history-queue-overview__head,
+.patient-register-history-queue-overview__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.patient-register-history-queue__head > div {
+.patient-register-history-queue-overview__head > div {
   display: grid;
-  gap: 3px;
+  gap: 4px;
 }
 
-.patient-register-history-queue__head span,
-.patient-register-history-queue__head p,
-.patient-register-history-queue small {
-  color: #334e68;
+.patient-register-history-queue-overview__head span,
+.patient-register-history-queue-overview__head p,
+.patient-register-history-queue-overview__footer > span {
+  color: var(--patient-text-muted);
   font-size: 13px;
 }
 
-.patient-register-history-queue__head strong {
-  color: #0c4a6e;
-  font-size: 28px;
-  line-height: 1.1;
-}
-
-.patient-register-history-queue__head p,
-.patient-register-history-queue__error,
-.patient-register-history-queue small {
+.patient-register-history-queue-overview__head h2,
+.patient-register-history-queue-overview__head p {
   margin: 0;
 }
 
-.patient-register-history-queue dl {
+.patient-register-history-queue-overview__head h2 { font-size: 18px; line-height: 1.35; }
+.patient-register-history-queue-overview__head em { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; background: #e0f2fe; color: #075985; font-size: 12px; font-style: normal; font-weight: 800; white-space: nowrap; }
+.patient-register-history-queue-overview__head em.is-reception { background: #dcfce7; color: #166534; }
+
+.patient-register-history-queue-overview__progress {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 22px 14px;
+  border-radius: 12px;
+  background: #e0f2fe;
+  color: #0c4a6e;
+  text-align: center;
+}
+
+.patient-register-history-queue-overview__progress span,
+.patient-register-history-queue-overview__progress p { margin: 0; font-size: 13px; }
+.patient-register-history-queue-overview__progress strong { font-size: 42px; line-height: 1.08; }
+.patient-register-history-queue-overview__details { display: grid; gap: 10px; }
+.patient-register-history-queue-overview__details div {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.patient-register-history-queue-overview__details span { color: #475569; font-size: 13px; }
+.patient-register-history-queue-overview__error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 14px;
+}
+
+.patient-register-history-queue-overview dl {
   display: grid;
   gap: 8px;
   margin: 0;
 }
 
-.patient-register-history-queue dl div {
-  background: rgba(255, 255, 255, 0.74);
-}
-
-.patient-register-history-queue__error {
-  color: #b91c1c;
-  font-size: 14px;
-}
 
 .patient-register-history-login div {
   display: grid;
