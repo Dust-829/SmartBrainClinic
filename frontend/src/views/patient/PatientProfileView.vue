@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessageBox } from 'element-plus'
 import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
 import { usePatientFlowStore } from '@/stores/patientFlow'
 import { usePatientRegisterHistoryStore } from '@/stores/patientRegisterHistory'
@@ -54,11 +54,7 @@ function openQueue() {
     router.push('/patient/login')
     return
   }
-  if (!flow.canViewQueue) {
-    ElMessage.info('\u6682\u65e0\u6b63\u5728\u5019\u8bca\u7684\u6302\u53f7')
-    return
-  }
-  router.push('/patient/queue')
+  router.push('/patient/registers')
 }
 
 function openVisitCode() {
@@ -133,11 +129,7 @@ async function logout() {
         </button>
         <button type="button" @click="openQueue">
           <span class="is-queue" aria-hidden="true"></span>
-          <strong>&#20505;&#35786;&#29366;&#24577;</strong>
-        </button>
-        <button type="button" @click="router.push('/patient/registers')">
-          <span class="is-record" aria-hidden="true"></span>
-          <strong>&#25346;&#21495;&#35760;&#24405;</strong>
+          <strong>&#25346;&#21495;&#19982;&#20505;&#35786;</strong>
         </button>
         <button type="button" @click="openVisitCode">
           <span class="is-code" aria-hidden="true"></span>

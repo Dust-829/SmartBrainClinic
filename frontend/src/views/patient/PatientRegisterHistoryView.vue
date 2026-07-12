@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 
-import type { RegisterDetail } from '@/api/patient'
+import { patientApi, type QueueStatus, type RegisterDetail } from '@/api/patient'
 import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
 import { usePatientRegisterHistoryStore } from '@/stores/patientRegisterHistory'
 import { usePatientSessionStore } from '@/stores/patientSession'
 
 const router = useRouter()
+const route = useRoute()
 const session = usePatientSessionStore()
 const historyStore = usePatientRegisterHistoryStore()
 
@@ -17,6 +19,22 @@ const records = computed(() => historyStore.records)
 const loading = computed(() => historyStore.loading && !historyStore.records.length)
 const errorMessage = computed(() => (historyStore.records.length ? '' : historyStore.errorMessage))
 const recordCountText = computed(() => (records.value.length ? `共 ${records.value.length} 条` : ''))
+const selectedQueueUuid = ref('')
+const queueStatus = ref<QueueStatus | null>(null)
+const queueLoading = ref(false)
+const queueError = ref('')
+const queueUpdatedAt = ref<Date | null>(null)
+let queueRefreshTimer: ReturnType<typeof setInterval> | undefined
+const selectedQueueRecord = computed(() => records.value.find((record) => record.uuid === selectedQueueUuid.value) ?? null)
+const queueStatusText = computed(() => {
+  if (queueStatus.value?.status === 2) return '请前往就诊'
+  return '正在候诊'
+})
+const queueAheadText = computed(() => (queueStatus.value?.status === 2 ? '请前往诊室' : String(queueStatus.value?.ahead_of_you ?? '—')))
+const queueUpdatedText = computed(() => {
+  if (!queueUpdatedAt.value) return '正在读取最新状态'
+  return `更新于 ${queueUpdatedAt.value.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
+})
 
 function field(value: string | null | undefined, fallback = '待确认') {
   return value && value.trim() ? value : fallback
@@ -55,11 +73,31 @@ function isQueueActive(record: RegisterDetail) {
 }
 
 function viewQueue(record: RegisterDetail) {
-  router.push({ name: 'patient-queue', query: { registerUuid: record.uuid } })
+  router.push({ name: 'patient-registers', query: { registerUuid: record.uuid } })
+}
+
+async function refreshQueue(silent = false) {
+  if (!selectedQueueUuid.value || queueLoading.value) return
+  queueLoading.value = true
+  queueError.value = ''
+  try {
+    const response = await patientApi.getQueueStatus(selectedQueueUuid.value)
+    queueStatus.value = response.data.data
+    queueUpdatedAt.value = new Date()
+  } catch {
+    queueError.value = '候诊状态加载失败，请检查网络后重试。'
+    if (!silent) ElMessage.error(queueError.value)
+  } finally {
+    queueLoading.value = false
+  }
 }
 
 onMounted(() => {
   void loadRecords()
+})
+
+onBeforeUnmount(() => {
+  if (queueRefreshTimer) clearInterval(queueRefreshTimer)
 })
 
 watch(
@@ -68,13 +106,33 @@ watch(
     void loadRecords()
   },
 )
+
+watch(
+  [() => route.query.registerUuid, records],
+  ([registerUuid]) => {
+    const requestedUuid = typeof registerUuid === 'string' ? registerUuid : ''
+    const requestedRecord = records.value.find((record) => record.uuid === requestedUuid)
+    selectedQueueUuid.value = requestedRecord && isQueueActive(requestedRecord) ? requestedRecord.uuid : ''
+  },
+  { immediate: true },
+)
+
+watch(selectedQueueUuid, (registerUuid) => {
+  if (queueRefreshTimer) clearInterval(queueRefreshTimer)
+  queueStatus.value = null
+  queueError.value = ''
+  queueUpdatedAt.value = null
+  if (!registerUuid) return
+  void refreshQueue()
+  queueRefreshTimer = setInterval(() => void refreshQueue(true), 15_000)
+})
 </script>
 
 <template>
   <div class="patient-register-history-shell">
     <header class="patient-register-history-hero">
-      <h1>挂号记录</h1>
-      <p>{{ isLoggedIn ? '查看当前患者的线上挂号与候诊信息' : '登录后查看个人挂号历史' }}</p>
+      <h1>挂号与候诊</h1>
+      <p>{{ isLoggedIn ? '统一查看挂号记录和进行中的候诊进度' : '登录后查看个人挂号历史' }}</p>
     </header>
 
     <main class="patient-register-history-content">
@@ -148,6 +206,28 @@ watch(
                   >
                     查看候诊状态
                   </button>
+                  <section v-if="selectedQueueRecord?.uuid === record.uuid" class="patient-register-history-queue" aria-live="polite">
+                    <div class="patient-register-history-queue__head">
+                      <div>
+                        <span>{{ queueStatusText }}</span>
+                        <strong>{{ queueAheadText }}</strong>
+                        <p>{{ queueStatus?.status === 2 ? '医生正在接诊，请尽快前往诊室。' : '前方等待人数会随叫号自动更新。' }}</p>
+                      </div>
+                      <el-button type="primary" plain :loading="queueLoading" @click="refreshQueue()">刷新</el-button>
+                    </div>
+                    <dl>
+                      <div>
+                        <dt>诊室</dt>
+                        <dd>{{ queueStatus?.clinic_room_name || record.clinic_room_name || '待分配' }}</dd>
+                      </div>
+                      <div>
+                        <dt>位置</dt>
+                        <dd>{{ queueStatus?.clinic_room_location || '到院后查看导诊屏' }}</dd>
+                      </div>
+                    </dl>
+                    <p v-if="queueError" class="patient-register-history-queue__error" role="alert">{{ queueError }}</p>
+                    <small>{{ queueUpdatedText }} · 每 15 秒自动更新</small>
+                  </section>
                 </article>
               </div>
 
@@ -287,6 +367,61 @@ watch(
   color: var(--patient-primary);
   font: inherit;
   font-weight: 700;
+}
+
+.patient-register-history-queue {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--patient-blue-soft);
+}
+
+.patient-register-history-queue__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.patient-register-history-queue__head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.patient-register-history-queue__head span,
+.patient-register-history-queue__head p,
+.patient-register-history-queue small {
+  color: #334e68;
+  font-size: 13px;
+}
+
+.patient-register-history-queue__head strong {
+  color: #0c4a6e;
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.patient-register-history-queue__head p,
+.patient-register-history-queue__error,
+.patient-register-history-queue small {
+  margin: 0;
+}
+
+.patient-register-history-queue dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.patient-register-history-queue dl div {
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.patient-register-history-queue__error {
+  color: #b91c1c;
+  font-size: 14px;
 }
 
 .patient-register-history-login div {
