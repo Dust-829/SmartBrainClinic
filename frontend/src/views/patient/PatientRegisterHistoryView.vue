@@ -50,6 +50,14 @@ function goDepartments() {
   router.push('/patient/departments')
 }
 
+function isQueueActive(record: RegisterDetail) {
+  return record.visit_state === 1 || record.visit_state === 2
+}
+
+function viewQueue(record: RegisterDetail) {
+  router.push({ name: 'patient-queue', query: { registerUuid: record.uuid } })
+}
+
 onMounted(() => {
   void loadRecords()
 })
@@ -132,6 +140,14 @@ watch(
                   <p v-if="record.symptoms" class="patient-register-history-symptom">
                     症状：{{ record.symptoms }}
                   </p>
+                  <button
+                    v-if="isQueueActive(record)"
+                    type="button"
+                    class="patient-register-history-queue-action"
+                    @click="viewQueue(record)"
+                  >
+                    查看候诊状态
+                  </button>
                 </article>
               </div>
 
@@ -259,6 +275,18 @@ watch(
 .patient-register-history-symptom {
   color: var(--patient-text-muted);
   line-height: 1.65;
+}
+
+.patient-register-history-queue-action {
+  width: 100%;
+  min-height: var(--patient-control-height);
+  margin-top: 12px;
+  border: 1px solid var(--patient-primary);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--patient-primary);
+  font: inherit;
+  font-weight: 700;
 }
 
 .patient-register-history-login div {
