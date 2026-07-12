@@ -16,7 +16,6 @@ const navItems = [
   { label: 'AI 审计', to: '/admin/audit' },
   { label: '药房工作台', to: '/admin/pharmacy' },
   { label: '财务账单', to: '/admin/billing' },
-  { label: '运营分析', to: '/admin/analytics' },
 ]
 
 const staffLabel = computed(() => session.staff?.displayName || '未登录管理员')

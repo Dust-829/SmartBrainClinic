@@ -48,7 +48,6 @@ const quickLinks = computed(() => [
   },
   { title: '药房工作台', subtitle: '批量入库、发药、退药和库存预警', to: '/admin/pharmacy' },
   { title: '财务账单', subtitle: '查询挂号账单、退费和异常收费处理', to: '/admin/billing' },
-  { title: '运营分析', subtitle: '用于答辩展示后台统计与证据链概览', to: '/admin/analytics' },
 ])
 
 async function loadDashboard() {

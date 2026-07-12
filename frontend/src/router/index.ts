@@ -180,12 +180,6 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/admin/AdminBillingView.vue'),
         meta: { requiresAuth: true },
       },
-      {
-        path: 'analytics',
-        name: 'admin-analytics',
-        component: () => import('@/views/admin/AdminAnalyticsView.vue'),
-        meta: { requiresAuth: true },
-      },
     ],
   },
 ]
