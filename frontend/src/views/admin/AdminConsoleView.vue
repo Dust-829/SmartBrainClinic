@@ -97,6 +97,10 @@ function formatDateTime(value?: string | null) {
   return value.replace('T', ' ').slice(0, 16)
 }
 
+function formatApplicant(item: SchedulingApplicationRecord) {
+  return [item.employee_name, item.dept_name].filter(Boolean).join(' · ') || item.employee_uuid
+}
+
 onMounted(() => {
   loadDashboard()
 })
@@ -126,9 +130,9 @@ onMounted(() => {
       <SectionCard title="待办与异常" subtitle="优先处理最能影响演示闭环的后台动作。">
         <div v-if="pendingApplications.length" class="admin-list">
           <article v-for="item in pendingApplications.slice(0, 4)" :key="item.uuid" class="admin-console__list-item">
-            <strong>{{ item.employee_uuid }}</strong>
-            <p>{{ item.prompt }}</p>
-            <span>{{ formatDateTime(item.created_at) }}</span>
+            <strong>{{ item.prompt_title || '排班调整申请' }}</strong>
+            <p>{{ formatApplicant(item) }}</p>
+            <span>{{ [item.time_hint, formatDateTime(item.created_at)].filter(Boolean).join(' | ') }}</span>
           </article>
         </div>
         <div v-else class="admin-console__empty">当前没有待审批排班申请。</div>

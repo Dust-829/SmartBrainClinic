@@ -424,6 +424,14 @@ def test_serialize_scheduling_application_repairs_mojibake_prompt():
     assert serialized["prompt"] == expected_prompt
 
 
+def test_scheduling_prompt_humanization_builds_readable_summary():
+    prompt = "add one extra post op review block next week"
+
+    assert patient_service._humanize_scheduling_prompt(prompt) == "增加 one 增加 术后复诊 时段 下周"
+    assert patient_service._build_scheduling_prompt_title(prompt) == "加号/加班申请"
+    assert patient_service._build_scheduling_time_hint(prompt) == "下周"
+
+
 @pytest.mark.asyncio
 async def test_create_scheduling_application_normalizes_prompt_before_persisting(monkeypatch):
     employee_uuid = uuid.uuid4()

@@ -15,6 +15,10 @@ function formatDateTime(value?: string | null) {
   return value.replace('T', ' ').slice(0, 16)
 }
 
+function formatApplicant(item: SchedulingApplicationRecord) {
+  return [item.employee_name, item.dept_name].filter(Boolean).join(' · ') || item.employee_uuid
+}
+
 async function loadApplications() {
   loading.value = true
   try {
@@ -77,13 +81,17 @@ loadApplications()
         <article v-for="item in applications" :key="item.uuid" class="approval-card">
           <div class="approval-card__head">
             <div>
-              <strong>{{ item.employee_uuid }}</strong>
-              <span>{{ formatDateTime(item.created_at) }}</span>
+              <strong>{{ item.prompt_title || '排班调整申请' }}</strong>
+              <span>{{ formatApplicant(item) }}</span>
             </div>
-            <em>{{ item.status }}</em>
+            <em>{{ item.status_text || item.status }}</em>
           </div>
 
-          <p>{{ item.prompt }}</p>
+          <p>{{ item.prompt_excerpt || item.prompt_display || item.prompt }}</p>
+          <p class="approval-card__meta">
+            {{ [item.time_hint, formatDateTime(item.created_at)].filter(Boolean).join(' | ') }}
+          </p>
+          <p class="approval-card__raw">原始请求：{{ item.prompt_display || item.prompt }}</p>
 
           <label class="approval-card__field">
             <span>驳回原因</span>

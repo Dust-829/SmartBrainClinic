@@ -4,8 +4,15 @@ import type { PatientCreatePayload, PatientRecord } from './patient'
 export interface SchedulingApplicationRecord {
   uuid: string
   employee_uuid: string
+  employee_name?: string | null
+  dept_name?: string | null
   prompt: string
+  prompt_display?: string
+  prompt_title?: string
+  prompt_excerpt?: string
+  time_hint?: string | null
   status: string
+  status_text?: string
   reject_reason?: string | null
   created_at?: string | null
   processed_at?: string | null
@@ -503,8 +510,14 @@ export const adminApi = {
   listBills(params: { state?: string; limit?: number } = {}) {
     return http.get<ApiEnvelope<BillRecord[]>>('/api/v1/bill/list', { params })
   },
-  refundBill(billCode: string) {
-    return http.put<ApiEnvelope<BillRefundResult>>(`/api/v1/bill/${encodeURIComponent(billCode)}/refund`)
+  refundBill(billCode: string, options: { idempotencyKey?: string } = {}) {
+    return http.put<ApiEnvelope<BillRefundResult>>(
+      `/api/v1/bill/${encodeURIComponent(billCode)}/refund`,
+      undefined,
+      {
+        headers: options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : undefined,
+      },
+    )
   },
   getAdminBillsPage(params: AdminBillQuery = {}) {
     return http.get<ApiEnvelope<AdminBillPage>>('/api/v1/bill/admin/page', { params })

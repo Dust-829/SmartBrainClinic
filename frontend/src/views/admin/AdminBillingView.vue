@@ -89,6 +89,14 @@ function canRefund(item?: { bill_state?: string | null } | null) {
   return !!item && item.bill_state !== '已退费' && item.bill_state !== 'REFUNDED'
 }
 
+function createIdempotencyKey(prefix: string) {
+  const randomPart =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return `${prefix}-${randomPart}`
+}
+
 function resetFilters() {
   filters.keyword = ''
   filters.state = ''
@@ -185,7 +193,9 @@ async function refundSelectedBill() {
 
   refundingBillCode.value = billCode
   try {
-    const response = await adminApi.refundBill(billCode)
+    const response = await adminApi.refundBill(billCode, {
+      idempotencyKey: createIdempotencyKey(`billing-refund-${billCode}`),
+    })
     lastRefund.value = response.data.data ?? null
     ElMessage.success('退费成功')
     await loadWorkbench(billCode)

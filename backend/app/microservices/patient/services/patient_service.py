@@ -228,6 +228,109 @@ def _serialize_scheduling_application(app: SchedulingApplication) -> dict:
     }
 
 
+def _humanize_scheduling_prompt(prompt: str) -> str:
+    text = repair_mojibake_text(" ".join(str(prompt or "").split()))
+    if not text:
+        return ""
+
+    replacements = [
+        (r"\bnext week\b", "下周"),
+        (r"\btomorrow\b", "明天"),
+        (r"\bthis week\b", "本周"),
+        (r"\bmorning\b", "上午"),
+        (r"\bafternoon\b", "下午"),
+        (r"\bpost[\s-]*op(?:erative)? review\b", "术后复诊"),
+        (r"\breview block\b", "复诊时段"),
+        (r"\bextra\b", "增加"),
+        (r"\badd one extra\b", "增加一个"),
+        (r"\badd\b", "增加"),
+        (r"\bclinic\b", "门诊"),
+        (r"\bblock\b", "时段"),
+        (r"\bquota\b", "号源数量"),
+        (r"\bcancel\b", "停诊"),
+    ]
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return " ".join(text.split())
+
+
+def _build_scheduling_prompt_title(prompt: str) -> str:
+    normalized = _humanize_scheduling_prompt(prompt)
+    lowered = normalized.lower()
+    if any(keyword in normalized for keyword in ("停诊", "请假", "取消", "不接诊")):
+        return "停诊申请"
+    if any(keyword in normalized for keyword in ("诊室",)) or "clinic room" in lowered:
+        return "诊室调整申请"
+    if any(keyword in normalized for keyword in ("增加", "加号", "新增")) or "extra" in lowered:
+        return "加号/加班申请"
+    if any(keyword in normalized for keyword in ("限额", "号源")) or "quota" in lowered:
+        return "号源调整申请"
+    return "排班调整申请"
+
+
+def _build_scheduling_prompt_excerpt(prompt: str, limit: int = 84) -> str:
+    normalized = _humanize_scheduling_prompt(prompt)
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1].rstrip() + "…"
+
+
+def _build_scheduling_time_hint(prompt: str) -> str | None:
+    normalized = _humanize_scheduling_prompt(prompt)
+    hints: list[str] = []
+    date_match = re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", normalized)
+    if date_match:
+        hints.append(date_match.group(0))
+    else:
+        for token in ("今天", "明天", "后天", "下周", "本周"):
+            if token in normalized:
+                hints.append(token)
+                break
+    for token in ("上午", "下午"):
+        if token in normalized:
+            hints.append(token)
+            break
+    if hints:
+        return " / ".join(hints)
+    return None
+
+
+def _serialize_scheduling_application_status(status: str) -> str:
+    return {
+        "pending": "待审批",
+        "approved": "已通过",
+        "rejected": "已驳回",
+        "duplicate": "已复用",
+    }.get(status, status)
+
+
+async def _build_scheduling_application_payload(
+    app: SchedulingApplication,
+    *,
+    get_employee_cached,
+    get_department_cached,
+) -> dict:
+    payload = _serialize_scheduling_application(app)
+    payload["status_text"] = _serialize_scheduling_application_status(app.status)
+    payload["prompt_display"] = _humanize_scheduling_prompt(app.prompt)
+    payload["prompt_title"] = _build_scheduling_prompt_title(app.prompt)
+    payload["prompt_excerpt"] = _build_scheduling_prompt_excerpt(app.prompt)
+    payload["time_hint"] = _build_scheduling_time_hint(app.prompt)
+
+    employee = await get_employee_cached(app.employee_uuid)
+    if employee:
+        payload["employee_name"] = employee.get("realname")
+        dept_uuid = employee.get("dept_uuid")
+        if dept_uuid:
+            department = await get_department_cached(str(dept_uuid))
+            if department:
+                payload["dept_name"] = department.get("dept_name")
+    else:
+        payload["employee_name"] = None
+        payload["dept_name"] = None
+    return payload
+
+
 async def _find_scheduling_actual(
     session: AsyncSession,
     employee_uuid: uuid_pkg.UUID,
@@ -1783,7 +1886,29 @@ async def get_pending_scheduling_applications(session: AsyncSession, status: Opt
     stmt = stmt.order_by(SchedulingApplication.created_at.desc())
     res = await session.execute(stmt)
     apps = res.scalars().all()
-    return [_serialize_scheduling_application(app) for app in apps]
+
+    employee_cache: dict[str, Optional[dict]] = {}
+    department_cache: dict[str, Optional[dict]] = {}
+
+    async def get_employee_cached(employee_uuid) -> Optional[dict]:
+        key = str(employee_uuid)
+        if key not in employee_cache:
+            employee_cache[key] = await AuthClient.get_employee(key)
+        return employee_cache[key]
+
+    async def get_department_cached(dept_uuid: str) -> Optional[dict]:
+        if dept_uuid not in department_cache:
+            department_cache[dept_uuid] = await AuthClient.get_department(dept_uuid)
+        return department_cache[dept_uuid]
+
+    return [
+        await _build_scheduling_application_payload(
+            app,
+            get_employee_cached=get_employee_cached,
+            get_department_cached=get_department_cached,
+        )
+        for app in apps
+    ]
 
 async def approve_scheduling_application(session: AsyncSession, app_uuid: uuid_pkg.UUID) -> dict:
     stmt = select(SchedulingApplication).where(SchedulingApplication.uuid == app_uuid)

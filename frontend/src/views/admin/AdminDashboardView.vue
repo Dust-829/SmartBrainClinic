@@ -116,6 +116,10 @@ function formatDateTime(value?: string | null) {
   return value.replace('T', ' ').slice(0, 16)
 }
 
+function formatApplicant(item: SchedulingApplicationRecord) {
+  return [item.employee_name, item.dept_name].filter(Boolean).join(' · ') || item.employee_uuid
+}
+
 function formatGender(value?: string | null) {
   if (!value) return '未知'
   const normalized = value.trim().toLowerCase()
@@ -447,10 +451,10 @@ onBeforeUnmount(() => {
             <div v-if="pendingApplications.length" class="admin-dashboard__compact-list">
               <article v-for="item in pendingApplications.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item">
                 <div>
-                  <strong>{{ item.employee_uuid }}</strong>
-                  <p>{{ item.prompt }}</p>
+                  <strong>{{ item.prompt_title || '排班调整申请' }}</strong>
+                  <p>{{ formatApplicant(item) }}</p>
                 </div>
-                <span>{{ formatDateTime(item.created_at) }}</span>
+                <span>{{ [item.time_hint, formatDateTime(item.created_at)].filter(Boolean).join(' | ') }}</span>
               </article>
             </div>
             <div v-else class="admin-empty">当前没有待审批排班申请。</div>
