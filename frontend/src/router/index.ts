@@ -93,7 +93,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'queue',
         name: 'patient-queue',
-        redirect: (to) => ({ name: 'patient-registers', query: to.query }),
+        component: () => import('@/views/patient/PatientQueueView.vue'),
         meta: { requiresAuth: true },
       },
     ],

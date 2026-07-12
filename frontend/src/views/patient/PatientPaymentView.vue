@@ -40,7 +40,7 @@ async function pay() {
     })
     flow.setPayment(response.data.data)
     ElMessage.success('支付成功，已进入候诊队列')
-    router.push({ name: 'patient-registers', query: { registerUuid: response.data.data.register_uuid } })
+    router.push({ name: 'patient-queue', query: { registerUuid: response.data.data.register_uuid } })
   } finally {
     submitting.value = false
   }

@@ -1,228 +1,471 @@
+Exit code: 0
+Wall time: 0.3 seconds
+Output:
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 import type { RegisterDetail } from '@/api/patient'
-import { patientApi } from '@/api/patient'
-import SectionCard from '@/components/common/SectionCard.vue'
-import PatientFlowHeader from '@/components/patient/PatientFlowHeader.vue'
-import { usePatientFlowStore } from '@/stores/patientFlow'
+import PatientBottomNav from '@/components/patient/PatientBottomNav.vue'
 import { usePatientRegisterHistoryStore } from '@/stores/patientRegisterHistory'
 import { usePatientSessionStore } from '@/stores/patientSession'
 
-const AUTO_REFRESH_MS = 15_000
-
-const route = useRoute()
 const router = useRouter()
-const flow = usePatientFlowStore()
 const session = usePatientSessionStore()
 const historyStore = usePatientRegisterHistoryStore()
-const loading = ref(false)
-const selectedRegisterUuid = ref('')
-const loadError = ref('')
-const updatedAt = ref<Date | null>(null)
-let refreshTimer: ReturnType<typeof setInterval> | undefined
 
-const history = computed(() => historyStore.records)
-const activeRecords = computed(() => history.value.filter((item) => item.visit_state === 1 || item.visit_state === 2))
-const selectedRecord = computed<RegisterDetail | null>(
-  () => history.value.find((item) => item.uuid === selectedRegisterUuid.value) ?? null,
-)
-const statusMeta = computed(() => {
-  switch (flow.queueStatus?.status) {
-    case 1:
-      return { label: '正在候诊', hint: '请留意叫号信息，并提前到诊室附近等候。', tone: 'waiting' }
-    case 2:
-      return { label: '请前往就诊', hint: '医生正在接诊，请尽快前往诊室。', tone: 'reception' }
-    default:
-      return { label: '候诊状态待确认', hint: '正在读取本次挂号的最新状态。', tone: 'pending' }
-  }
-})
-const queueNumberText = computed(() => {
-  if (flow.queueStatus?.status === 2) return '请前往诊室'
-  return String(flow.queueStatus?.ahead_of_you ?? '—')
-})
-const updatedText = computed(() => {
-  if (!updatedAt.value) return '尚未更新'
-  return `更新于 ${updatedAt.value.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
-})
+const patient = computed(() => session.patient)
+const isLoggedIn = computed(() => Boolean(patient.value?.uuid))
+const records = computed(() => historyStore.records)
+const loading = computed(() => historyStore.loading && !historyStore.records.length)
+const errorMessage = computed(() => (historyStore.records.length ? '' : historyStore.errorMessage))
+const recordCountText = computed(() => (records.value.length ? `共 ${records.value.length} 条` : ''))
 
-onMounted(async () => {
-  if (!session.patient) {
-    router.replace('/patient/login')
-    return
-  }
-
-  await historyStore.fetchHistory()
-  const requestedUuid = typeof route.query.registerUuid === 'string' ? route.query.registerUuid : ''
-  const flowRegisterUuid = flow.payment?.register_uuid || flow.onlineRegister?.register_uuid || ''
-  const requestedRecord = history.value.find((item) => item.uuid === requestedUuid)
-  selectedRegisterUuid.value = requestedRecord?.uuid || flowRegisterUuid || activeRecords.value[0]?.uuid || ''
-
-  if (selectedRegisterUuid.value) {
-    await refresh()
-    refreshTimer = setInterval(() => void refresh(true), AUTO_REFRESH_MS)
-  }
-})
-
-onBeforeUnmount(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
-})
-
-async function refresh(silent = false) {
-  if (!selectedRegisterUuid.value || loading.value) return
-  loading.value = true
-  loadError.value = ''
-  try {
-    const response = await patientApi.getQueueStatus(selectedRegisterUuid.value)
-    flow.setQueueStatus(response.data.data)
-    updatedAt.value = new Date()
-  } catch {
-    loadError.value = '候诊状态加载失败，请检查网络后重试。'
-    if (!silent) ElMessage.error(loadError.value)
-  } finally {
-    loading.value = false
-  }
+function field(value: string | null | undefined, fallback = '待确认') {
+  return value && value.trim() ? value : fallback
 }
 
-function selectRegister(registerUuid: string) {
-  if (registerUuid === selectedRegisterUuid.value) return
-  selectedRegisterUuid.value = registerUuid
-  flow.setQueueStatus({ ahead_of_you: 0, status: 0 })
-  updatedAt.value = null
-  void refresh()
+function visitTime(record: RegisterDetail) {
+  const date = record.actual_schedule_date || record.visit_date
+  const range = record.actual_time_range || record.noon
+  if (!date && !range) return '就诊时间待确认'
+  return [date, range].filter(Boolean).join(' ')
 }
 
-function startRegistration() {
+function feeText(value: number | undefined) {
+  if (value === undefined || value === null) return '费用待确认'
+  return `${value} 元`
+}
+
+async function loadRecords(force = false) {
+  await historyStore.fetchHistory({ force })
+}
+
+function goLogin() {
+  router.push('/patient/login')
+}
+
+function goRegister() {
+  router.push('/patient/register')
+}
+
+function goDepartments() {
   router.push('/patient/departments')
 }
+
+onMounted(() => {
+  void loadRecords()
+})
+
+watch(
+  () => patient.value?.uuid,
+  () => {
+    void loadRecords()
+  },
+)
 </script>
 
 <template>
-  <div class="patient-queue">
-    <PatientFlowHeader
-      title="挂号与候诊"
-      subtitle="查看挂号记录、候诊进度与诊室信息"
-      back-label="返回首页"
-      @back="router.push('/patient/home')"
-    />
+  <div class="patient-register-history-shell">
+    <header class="patient-register-history-hero">
+      <h1>挂号记录</h1>
+      <p>{{ isLoggedIn ? '查看当前患者的线上挂号与候诊信息' : '登录后查看个人挂号历史' }}</p>
+    </header>
 
-    <main class="patient-queue__content">
-      <template v-if="selectedRegisterUuid">
-        <SectionCard title="当前候诊" :subtitle="statusMeta.hint">
-          <template #extra>
-            <span class="patient-queue__status-tag" :class="`is-${statusMeta.tone}`">{{ statusMeta.label }}</span>
-          </template>
-
-          <div class="patient-queue__progress" :class="`is-${statusMeta.tone}`" aria-live="polite">
-            <span>{{ flow.queueStatus?.status === 2 ? '当前提醒' : '前方等待人数' }}</span>
-            <strong>{{ queueNumberText }}</strong>
-            <p v-if="flow.queueStatus?.status === 1">人数会随医生叫号实时变化</p>
-            <p v-else>{{ statusMeta.hint }}</p>
-          </div>
-
-          <div class="patient-queue__details">
-            <div>
-              <span>诊室</span>
-              <strong>{{ flow.queueStatus?.clinic_room_name || selectedRecord?.clinic_room_name || '待分配' }}</strong>
-            </div>
-            <div>
-              <span>位置</span>
-              <strong>{{ flow.queueStatus?.clinic_room_location || '到院后查看导诊屏' }}</strong>
-            </div>
-          </div>
-
-          <div v-if="loadError" class="patient-queue__error" role="alert">{{ loadError }}</div>
-          <div class="patient-queue__refresh-row">
-            <span>{{ updatedText }}</span>
-            <el-button type="primary" plain :loading="loading" @click="refresh()">刷新状态</el-button>
-          </div>
-        </SectionCard>
-
-        <SectionCard title="本次挂号">
-          <div class="patient-queue__summary">
-            <div>
-              <span>科室与医生</span>
-              <strong>{{ selectedRecord?.dept_name || '科室待确认' }} · {{ selectedRecord?.employee_name || flow.selectedDoctor?.doctor_name || '医生待确认' }}</strong>
-            </div>
-            <div>
-              <span>就诊时间</span>
-              <strong>{{ selectedRecord?.actual_schedule_date || selectedRecord?.visit_date || '待确认' }} {{ selectedRecord?.actual_time_range || selectedRecord?.noon || '' }}</strong>
-            </div>
-            <div v-if="selectedRecord?.symptoms || flow.symptoms">
-              <span>症状</span>
-              <strong>{{ selectedRecord?.symptoms || flow.symptoms }}</strong>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard v-if="activeRecords.length > 1" title="切换候诊挂号" subtitle="仅显示仍在候诊或接诊中的挂号单。">
-          <div class="patient-queue__register-list">
-            <button
-              v-for="item in activeRecords"
-              :key="item.uuid"
-              type="button"
-              :class="{ 'is-selected': item.uuid === selectedRegisterUuid }"
-              @click="selectRegister(item.uuid)"
-            >
-              <strong>{{ item.dept_name || '科室待确认' }} · {{ item.employee_name || '医生待确认' }}</strong>
-              <span>{{ item.visit_state_str || item.visit_state_text || '候诊中' }}</span>
-            </button>
-          </div>
-        </SectionCard>
-      </template>
-
-      <SectionCard v-else title="暂无进行中的候诊" subtitle="完成支付后的挂号单会显示候诊进度。">
-        <div class="patient-queue__empty">
-          <p>您可以在下方查看全部挂号记录，或继续完成新的线上挂号。</p>
-          <el-button type="primary" @click="startRegistration">去挂号</el-button>
+    <main class="patient-register-history-content">
+      <section v-if="!isLoggedIn" class="patient-register-history-login">
+        <span class="patient-register-history-login__icon" aria-hidden="true"></span>
+        <h2>请先登录后查看挂号记录</h2>
+        <p>登录后可查看线上挂号、缴费状态、候诊进度和历史就诊安排。</p>
+        <div>
+          <button type="button" class="is-primary" @click="goLogin">去登录</button>
+          <button type="button" @click="goRegister">注册</button>
         </div>
-      </SectionCard>
+      </section>
 
-      <SectionCard title="历史挂号" subtitle="全部线上挂号记录。">
-        <el-skeleton :loading="historyStore.loading && !history.length" animated>
-          <template #template>
-            <el-skeleton-item variant="rect" style="height: 100px; border-radius: 8px" />
-          </template>
-          <template #default>
-            <div v-if="historyStore.errorMessage && !history.length" class="patient-queue__error" role="alert">
-              {{ historyStore.errorMessage }}
+      <template v-else>
+        <section class="patient-register-history-profile">
+          <span class="patient-register-history-avatar" aria-hidden="true"></span>
+          <div>
+            <strong>{{ field(patient?.real_name, '当前患者') }}</strong>
+            <p>门诊号：{{ field(patient?.case_number, '暂未建档') }}</p>
+          </div>
+        </section>
+
+        <section class="patient-register-history-panel">
+          <div class="patient-register-history-title">
+            <div>
+              <h2>全部挂号记录</h2>
             </div>
-            <div v-else class="patient-queue__history">
-              <article v-for="item in history" :key="item.uuid" class="patient-queue__history-item">
-                <strong>{{ item.dept_name || '未知科室' }} · {{ item.employee_name || '未知医生' }}</strong>
-                <span>{{ item.actual_schedule_date || item.visit_date }} {{ item.actual_time_range || item.noon || '' }}</span>
-                <span>{{ item.visit_state_str || item.visit_state_text || `状态 ${item.visit_state}` }}</span>
-              </article>
-              <el-empty v-if="!history.length" description="暂无历史挂号" :image-size="80" />
-            </div>
-          </template>
-        </el-skeleton>
-      </SectionCard>
+            <span v-if="recordCountText">{{ recordCountText }}</span>
+          </div>
+
+          <el-skeleton :loading="loading" animated :rows="6">
+            <template #default>
+              <div v-if="errorMessage" class="patient-register-history-empty is-error">
+                <strong>{{ errorMessage }}</strong>
+                <button type="button" @click="loadRecords(true)">重新加载</button>
+              </div>
+
+              <div v-else-if="records.length" class="patient-register-history-list">
+                <article v-for="record in records" :key="record.uuid">
+                  <div class="patient-register-history-card-head">
+                    <div>
+                      <strong>{{ field(record.dept_name, '科室待确认') }}</strong>
+                      <p>{{ field(record.employee_name, '医生待确认') }}</p>
+                    </div>
+                    <span>{{ field(record.visit_state_str, '状态待确认') }}</span>
+                  </div>
+
+                  <dl>
+                    <div>
+                      <dt>就诊时间</dt>
+                      <dd>{{ visitTime(record) }}</dd>
+                    </div>
+                    <div>
+                      <dt>挂号费用</dt>
+                      <dd>{{ feeText(record.regist_money) }}</dd>
+                    </div>
+                    <div>
+                      <dt>诊室</dt>
+                      <dd>{{ field(record.clinic_room_name) }}</dd>
+                    </div>
+                  </dl>
+
+                  <p v-if="record.symptoms" class="patient-register-history-symptom">
+                    症状：{{ record.symptoms }}
+                  </p>
+                </article>
+              </div>
+
+              <div v-else class="patient-register-history-empty">
+                <span aria-hidden="true"></span>
+                <strong>暂无挂号记录</strong>
+                <p>完成线上挂号后，记录会显示在这里。</p>
+                <button type="button" @click="goDepartments">去按科室挂号</button>
+              </div>
+            </template>
+          </el-skeleton>
+        </section>
+      </template>
     </main>
+
+    <PatientBottomNav />
   </div>
 </template>
 
 <style scoped>
-.patient-queue { min-height: 100vh; padding-bottom: 24px; background: linear-gradient(180deg, #eaf4ff 0%, #f7fbff 46%, #ffffff 100%); color: var(--patient-text); }
-.patient-queue__content { display: grid; gap: 14px; margin-top: -22px; padding: 0 var(--patient-page-gutter) 24px; }
-.patient-queue__status-tag { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; background: #e0f2fe; color: #075985; font-size: 12px; font-weight: 800; white-space: nowrap; }
-.patient-queue__status-tag.is-reception { background: #dcfce7; color: #166534; }
-.patient-queue__progress { display: grid; justify-items: center; gap: 6px; margin-bottom: 14px; padding: 22px 14px; border-radius: 12px; background: #e0f2fe; color: #0c4a6e; text-align: center; }
-.patient-queue__progress.is-reception { background: #dcfce7; color: #14532d; }
-.patient-queue__progress span, .patient-queue__progress p { margin: 0; font-size: 13px; }
-.patient-queue__progress strong { font-size: 42px; line-height: 1.08; }
-.patient-queue__details, .patient-queue__summary, .patient-queue__history, .patient-queue__register-list { display: grid; gap: 10px; }
-.patient-queue__details { margin-bottom: 14px; }
-.patient-queue__details div, .patient-queue__summary div, .patient-queue__history-item, .patient-queue__register-list button { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid transparent; border-radius: 10px; background: #f8fafc; color: var(--patient-text); text-align: left; }
-.patient-queue__details span, .patient-queue__summary span, .patient-queue__history-item span, .patient-queue__register-list span, .patient-queue__refresh-row > span { color: #475569; font-size: 13px; }
-.patient-queue__summary strong { word-break: break-word; }
-.patient-queue__error { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: #fef2f2; color: #b91c1c; font-size: 14px; }
-.patient-queue__refresh-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.patient-queue__register-list button { width: 100%; font: inherit; cursor: pointer; }
-.patient-queue__register-list button.is-selected { border-color: var(--patient-primary); background: var(--patient-blue-soft); }
-.patient-queue__empty { display: grid; gap: 14px; color: var(--patient-text-muted); line-height: 1.65; }
-.patient-queue__empty p { margin: 0; }
-@media (max-width: 360px) { .patient-queue__refresh-row { align-items: stretch; flex-direction: column; } }
+.patient-register-history-shell {
+  min-height: 100vh;
+  padding-bottom: calc(var(--patient-nav-height) + 24px);
+  background:
+    radial-gradient(circle at 88% 4%, rgba(78, 167, 255, 0.22), transparent 30%),
+    linear-gradient(180deg, #eaf4ff 0%, #f7fbff 42%, #f8fbff 100%);
+}
+
+.patient-register-history-hero {
+  min-height: 230px;
+  padding: 42px var(--patient-page-gutter) 76px;
+  background: linear-gradient(135deg, #087df6 0%, #35a7ff 100%);
+  color: #fff;
+}
+
+.patient-register-history-hero h1 {
+  margin: 0 0 8px;
+  font-size: 30px;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.patient-register-history-hero p {
+  max-width: 28em;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.patient-register-history-content {
+  display: grid;
+  gap: 14px;
+  margin-top: -50px;
+  padding: 0 var(--patient-page-gutter);
+}
+
+.patient-register-history-login,
+.patient-register-history-profile,
+.patient-register-history-panel {
+  border: 1px solid var(--patient-border);
+  border-radius: var(--patient-radius);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 14px 36px rgba(54, 121, 190, 0.12);
+}
+
+.patient-register-history-login {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 34px 22px 24px;
+  text-align: center;
+}
+
+.patient-register-history-login__icon,
+.patient-register-history-empty > span {
+  position: relative;
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: var(--patient-blue-soft);
+}
+
+.patient-register-history-login__icon::before,
+.patient-register-history-login__icon::after,
+.patient-register-history-empty > span::before,
+.patient-register-history-empty > span::after {
+  position: absolute;
+  left: 50%;
+  background: var(--patient-primary);
+  transform: translateX(-50%);
+  content: '';
+}
+
+.patient-register-history-login__icon::before,
+.patient-register-history-empty > span::before {
+  top: 15px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+}
+
+.patient-register-history-login__icon::after,
+.patient-register-history-empty > span::after {
+  bottom: 13px;
+  width: 34px;
+  height: 17px;
+  border-radius: 18px 18px 8px 8px;
+}
+
+.patient-register-history-login h2,
+.patient-register-history-login p,
+.patient-register-history-empty strong,
+.patient-register-history-empty p {
+  margin: 0;
+}
+
+.patient-register-history-login h2 {
+  font-size: 20px;
+}
+
+.patient-register-history-login p,
+.patient-register-history-empty p,
+.patient-register-history-card-head p,
+.patient-register-history-symptom {
+  color: var(--patient-text-muted);
+  line-height: 1.65;
+}
+
+.patient-register-history-login div {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.patient-register-history-login button,
+.patient-register-history-empty button {
+  min-height: var(--patient-control-height);
+  border: 1px solid var(--patient-border);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--patient-text);
+  font: inherit;
+  font-weight: 700;
+}
+
+.patient-register-history-login button.is-primary,
+.patient-register-history-empty button {
+  border-color: transparent;
+  background: var(--patient-primary);
+  color: #fff;
+}
+
+.patient-register-history-profile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+}
+
+.patient-register-history-avatar {
+  position: relative;
+  flex: 0 0 58px;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4d8fff, #77a5ff);
+}
+
+.patient-register-history-avatar::before,
+.patient-register-history-avatar::after {
+  position: absolute;
+  left: 50%;
+  background: #fff;
+  transform: translateX(-50%);
+  content: '';
+}
+
+.patient-register-history-avatar::before {
+  top: 12px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+}
+
+.patient-register-history-avatar::after {
+  bottom: 11px;
+  width: 34px;
+  height: 17px;
+  border-radius: 17px 17px 8px 8px;
+}
+
+.patient-register-history-profile strong {
+  font-size: 22px;
+}
+
+.patient-register-history-profile p {
+  margin: 5px 0 0;
+  color: var(--patient-text-muted);
+}
+
+.patient-register-history-panel {
+  padding: 20px;
+}
+
+.patient-register-history-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.patient-register-history-title h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.patient-register-history-title > span,
+.patient-register-history-card-head > span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--patient-blue-soft);
+  color: var(--patient-primary);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.patient-register-history-title > span {
+  padding: 5px 10px;
+}
+
+.patient-register-history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.patient-register-history-list article {
+  padding: 16px;
+  border: 1px solid rgba(212, 226, 241, 0.9);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff 0%, #f8fbff 100%);
+}
+
+.patient-register-history-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.patient-register-history-card-head strong {
+  font-size: 18px;
+}
+
+.patient-register-history-card-head p {
+  margin: 4px 0 0;
+}
+
+.patient-register-history-card-head > span {
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+.patient-register-history-list dl {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.patient-register-history-list dl div {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f4f8fd;
+}
+
+.patient-register-history-list dt {
+  color: var(--patient-text-muted);
+  font-size: 12px;
+}
+
+.patient-register-history-list dd {
+  margin: 0;
+  color: var(--patient-text);
+  font-weight: 800;
+}
+
+.patient-register-history-symptom {
+  margin: 12px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--patient-border);
+  font-size: 14px;
+}
+
+.patient-register-history-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 26px 12px 10px;
+  text-align: center;
+}
+
+.patient-register-history-empty.is-error {
+  padding-top: 18px;
+}
+
+.patient-register-history-empty.is-error strong {
+  color: #c2410c;
+}
+
+.patient-register-history-empty button {
+  width: min(100%, 260px);
+  margin-top: 6px;
+}
+
+@media (min-width: 720px) {
+  .patient-register-history-shell {
+    max-width: var(--patient-page-width);
+    margin: 0 auto;
+  }
+}
 </style>
+. : File C:\Users\Twilight\Documents\WindowsPowerShell\profile.ps1 cannot be loaded because running scripts is disabled
+ on this system. For more information, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170.
+At line:1 char:3
++ . 'C:\Users\Twilight\Documents\WindowsPowerShell\profile.ps1'
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : SecurityError: (:) [], PSSecurityException
+    + FullyQualifiedErrorId : UnauthorizedAccess
