@@ -15,14 +15,14 @@ const audits = ref<AuditLogRecord[]>([])
 const bills = ref<BillRecord[]>([])
 const lowStockDrugs = ref<DrugListItem[]>([])
 const approvals = ref<SchedulingApplicationRecord[]>([])
-const auditAvailable = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
+const auditLoadFailed = ref(false)
 
 const analyticsCards = computed(() => [
   { label: '待审批排班', value: approvals.value.length },
-  { label: 'AI 审计记录', value: auditAvailable.value ? audits.value.length : '未配置' },
+  { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : audits.value.length },
   {
     label: '待复核 AI 建议',
-    value: auditAvailable.value ? audits.value.filter((item) => !item.validated).length : '未配置',
+    value: auditLoadFailed.value ? '异常' : audits.value.filter((item) => !item.validated).length,
   },
   { label: '低库存药品', value: lowStockDrugs.value.length },
   { label: '最近账单', value: bills.value.length },
@@ -32,13 +32,14 @@ async function loadAnalytics() {
   loading.value = true
   try {
     const results = await Promise.allSettled([
-      auditAvailable.value ? adminApi.listAiAudits({ limit: 12 }) : Promise.resolve(null),
+      adminApi.listAiAudits({ limit: 12 }),
       adminApi.listBills({ limit: 12 }),
       adminApi.listDrugs({ low_stock_only: true, limit: 12 }),
       adminApi.listPendingApplications(),
     ])
 
-    audits.value = results[0].status === 'fulfilled' && results[0].value ? results[0].value.data.data?.items ?? [] : []
+    audits.value = results[0].status === 'fulfilled' ? results[0].value.data.data?.items ?? [] : []
+    auditLoadFailed.value = results[0].status === 'rejected'
     bills.value = results[1].status === 'fulfilled' ? results[1].value.data.data ?? [] : []
     lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
     approvals.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []
@@ -47,6 +48,7 @@ async function loadAnalytics() {
     bills.value = []
     lowStockDrugs.value = []
     approvals.value = []
+    auditLoadFailed.value = true
   } finally {
     loading.value = false
   }
@@ -84,7 +86,7 @@ onMounted(() => {
     <div class="admin-page__grid is-two-column">
       <SectionCard
         title="AI 模块统计"
-        :subtitle="auditAvailable ? '用来讲 AI 问诊、AI 排班、AI 处方等建议留痕情况。' : '当前未配置审计 token，AI 模块统计仅显示 0。'"
+        :subtitle="auditLoadFailed ? 'AI 审计接口加载失败，当前统计可能不完整。' : '用来讲 AI 问诊、AI 排班、AI 处方等建议留痕情况。'"
       >
         <div class="analytics-list">
           <article>

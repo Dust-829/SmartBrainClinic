@@ -74,7 +74,7 @@ async function search(resetPage = true) {
     configMessage.value = ''
   } catch {
     clearAuditState()
-    configMessage.value = '审计日志查询失败，请检查 token 配置、后端服务或筛选条件。'
+    configMessage.value = '审计日志查询失败，请检查后端服务或筛选条件。'
   } finally {
     loading.value = false
   }

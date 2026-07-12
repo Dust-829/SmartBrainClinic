@@ -9,14 +9,14 @@ const session = useAdminSessionStore()
 const loading = ref(false)
 const pendingApplications = ref<SchedulingApplicationRecord[]>([])
 const auditLogs = ref<AuditLogRecord[]>([])
-const auditAvailable = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
+const auditLoadFailed = ref(false)
 
 const metricCards = computed(() => [
   { label: '待审批排班', value: pendingApplications.value.length, tone: 'indigo' },
-  { label: 'AI 审计记录', value: auditAvailable.value ? auditLogs.value.length : '未配置', tone: 'sky' },
+  { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : auditLogs.value.length, tone: 'sky' },
   {
     label: '待人工复核',
-    value: auditAvailable.value ? auditLogs.value.filter((item) => !item.validated).length : '未配置',
+    value: auditLoadFailed.value ? '异常' : auditLogs.value.filter((item) => !item.validated).length,
     tone: 'amber',
   },
   {
@@ -34,7 +34,7 @@ const quickLinks = computed(() => [
   { title: '审批中心', subtitle: '集中处理排班申请与高风险后台动作', to: '/admin/approvals' },
   {
     title: 'AI 审计',
-    subtitle: auditAvailable.value ? '查看 AI 输出、人工确认结果和证据链' : '当前需要先配置前端审计 token',
+    subtitle: auditLoadFailed.value ? 'AI 审计接口当前加载失败，请检查后端服务' : '查看 AI 输出、人工确认结果和证据链',
     to: '/admin/audit',
   },
   { title: '药房工作台', subtitle: '批量入库、发药、退药和库存预警', to: '/admin/pharmacy' },
@@ -47,15 +47,17 @@ async function loadDashboard() {
   try {
     const tasks = [
       adminApi.listPendingApplications(),
-      auditAvailable.value ? adminApi.listAiAudits({ limit: 8 }) : Promise.resolve(null),
+      adminApi.listAiAudits({ limit: 8 }),
     ] as const
 
     const [applicationsResult, auditsResult] = await Promise.allSettled(tasks)
     pendingApplications.value = applicationsResult.status === 'fulfilled' ? applicationsResult.value.data.data ?? [] : []
-    auditLogs.value = auditsResult.status === 'fulfilled' && auditsResult.value ? auditsResult.value.data.data?.items ?? [] : []
+    auditLogs.value = auditsResult.status === 'fulfilled' ? auditsResult.value.data.data?.items ?? [] : []
+    auditLoadFailed.value = auditsResult.status === 'rejected'
   } catch {
     pendingApplications.value = []
     auditLogs.value = []
+    auditLoadFailed.value = true
   } finally {
     loading.value = false
   }
@@ -105,7 +107,7 @@ onMounted(() => {
 
       <SectionCard
         title="AI 审计快照"
-        :subtitle="auditAvailable ? '用来展示 AI 产生信息与人工确认信息的留痕证据。' : '当前未配置审计 token，只显示配置提示。'"
+        :subtitle="auditLoadFailed ? 'AI 审计接口加载失败，当前无法展示快照。' : '用来展示 AI 产生信息与人工确认信息的留痕证据。'"
       >
         <div v-if="auditLogs.length" class="admin-list">
           <article v-for="item in auditLogs.slice(0, 4)" :key="item.uuid" class="admin-console__list-item">
@@ -114,9 +116,7 @@ onMounted(() => {
             <span>{{ item.validated ? '已验证' : '待复核' }}</span>
           </article>
         </div>
-        <div v-else class="admin-console__empty">
-          {{ auditAvailable ? '当前没有可展示的 AI 审计记录。' : '后端未配置 AI audit token，审计快照暂不可用。' }}
-        </div>
+        <div v-else class="admin-console__empty">{{ auditLoadFailed ? 'AI 审计快照加载失败。' : '当前没有可展示的 AI 审计记录。' }}</div>
       </SectionCard>
     </div>
 

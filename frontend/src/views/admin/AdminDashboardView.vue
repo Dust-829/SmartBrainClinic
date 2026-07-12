@@ -49,9 +49,10 @@ const resourceChartInstance = ref<any>(null)
 const stockChartInstance = ref<any>(null)
 const riskChartInstance = ref<any>(null)
 
-const auditAvailable = computed(() => Boolean(import.meta.env.VITE_ADMIN_API_TOKEN?.trim()))
+const auditLoaded = ref(false)
+const auditLoadFailed = ref(false)
 const aiRiskLogs = computed(() => auditLogs.value.filter((item) => !item.validated))
-const aiRiskMetric = computed(() => (auditAvailable.value ? aiRiskLogs.value.length : '未配置'))
+const aiRiskMetric = computed(() => (auditLoadFailed.value ? '异常' : aiRiskLogs.value.length))
 
 const heroMetrics = computed(() => [
   { label: '待审批', value: pendingApplications.value.length },
@@ -78,9 +79,6 @@ const lowStockChartData = computed(() => {
 })
 
 const aiRiskChartData = computed(() => {
-  if (!auditAvailable.value) {
-    return { total: 0, pending: 0, validated: 0, pendingRatio: 0 }
-  }
   const total = auditLogs.value.length
   const pending = aiRiskLogs.value.length
   const validated = Math.max(total - pending, 0)
@@ -239,13 +237,13 @@ function renderRiskChart() {
   riskChartInstance.value = ensureChart(riskChartRef.value, riskChartInstance.value)
   if (!riskChartInstance.value) return
 
-  const hasData = auditAvailable.value && aiRiskChartData.value.total > 0
+  const hasData = aiRiskChartData.value.total > 0
   const seriesData = hasData
     ? [
         { value: aiRiskChartData.value.pending, name: '待复核', itemStyle: { color: '#f59e0b' } },
         { value: aiRiskChartData.value.validated, name: '已验证', itemStyle: { color: '#bfdbfe' } },
       ]
-    : [{ value: 1, name: auditAvailable.value ? '暂无记录' : '未配置', itemStyle: { color: '#e2e8f0' } }]
+    : [{ value: 1, name: auditLoadFailed.value ? '加载异常' : '暂无记录', itemStyle: { color: '#e2e8f0' } }]
 
   riskChartInstance.value.setOption({
     animationDuration: 350,
@@ -289,7 +287,7 @@ function renderRiskChart() {
             left: -34,
             top: 28,
             style: {
-              text: hasData ? '待复核占比' : auditAvailable.value ? '暂无审计记录' : 'AI 未配置',
+              text: hasData ? '待复核占比' : auditLoadFailed.value ? 'AI 审计异常' : '暂无审计记录',
               fill: '#64748b',
               fontSize: 11,
               textAlign: 'center',
@@ -327,7 +325,7 @@ async function loadDashboard() {
   try {
     const results = await Promise.allSettled([
       adminApi.listPendingApplications(),
-      auditAvailable.value ? adminApi.listAiAudits({ limit: 12 }) : Promise.resolve(null),
+      adminApi.listAiAudits({ limit: 12 }),
       adminApi.listDrugs({ low_stock_only: true, limit: 12 }),
       adminApi.listBills({ limit: 12 }),
       authApi.getAdminResourceStats(),
@@ -337,7 +335,9 @@ async function loadDashboard() {
     ])
 
     pendingApplications.value = results[0].status === 'fulfilled' ? results[0].value.data.data ?? [] : []
-    auditLogs.value = results[1].status === 'fulfilled' && results[1].value ? results[1].value.data.data?.items ?? [] : []
+    auditLogs.value = results[1].status === 'fulfilled' ? results[1].value.data.data?.items ?? [] : []
+    auditLoaded.value = results[1].status === 'fulfilled'
+    auditLoadFailed.value = results[1].status === 'rejected'
     lowStockDrugs.value = results[2].status === 'fulfilled' ? results[2].value.data.data ?? [] : []
     recentBills.value = results[3].status === 'fulfilled' ? results[3].value.data.data ?? [] : []
     resourceStats.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? { ...DEFAULT_RESOURCE_STATS } : { ...DEFAULT_RESOURCE_STATS }
@@ -350,7 +350,7 @@ async function loadDashboard() {
   }
 }
 
-watch([resourceStats, lowStockDrugs, auditLogs, auditAvailable], async () => {
+watch([resourceStats, lowStockDrugs, auditLogs, auditLoadFailed], async () => {
   await nextTick()
   renderCharts()
 }, { deep: true })
@@ -378,7 +378,7 @@ onBeforeUnmount(() => {
       <div class="admin-dashboard__hero-middle">
         <div class="admin-dashboard__hero-meta admin-dashboard__hero-meta--audit">
           <span>AI 审计</span>
-          <strong>{{ auditAvailable ? '已接入' : '未配置' }}</strong>
+          <strong>{{ auditLoadFailed ? '异常' : auditLoaded ? '已接入' : '加载中' }}</strong>
         </div>
       </div>
 
@@ -430,10 +430,10 @@ onBeforeUnmount(() => {
                 <strong>AI 风险摘要</strong>
                 <p>突出待复核 AI 建议，保留模块与风险说明。</p>
               </div>
-              <span class="admin-dashboard__pill is-warning">{{ auditAvailable ? aiRiskLogs.length : '未配置' }}</span>
+              <span class="admin-dashboard__pill is-warning">{{ auditLoadFailed ? '异常' : aiRiskLogs.length }}</span>
             </header>
 
-            <div v-if="auditAvailable && aiRiskLogs.length" class="admin-dashboard__compact-list">
+            <div v-if="aiRiskLogs.length" class="admin-dashboard__compact-list">
               <article v-for="item in aiRiskLogs.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item">
                 <div>
                   <strong>{{ item.module_name }}</strong>
@@ -442,8 +442,8 @@ onBeforeUnmount(() => {
                 <span>{{ formatDateTime(item.created_at) }}</span>
               </article>
             </div>
-            <div v-else-if="auditAvailable" class="admin-empty">当前没有待复核的 AI 风险记录。</div>
-            <div v-else class="admin-empty">未配置 `VITE_ADMIN_API_TOKEN`，首页不主动请求 AI 审计数据。</div>
+            <div v-else-if="auditLoadFailed" class="admin-empty">AI 审计数据加载失败，请检查后端服务状态。</div>
+            <div v-else class="admin-empty">当前没有待复核的 AI 风险记录。</div>
           </section>
         </div>
       </SectionCard>
