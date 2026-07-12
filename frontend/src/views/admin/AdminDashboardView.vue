@@ -136,6 +136,32 @@ function getWarningText(item: AuditLogRecord) {
   return '待管理员复核'
 }
 
+function sourceLabel(source?: string | null) {
+  const labels: Record<string, string> = {
+    llm: '真实 LLM',
+    rule: '规则引擎',
+    fallback: 'Fallback',
+    mock: 'Mock',
+    embedding: 'Embedding',
+  }
+  return source ? labels[source] || source : '未知来源'
+}
+
+function formatRiskReason(value: string) {
+  const text = value.trim()
+  const labels: Record<string, string> = {
+    llm_triage_no_valid_result_fallback: '真实分诊未返回有效结果，已降级到 fallback',
+    llm_triage_request_failed_fallback: '真实分诊请求失败，已降级到 fallback',
+    llm_triage_low_quality_fallback: '真实分诊结果质量不足，已切换到 fallback',
+    llm_triage_not_configured_fallback: '真实分诊未配置，已使用 fallback',
+    agent_execution_failed: 'Agent 执行失败',
+    no_valid_draft_context: '病历初稿上下文不足',
+    scheduling_no_actions_detected: '未识别出可执行的排班动作',
+  }
+  if (labels[text]) return labels[text]
+  return text.split('_').join(' ')
+}
+
 function ensureChart(target: HTMLDivElement | null, current: any) {
   if (!target) return null
   if (current && !current.isDisposed() && current.getDom() === target) return current
@@ -450,12 +476,13 @@ onBeforeUnmount(() => {
             </header>
 
             <div v-if="pendingReviewLogs.length" class="admin-dashboard__compact-list">
-              <article v-for="item in pendingReviewLogs.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item">
+              <article v-for="item in pendingReviewLogs.slice(0, 4)" :key="item.uuid" class="admin-dashboard__compact-item admin-dashboard__compact-item--risk">
                 <div>
                   <strong>{{ item.module_name }}</strong>
-                  <p>{{ item.source || '未知来源' }} · {{ getWarningText(item) }}</p>
+                  <p>{{ sourceLabel(item.source) }}</p>
+                  <p class="admin-dashboard__risk-reason">{{ formatRiskReason(getWarningText(item)) }}</p>
                 </div>
-                <span>{{ formatDateTime(item.created_at) }}</span>
+                <span class="admin-dashboard__compact-time">{{ formatDateTime(item.created_at) }}</span>
               </article>
             </div>
             <div v-else-if="auditLoadFailed" class="admin-empty">AI 审计数据加载失败，请检查后端服务状态。</div>
@@ -894,6 +921,13 @@ onBeforeUnmount(() => {
   background: #ffffff;
 }
 
+.admin-dashboard__compact-item--risk {
+  display: grid;
+  gap: 8px;
+  align-items: start;
+  justify-content: stretch;
+}
+
 .admin-dashboard__compact-item strong {
   display: block;
   margin-bottom: 2px;
@@ -902,6 +936,18 @@ onBeforeUnmount(() => {
 .admin-dashboard__compact-item span {
   font-size: 11px;
   white-space: nowrap;
+}
+
+.admin-dashboard__compact-time {
+  color: var(--admin-text-muted);
+  white-space: nowrap;
+}
+
+.admin-dashboard__risk-reason {
+  color: var(--admin-text);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .admin-dashboard__summary-card strong {
