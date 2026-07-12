@@ -18,7 +18,7 @@ function openVisitCard() {
     return
   }
 
-  router.push('/patient/profile')
+  router.push('/patient/visit-code')
 }
 
 const features = [
@@ -28,7 +28,7 @@ const features = [
     subtitle: '\u51fa\u793a\u4e8c\u7ef4\u7801\uff0c\u5c31\u8bca\u6838\u9a8c',
     icon: 'code',
     tone: 'blue',
-    action: () => router.push('/patient/profile'),
+    action: () => router.push('/patient/visit-code'),
   },
   {
     key: 'departments',

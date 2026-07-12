@@ -12,7 +12,6 @@ const flow = usePatientFlowStore()
 const session = usePatientSessionStore()
 const historyStore = usePatientRegisterHistoryStore()
 const historyLoading = ref(false)
-const visitCodeVisible = ref(false)
 
 const patient = computed(() => session.patient)
 const isLoggedIn = computed(() => Boolean(patient.value))
@@ -67,11 +66,7 @@ function openVisitCode() {
     router.push('/patient/login')
     return
   }
-  if (!flow.onlineRegister?.qr_code_url) {
-    ElMessage.info('\u5b8c\u6210\u6302\u53f7\u540e\u53ef\u67e5\u770b\u5c31\u8bca\u7801')
-    return
-  }
-  visitCodeVisible.value = true
+  router.push('/patient/visit-code')
 }
 
 async function logout() {
@@ -188,12 +183,6 @@ async function logout() {
 
     <PatientBottomNav />
 
-    <el-dialog v-model="visitCodeVisible" title="&#23601;&#35786;&#30721;" width="min(360px, calc(100vw - 32px))">
-      <div class="patient-profile-code-dialog">
-        <img v-if="flow.onlineRegister?.qr_code_url" :src="flow.onlineRegister.qr_code_url" alt="&#23601;&#35786;&#20108;&#32500;&#30721;" />
-        <p>&#35831;&#22312;&#23601;&#35786;&#26680;&#39564;&#26102;&#20986;&#31034;</p>
-      </div>
-    </el-dialog>
   </div>
 </template>
 
@@ -578,23 +567,6 @@ async function logout() {
   color: var(--patient-text-muted);
   font-size: 26px;
   font-style: normal;
-}
-
-.patient-profile-code-dialog {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
-}
-
-.patient-profile-code-dialog img {
-  width: min(240px, 70vw);
-  aspect-ratio: 1;
-  object-fit: contain;
-}
-
-.patient-profile-code-dialog p {
-  margin: 0;
-  color: var(--patient-text-muted);
 }
 
 @media (min-width: 720px) {

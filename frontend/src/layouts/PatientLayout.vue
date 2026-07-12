@@ -8,6 +8,7 @@ const immersiveRoutes = [
   'patient-register',
   'patient-home',
   'patient-profile',
+  'patient-visit-code',
   'patient-registers',
   'patient-departments',
   'patient-triage',
