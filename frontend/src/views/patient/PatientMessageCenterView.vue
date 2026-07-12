@@ -96,10 +96,6 @@ const notifications: DemonstrationNotification[] = [
         </article>
       </section>
 
-      <p class="patient-message-center-note">
-        <span aria-hidden="true">i</span>
-        当前仅展示示意消息
-      </p>
     </main>
 
     <PatientBottomNav />
@@ -448,28 +444,6 @@ const notifications: DemonstrationNotification[] = [
   color: #97a7b9;
   font-size: 28px;
   line-height: 1;
-}
-
-.patient-message-center-note {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin: 4px 0 0;
-  color: #8090a3;
-  font-size: 14px;
-}
-
-.patient-message-center-note span {
-  display: grid;
-  place-items: center;
-  width: 17px;
-  height: 17px;
-  border: 1.5px solid currentColor;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 800;
-  font-style: normal;
 }
 
 .sr-only {
