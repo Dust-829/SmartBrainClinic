@@ -77,11 +77,8 @@ a {
 
 .patient-layout .patient-flow-hero {
   position: relative;
-  overflow: hidden;
-}
-
-.patient-layout .patient-flow-hero:not(.patient-flow-hero--compact) {
   min-height: var(--patient-flow-hero-height);
+  overflow: hidden;
 }
 
 .patient-layout .patient-flow-hero::after {

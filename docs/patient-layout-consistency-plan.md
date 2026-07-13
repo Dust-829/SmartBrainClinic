@@ -19,7 +19,7 @@
 4. 移除患者页面中重复的桌面端外框样式，保留页面内部卡片和图标所需的语义圆角。
 5. 在 `docs/frontend-plan.md` 的维护规则中记录该布局边界，避免后续页面再次引入独立页面外框。
 6. 首页与挂号记录页共用 `--patient-flow-page-bg`，使外壳裁切后的页面边缘颜色一致。
-7. 首页与挂号记录页共用 `--patient-flow-page-bg`、患者端外壳和 `patient-flow-hero` 的弧形过渡；首页保留入口 Hero，挂号记录页通过 `patient-flow-hero--compact` 维持 230px 页头与 -50px 内容衔接，避免记录页首屏留白过多。
+7. 首页与挂号记录页共用 `--patient-flow-page-bg` 和患者端外壳；首页保留入口 Hero，挂号记录页采用更紧凑的 230px 页头与 -50px 内容衔接，避免记录页首屏留白过多。
 
 ## Risks
 
