@@ -58,6 +58,7 @@ def serialize_artifact_inference_task(task: ArtifactInferenceTask) -> dict:
         "model_weight_sha256": task.model_weight_sha256,
         "threshold": str(task.threshold) if task.threshold is not None else None,
         "mask_object_ref": task.mask_object_ref,
+        "probability_object_ref": task.probability_object_ref,
         "overlay_object_ref": task.overlay_object_ref,
         "result_metadata": task.result_metadata,
         "error_code": task.error_code,
@@ -525,6 +526,7 @@ async def run_artifact_inference_task(task_uuid: str) -> None:
         task.model_weight_sha256 = result_payload["model_weight_sha256"]
         task.threshold = result_payload["threshold"]
         task.mask_object_ref = result_payload["mask_object_ref"]
+        task.probability_object_ref = result_payload.get("probability_object_ref")
         task.overlay_object_ref = result_payload["overlay_object_ref"]
         task.result_metadata = result_payload["result_metadata"]
         task.error_code = None

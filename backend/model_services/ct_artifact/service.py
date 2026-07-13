@@ -93,8 +93,13 @@ def _run_inference(request: ArtifactSegmentationRequest, infer: CTArtifactInfer)
     output_dir = OUTPUT_ROOT / request.task_id
     output_dir.mkdir(parents=True, exist_ok=True)
     mask_path = output_dir / "artifact_mask.nii.gz"
+    probability_path = output_dir / "artifact_probability.nii.gz"
     overlay_path = output_dir / "artifact_overlay.png"
-    mask_image = infer.predict_from_sitk(image, mask_path)
+    probability_image = infer.predict_probability_from_sitk(image, probability_path)
+    probability = sitk.GetArrayViewFromImage(probability_image)
+    mask_image = sitk.GetImageFromArray((probability > THRESHOLD).astype(np.int16))
+    mask_image.CopyInformation(image)
+    sitk.WriteImage(mask_image, str(mask_path))
     selected_slice, selected_slice_pixels = _write_overlay(image, mask_image, overlay_path)
     mask_array = sitk.GetArrayViewFromImage(mask_image)
     return {
@@ -103,6 +108,7 @@ def _run_inference(request: ArtifactSegmentationRequest, infer: CTArtifactInfer)
         "model_weight_sha256": EXPECTED_WEIGHT_SHA256,
         "threshold": THRESHOLD,
         "mask_object_ref": f"output/{request.task_id}/artifact_mask.nii.gz",
+        "probability_object_ref": f"output/{request.task_id}/artifact_probability.nii.gz",
         "overlay_object_ref": f"output/{request.task_id}/artifact_overlay.png",
         "result_metadata": {
             "artifact_pixel_count": int(mask_array.sum()),

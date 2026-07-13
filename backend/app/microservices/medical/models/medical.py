@@ -79,6 +79,7 @@ class ArtifactInferenceTask(SQLModel, table=True):
     model_weight_sha256: Optional[str] = Field(default=None, max_length=64)
     threshold: Optional[Decimal] = Field(default=None, max_digits=4, decimal_places=3)
     mask_object_ref: Optional[str] = Field(default=None, max_length=1024)
+    probability_object_ref: Optional[str] = Field(default=None, max_length=1024)
     overlay_object_ref: Optional[str] = Field(default=None, max_length=1024)
     result_metadata: Optional[Any] = Field(default=None, sa_column=Column(JSONB))
     error_code: Optional[str] = Field(default=None, max_length=64)

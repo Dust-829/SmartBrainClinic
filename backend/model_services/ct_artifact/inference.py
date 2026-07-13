@@ -40,13 +40,39 @@ class CTArtifactInfer:
         model.eval()
         return model
 
-    def predict_slice(self, image_slice: np.ndarray) -> np.ndarray:
+    def predict_probability_slice(self, image_slice: np.ndarray) -> np.ndarray:
         image_slice = image_slice.astype(np.float32)
         normalized = (image_slice - image_slice.mean()) / (image_slice.std() + 1e-7)
         tensor = torch.from_numpy(normalized).unsqueeze(0).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            probability = torch.sigmoid(self.model(tensor)).squeeze().cpu().numpy()
-        return (probability > 0.5).astype(np.int16)
+            return torch.sigmoid(self.model(tensor)).squeeze().cpu().numpy().astype(np.float32)
+
+    def predict_slice(self, image_slice: np.ndarray, threshold: float = 0.5) -> np.ndarray:
+        return (self.predict_probability_slice(image_slice) > threshold).astype(np.int16)
+
+    def predict_probability_from_sitk(
+        self,
+        ct_image: sitk.Image,
+        save_probability_path: str | Path | None = None,
+    ) -> sitk.Image:
+        volume = sitk.GetArrayFromImage(ct_image)
+        if volume.ndim != 3:
+            raise ValueError(f"Expected a single-channel 3D CT volume, got shape {volume.shape}")
+        _, height, width = volume.shape
+        if height % 8 or width % 8:
+            raise ValueError(f"CT slice width and height must be divisible by 8, got {width}x{height}")
+
+        probability_volume = np.zeros(volume.shape, dtype=np.float32)
+        for index, image_slice in enumerate(volume):
+            probability_volume[index] = self.predict_probability_slice(image_slice)
+
+        probability_image = sitk.GetImageFromArray(probability_volume)
+        probability_image.CopyInformation(ct_image)
+        if save_probability_path is not None:
+            destination = Path(save_probability_path)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            sitk.WriteImage(probability_image, str(destination))
+        return probability_image
 
     def predict_from_sitk(self, ct_image: sitk.Image, save_mask_path: str | Path | None = None) -> sitk.Image:
         volume = sitk.GetArrayFromImage(ct_image)
@@ -56,9 +82,9 @@ class CTArtifactInfer:
         if height % 8 or width % 8:
             raise ValueError(f"CT slice width and height must be divisible by 8, got {width}x{height}")
 
-        mask_volume = np.zeros(volume.shape, dtype=np.int16)
-        for index, image_slice in enumerate(volume):
-            mask_volume[index] = self.predict_slice(image_slice)
+        probability_image = self.predict_probability_from_sitk(ct_image)
+        probability_volume = sitk.GetArrayViewFromImage(probability_image)
+        mask_volume = (probability_volume > 0.5).astype(np.int16)
 
         mask_image = sitk.GetImageFromArray(mask_volume)
         mask_image.CopyInformation(ct_image)
