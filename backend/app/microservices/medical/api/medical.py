@@ -75,10 +75,15 @@ class ArtifactInferenceSubmit(BaseModel):
 class CheckReportDraftInput(BaseModel):
     conclusion: str = Field(min_length=1, max_length=10000)
     artifact_task_uuid: uuid_pkg.UUID | None = None
+    author_employee_uuid: uuid_pkg.UUID
 
 
 class CheckReportPublishInput(BaseModel):
     reviewer_employee_uuid: uuid_pkg.UUID
+
+
+class CheckReportCorrectionDraftInput(BaseModel):
+    author_employee_uuid: uuid_pkg.UUID
 
 
 class InspectionResultInput(BaseModel):
@@ -289,7 +294,25 @@ async def save_check_report_draft(uuid: str, data: CheckReportDraftInput, sessio
             session=session,
             check_uuid=uuid,
             conclusion=data.conclusion,
+            author_employee_uuid=data.author_employee_uuid,
             artifact_task_uuid=str(data.artifact_task_uuid) if data.artifact_task_uuid else None,
+        )
+        return success(svc.serialize_medical_report(report))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/report/{report_uuid}/correction-draft", summary="创建检查报告更正草稿")
+async def create_check_report_correction_draft(
+    report_uuid: str,
+    data: CheckReportCorrectionDraftInput,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        report = await svc.create_check_report_correction_draft(
+            session=session,
+            report_uuid=report_uuid,
+            author_employee_uuid=data.author_employee_uuid,
         )
         return success(svc.serialize_medical_report(report))
     except ValueError as exc:

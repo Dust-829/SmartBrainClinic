@@ -256,6 +256,12 @@ Medical 新增以下内部接口，暂不接入医生页面：
 
 ## Expected file changes
 
+### 第七阶段：报告更正版本与接诊医生校验（2026-07-13）
+
+报告草稿保存、审核发布和创建更正草稿现在统一绑定到挂号记录的 `employee_uuid`：Medical 服务会通过 Patient 服务取得该挂号的实际接诊医生，再核对请求中的员工 UUID；其他医生不能直接操作报告。
+
+已发布报告保持只读。医生端可从已发布版本创建更正草稿，系统会复制原结论、关联的伪影分析任务和结构化结果，生成新的 `draft` 版本，并以 `supersedes_report_uuid` 保留与原版本的链路。若该发布版本已有未完成的更正草稿，系统将继续使用该草稿，避免重复生成版本；新草稿仍需审核发布后才成为最新报告。
+
 - `backend/app/microservices/medical/models/medical.py`：报告、推理任务和发布版本数据模型。
 - `backend/app/microservices/medical/api/medical.py`：任务提交、查询、审核发布与医生报告读取接口。
 - `backend/app/microservices/medical/services/`：内部模型服务客户端、状态转换和对象引用处理。

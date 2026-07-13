@@ -180,6 +180,7 @@ export interface MedicalReport {
   reviewed_at?: string | null
   published_at?: string | null
   version: number
+  supersedes_report_uuid?: string | null
   created_at?: string | null
   updated_at?: string | null
 }
@@ -187,6 +188,7 @@ export interface MedicalReport {
 export interface CheckReportDraftPayload {
   conclusion: string
   artifact_task_uuid?: string
+  author_employee_uuid: string
 }
 
 export const medicalApi = {
@@ -252,6 +254,11 @@ export const medicalApi = {
   publishCheckReport(reportUuid: string, reviewerEmployeeUuid: string) {
     return http.post<ApiEnvelope<MedicalReport>>(`/api/v1/medical/report/${reportUuid}/publish`, {
       reviewer_employee_uuid: reviewerEmployeeUuid,
+    })
+  },
+  createCheckReportCorrectionDraft(reportUuid: string, authorEmployeeUuid: string) {
+    return http.post<ApiEnvelope<MedicalReport>>(`/api/v1/medical/report/${reportUuid}/correction-draft`, {
+      author_employee_uuid: authorEmployeeUuid,
     })
   },
 }

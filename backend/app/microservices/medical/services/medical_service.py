@@ -80,9 +80,29 @@ def serialize_medical_report(report: MedicalReport) -> dict:
         "reviewed_at": report.reviewed_at.isoformat() if report.reviewed_at else None,
         "published_at": report.published_at.isoformat() if report.published_at else None,
         "version": report.version,
+        "supersedes_report_uuid": str(report.supersedes_report_uuid) if report.supersedes_report_uuid else None,
         "created_at": report.created_at.isoformat() if report.created_at else None,
         "updated_at": report.updated_at.isoformat() if report.updated_at else None,
     }
+
+
+async def ensure_check_report_doctor_assignment(
+    check: CheckRequest,
+    employee_uuid: uuid_pkg.UUID,
+) -> None:
+    """Only the doctor assigned to the encounter may draft, publish, or correct its report."""
+
+    register = await PatientClient.get_register(check.register_uuid)
+    if not register or not register.get("employee_uuid"):
+        raise ValueError("未能确认本次挂号的接诊医生")
+
+    try:
+        assigned_employee_uuid = uuid_pkg.UUID(str(register["employee_uuid"]))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("本次挂号的接诊医生信息无效") from exc
+
+    if assigned_employee_uuid != employee_uuid:
+        raise ValueError("当前医生无权处理该检查报告")
 
 
 async def create_artifact_inference_task(
@@ -141,6 +161,7 @@ async def save_check_report_draft(
     session: AsyncSession,
     check_uuid: str,
     conclusion: str,
+    author_employee_uuid: uuid_pkg.UUID,
     artifact_task_uuid: str | None = None,
 ) -> MedicalReport:
     normalized_conclusion = conclusion.strip()
@@ -153,6 +174,7 @@ async def save_check_report_draft(
         raise ValueError("检查单不存在")
     if normalize_check_state(check.check_state) != CheckState.EXECUTED:
         raise ValueError("检查单执行完成后才能保存正式报告")
+    await ensure_check_report_doctor_assignment(check, author_employee_uuid)
 
     artifact_task_uuid_obj = uuid_pkg.UUID(artifact_task_uuid) if artifact_task_uuid else None
     if artifact_task_uuid_obj:
@@ -199,6 +221,11 @@ async def publish_check_report(
     report = result.scalar_one_or_none()
     if not report or report.report_type != "check":
         raise ValueError("检查报告不存在")
+    check_result = await session.execute(select(CheckRequest).where(CheckRequest.uuid == report.source_request_uuid))
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise ValueError("检查单不存在")
+    await ensure_check_report_doctor_assignment(check, reviewer_employee_uuid)
     if report.report_state == "published":
         return report
     if not (report.conclusion or "").strip():
@@ -213,6 +240,59 @@ async def publish_check_report(
     session.add(report)
     await session.flush()
     return report
+
+
+async def create_check_report_correction_draft(
+    session: AsyncSession,
+    report_uuid: str,
+    author_employee_uuid: uuid_pkg.UUID,
+) -> MedicalReport:
+    """Create one editable correction draft while retaining the published source report."""
+
+    result = await session.execute(
+        select(MedicalReport).where(MedicalReport.uuid == uuid_pkg.UUID(report_uuid)).with_for_update()
+    )
+    source_report = result.scalar_one_or_none()
+    if not source_report or source_report.report_type != "check":
+        raise ValueError("检查报告不存在")
+    if source_report.report_state != "published":
+        raise ValueError("仅已发布报告可以创建更正版本")
+
+    check_result = await session.execute(select(CheckRequest).where(CheckRequest.uuid == source_report.source_request_uuid))
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise ValueError("检查单不存在")
+    if normalize_check_state(check.check_state) != CheckState.EXECUTED:
+        raise ValueError("检查单执行完成后才能创建更正版本")
+    await ensure_check_report_doctor_assignment(check, author_employee_uuid)
+
+    existing_result = await session.execute(
+        select(MedicalReport)
+        .where(
+            MedicalReport.supersedes_report_uuid == source_report.uuid,
+            MedicalReport.report_state == "draft",
+        )
+        .order_by(MedicalReport.created_at.desc(), MedicalReport.id.desc())
+        .limit(1)
+    )
+    existing_draft = existing_result.scalar_one_or_none()
+    if existing_draft:
+        return existing_draft
+
+    correction = MedicalReport(
+        register_uuid=source_report.register_uuid,
+        source_request_uuid=source_report.source_request_uuid,
+        report_type="check",
+        report_state="draft",
+        conclusion=source_report.conclusion,
+        structured_result=source_report.structured_result,
+        artifact_task_uuid=source_report.artifact_task_uuid,
+        version=source_report.version + 1,
+        supersedes_report_uuid=source_report.uuid,
+    )
+    session.add(correction)
+    await session.flush()
+    return correction
 
 
 async def list_artifact_input_sources() -> list[dict[str, str]]:

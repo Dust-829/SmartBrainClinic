@@ -64,6 +64,7 @@ const reportByCheck = reactive<Record<string, MedicalReport | null>>({})
 const reportDraftByCheck = reactive<Record<string, string>>({})
 const reportSavingByCheck = reactive<Record<string, boolean>>({})
 const reportPublishingByCheck = reactive<Record<string, boolean>>({})
+const reportCorrectingByCheck = reactive<Record<string, boolean>>({})
 
 let queuePollTimer: number | null = null
 let artifactTaskPollTimer: number | null = null
@@ -654,6 +655,7 @@ function checkReportStateClass(report?: MedicalReport | null) {
 function canSaveCheckReport(item: MedicalRequestItem) {
   const report = reportByCheck[item.uuid]
   return Boolean(
+    doctor.value?.employeeUuid &&
     isCheckReportEligible(item) &&
       report?.report_state !== 'published' &&
       reportDraftByCheck[item.uuid]?.trim() &&
@@ -670,6 +672,7 @@ async function saveCheckReportDraft(item: MedicalRequestItem, silent = false) {
     const response = await medicalApi.saveCheckReportDraft(item.uuid, {
       conclusion: reportDraftByCheck[item.uuid].trim(),
       artifact_task_uuid: task?.task_state === 'succeeded' ? task.uuid : undefined,
+      author_employee_uuid: doctor.value?.employeeUuid ?? '',
     })
     const report = response.data.data ?? null
     reportByCheck[item.uuid] = report
@@ -680,6 +683,34 @@ async function saveCheckReportDraft(item: MedicalRequestItem, silent = false) {
     return null
   } finally {
     reportSavingByCheck[item.uuid] = false
+  }
+}
+
+function canCreateCheckReportCorrection(item: MedicalRequestItem) {
+  return Boolean(
+    doctor.value?.employeeUuid &&
+      isCheckReportEligible(item) &&
+      reportByCheck[item.uuid]?.report_state === 'published' &&
+      !reportCorrectingByCheck[item.uuid],
+  )
+}
+
+async function createCheckReportCorrectionDraft(item: MedicalRequestItem) {
+  const report = reportByCheck[item.uuid]
+  const employeeUuid = doctor.value?.employeeUuid
+  if (!report || !employeeUuid || !canCreateCheckReportCorrection(item)) return
+
+  reportCorrectingByCheck[item.uuid] = true
+  try {
+    const response = await medicalApi.createCheckReportCorrectionDraft(report.uuid, employeeUuid)
+    const correction = response.data.data ?? null
+    reportByCheck[item.uuid] = correction
+    reportDraftByCheck[item.uuid] = correction?.conclusion ?? ''
+    ElMessage.success('已创建更正草稿，可继续调整结论后审核发布。')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '创建报告更正草稿失败，请稍后重试。'))
+  } finally {
+    reportCorrectingByCheck[item.uuid] = false
   }
 }
 
@@ -1076,6 +1107,16 @@ onBeforeUnmount(() => {
                                 </div>
                                 <p>{{ reportByCheck[item.uuid]?.conclusion }}</p>
                                 <small>发布时间：{{ formatCreationTime(reportByCheck[item.uuid]?.published_at) }}</small>
+                                <div class="doctor-encounter__report-actions">
+                                  <button
+                                    type="button"
+                                    class="doctor-encounter__report-save"
+                                    :disabled="!canCreateCheckReportCorrection(item)"
+                                    @click="createCheckReportCorrectionDraft(item)"
+                                  >
+                                    {{ reportCorrectingByCheck[item.uuid] ? '创建中...' : '创建更正版本' }}
+                                  </button>
+                                </div>
                               </div>
 
                               <template v-else>
@@ -1092,7 +1133,7 @@ onBeforeUnmount(() => {
                                   检查完成执行后可填写并审核报告。
                                 </p>
                                 <p v-else class="doctor-encounter__report-note">
-                                  模型掩码仅作为当前检查项目的辅助信息，正式结论以医生填写内容为准。
+                                  {{ reportByCheck[item.uuid]?.supersedes_report_uuid ? '当前为报告更正草稿，发布后将形成新的版本记录。' : '模型掩码仅作为当前检查项目的辅助信息，正式结论以医生填写内容为准。' }}
                                 </p>
                                 <div class="doctor-encounter__report-actions">
                                   <button
