@@ -142,7 +142,7 @@ const features = [
   margin: 0 auto;
   padding-bottom: calc(var(--patient-nav-height) + 28px);
   overflow: hidden;
-  background: linear-gradient(180deg, #eef7ff 0%, #f8fbff 52%, #ffffff 100%);
+  background: var(--patient-flow-page-bg);
   color: #16233a;
 }
 

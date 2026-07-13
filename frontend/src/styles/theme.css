@@ -8,6 +8,7 @@
   --patient-text-muted: #66758b;
   --patient-border: #dce8f4;
   --patient-page-bg: #f4f8fd;
+  --patient-flow-page-bg: linear-gradient(180deg, #eef7ff 0%, #f8fbff 52%, var(--patient-page-bg) 100%);
   --patient-surface: #ffffff;
   --patient-surface-muted: #f5f8fc;
   --patient-header-gradient: linear-gradient(135deg, #0573ff 0%, #1597ff 62%, #22b8ee 100%);

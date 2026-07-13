@@ -158,9 +158,7 @@ watch(
 .patient-register-history-shell {
   min-height: 100vh;
   padding-bottom: calc(var(--patient-nav-height) + 24px);
-  background:
-    radial-gradient(circle at 88% 4%, rgba(78, 167, 255, 0.22), transparent 30%),
-    linear-gradient(180deg, #eaf4ff 0%, #f7fbff 42%, #f8fbff 100%);
+  background: var(--patient-flow-page-bg);
 }
 
 .patient-register-history-hero {
