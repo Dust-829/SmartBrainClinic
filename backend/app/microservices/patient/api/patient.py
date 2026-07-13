@@ -443,6 +443,14 @@ async def get_patient_payment_items(patient_uuid: uuid_pkg.UUID, session: AsyncS
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get('/{patient_uuid}/payment-records', summary='查询患者缴费记录')
+async def get_patient_payment_records(patient_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        return success(await svc.list_patient_payment_records(session, patient_uuid))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post('/payment-items/pay', summary='支付患者待缴医疗项目')
 async def pay_patient_payment_items(
     data: PatientPaymentItemsRequest,

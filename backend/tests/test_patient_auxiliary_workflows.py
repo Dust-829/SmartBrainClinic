@@ -111,6 +111,44 @@ async def test_patient_payment_items_only_return_unpaid_medical_items(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_patient_payment_records_only_aggregate_owned_register_bills(monkeypatch):
+    patient_uuid = uuid.uuid4()
+    newer_register_uuid = uuid.uuid4()
+    older_register_uuid = uuid.uuid4()
+    registers = [
+        SimpleNamespace(uuid=older_register_uuid, visit_date=datetime(2026, 7, 11, 9, 0)),
+        SimpleNamespace(uuid=newer_register_uuid, visit_date=datetime(2026, 7, 13, 9, 0)),
+    ]
+
+    async def fake_get_registers(_session, target_patient_uuid):
+        assert target_patient_uuid == patient_uuid
+        return registers
+
+    async def fake_get_bills(target_register_uuid):
+        if target_register_uuid == newer_register_uuid:
+            return [{
+                "uuid": "bill-new", "bill_code": "B202607130001", "total_amount": "180.00",
+                "bill_state": "已缴费", "pay_method": "微信", "pay_time": "2026-07-13T10:00:00",
+                "transaction_id": "TXN-NEW",
+            }]
+        assert target_register_uuid == older_register_uuid
+        return [{
+            "uuid": "bill-old", "bill_code": "B202607110001", "total_amount": "25.00",
+            "bill_state": "已退费", "pay_method": "支付宝", "pay_time": "2026-07-11T10:00:00",
+            "transaction_id": "TXN-OLD",
+        }]
+
+    monkeypatch.setattr(patient_service, "get_registers_by_patient_uuid", fake_get_registers)
+    monkeypatch.setattr(patient_service.BillingClient, "get_bills_by_register", fake_get_bills)
+
+    result = await patient_service.list_patient_payment_records(object(), patient_uuid)
+
+    assert [record["bill_code"] for record in result["records"]] == ["B202607130001", "B202607110001"]
+    assert all(record["register_uuid"] in {str(newer_register_uuid), str(older_register_uuid)} for record in result["records"])
+    assert result["records"][0]["transaction_id"] == "TXN-NEW"
+
+
+@pytest.mark.asyncio
 async def test_patient_payment_proxy_checks_register_ownership_and_maps_billing_types(monkeypatch):
     patient_uuid = uuid.uuid4()
     register_uuid = uuid.uuid4()

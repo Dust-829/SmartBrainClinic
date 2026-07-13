@@ -167,6 +167,22 @@ export interface PayPaymentItemsResult {
   transaction_id: string
 }
 
+export interface PaymentRecord {
+  uuid: string
+  register_uuid: string
+  visit_date?: string | null
+  bill_code: string
+  total_amount: string
+  bill_state: string
+  pay_method?: string | null
+  pay_time?: string | null
+  transaction_id?: string | null
+}
+
+export interface PaymentRecordsResult {
+  records: PaymentRecord[]
+}
+
 export interface QueueStatus {
   ahead_of_you: number
   status: number
@@ -227,6 +243,9 @@ export const patientApi = {
   },
   getPaymentItems(patientUuid: string) {
     return http.get<ApiEnvelope<PaymentItemsResult>>(`/api/v1/patient/${patientUuid}/payment-items`)
+  },
+  getPaymentRecords(patientUuid: string) {
+    return http.get<ApiEnvelope<PaymentRecordsResult>>(`/api/v1/patient/${patientUuid}/payment-records`)
   },
   payPaymentItems(payload: PayPaymentItemsPayload) {
     return http.post<ApiEnvelope<PayPaymentItemsResult>>('/api/v1/patient/payment-items/pay', payload, {

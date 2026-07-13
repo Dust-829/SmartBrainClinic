@@ -164,6 +164,37 @@ async def list_patient_payment_items(session: AsyncSession, patient_uuid: uuid_p
     return {"registers": groups, "medications": []}
 
 
+async def list_patient_payment_records(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> dict:
+    """Aggregate bills only from registers owned by the current patient."""
+
+    registers = await get_registers_by_patient_uuid(session, patient_uuid)
+    if not registers:
+        return {"records": []}
+
+    register_bills = await asyncio.gather(
+        *(BillingClient.get_bills_by_register(register.uuid) for register in registers)
+    )
+    records = []
+    for register, bills in zip(registers, register_bills):
+        for bill in bills:
+            records.append(
+                {
+                    "uuid": str(bill.get("uuid") or ""),
+                    "register_uuid": str(register.uuid),
+                    "visit_date": register.visit_date.isoformat() if register.visit_date else None,
+                    "bill_code": bill.get("bill_code") or "",
+                    "total_amount": str(bill.get("total_amount") or "0.00"),
+                    "bill_state": bill.get("bill_state") or "未知",
+                    "pay_method": bill.get("pay_method") or "",
+                    "pay_time": bill.get("pay_time"),
+                    "transaction_id": bill.get("transaction_id"),
+                }
+            )
+
+    records.sort(key=lambda item: item["pay_time"] or item["visit_date"] or "", reverse=True)
+    return {"records": records}
+
+
 async def pay_patient_payment_items(
     session: AsyncSession,
     patient_uuid: uuid_pkg.UUID,

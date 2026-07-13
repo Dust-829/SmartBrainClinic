@@ -541,6 +541,7 @@ async def get_bills_by_register(session: AsyncSession, register_uuid: uuid_pkg.U
             "total_amount": str(b.total_amount),
             "bill_state": b.bill_state,
             "pay_method": b.pay_method,
+            "pay_time": b.pay_time.isoformat() if b.pay_time else None,
             "transaction_id": b.transaction_id,
             "fee_status": 0 if b.bill_state in ["未缴费", "待支付"] else 1
         }
