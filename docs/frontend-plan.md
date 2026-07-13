@@ -81,7 +81,7 @@
 
 ### 4.1 患者端
 
-缴费中心专项计划见 [patient-payment-center-plan.md](./patient-payment-center-plan.md)。首页“按科室挂号”将替换为“缴费中心”；既有 `/patient/departments` 挂号路由与 `/patient/payment` 挂号费支付页面继续保留。
+缴费中心专项计划见 [patient-payment-center-plan.md](./patient-payment-center-plan.md)。首页“历史挂号”已替换为“缴费中心”，而“按科室挂号”与既有 `/patient/departments` 挂号路由保持不变；`/patient/payment` 挂号费支付页面也继续保留。
 
 已完成真实主链：
 
