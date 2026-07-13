@@ -107,8 +107,6 @@ function goBack() {
 <style scoped>
 .patient-auth-page {
   min-height: 100vh;
-  max-width: var(--patient-page-width);
-  margin: 0 auto;
   background: var(--patient-page-bg);
 }
 
@@ -136,9 +134,4 @@ function goBack() {
   color: var(--patient-text-muted);
 }
 
-@media (min-width: 720px) {
-  .patient-auth-page {
-    box-shadow: var(--patient-page-shadow);
-  }
-}
 </style>

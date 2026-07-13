@@ -41,7 +41,7 @@ const isImmersive = computed(() => immersiveRoutes.includes(String(route.name)))
 }
 
 .patient-layout__header {
-  max-width: var(--patient-page-width);
+  width: min(100%, var(--patient-page-width));
   min-height: 170px;
   margin: 0 auto;
   padding: 70px var(--patient-page-gutter) 28px;
@@ -68,13 +68,13 @@ const isImmersive = computed(() => immersiveRoutes.includes(String(route.name)))
 }
 
 .patient-layout__main {
-  max-width: var(--patient-page-width);
+  width: min(100%, var(--patient-page-width));
   margin: 0 auto;
   padding: 16px var(--patient-page-gutter) 30px;
 }
 
 .patient-layout--immersive .patient-layout__main {
-  max-width: var(--patient-page-width);
+  width: min(100%, var(--patient-page-width));
   min-height: 100vh;
   margin: 0 auto;
   padding: 0;
@@ -84,7 +84,9 @@ const isImmersive = computed(() => immersiveRoutes.includes(String(route.name)))
   .patient-layout__header,
   .patient-layout__main,
   .patient-layout--immersive .patient-layout__main {
+    border-radius: var(--patient-page-radius);
     box-shadow: var(--patient-page-shadow);
+    overflow: hidden;
   }
 }
 </style>

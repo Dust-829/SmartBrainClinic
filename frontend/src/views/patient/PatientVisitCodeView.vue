@@ -183,7 +183,4 @@ onMounted(async () => {
 
 @keyframes visit-code-loading { to { background-position: -300% 0; } }
 
-@media (min-width: 720px) {
-  .patient-visit-code-shell { max-width: var(--patient-page-width); margin: 0 auto; box-shadow: var(--patient-page-shadow); }
-}
 </style>

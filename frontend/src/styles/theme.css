@@ -13,6 +13,7 @@
   --patient-header-gradient: linear-gradient(135deg, #0573ff 0%, #1597ff 62%, #22b8ee 100%);
   --patient-page-width: 430px;
   --patient-page-gutter: 18px;
+  --patient-page-radius: 24px;
   --patient-control-height: 44px;
   --patient-nav-height: 76px;
   --patient-auth-header-height: 270px;

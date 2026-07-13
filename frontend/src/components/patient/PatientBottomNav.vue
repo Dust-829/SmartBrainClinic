@@ -44,10 +44,10 @@ function navigate(path: string) {
 <style scoped>
 .patient-bottom-nav {
   position: fixed;
-  left: max(0px, calc((100vw - var(--patient-page-width)) / 2));
-  right: max(0px, calc((100vw - var(--patient-page-width)) / 2));
+  left: 50%;
   bottom: 0;
   z-index: var(--patient-z-nav);
+  width: min(100%, var(--patient-page-width));
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   min-height: var(--patient-nav-height);
@@ -55,6 +55,13 @@ function navigate(path: string) {
   border-top: 1px solid var(--patient-border);
   background: rgba(255, 255, 255, 0.98);
   box-shadow: 0 -8px 24px rgba(27, 80, 132, 0.08);
+  transform: translateX(-50%);
+}
+
+@media (min-width: 720px) {
+  .patient-bottom-nav {
+    border-radius: 0 0 var(--patient-page-radius) var(--patient-page-radius);
+  }
 }
 
 .patient-bottom-nav button {

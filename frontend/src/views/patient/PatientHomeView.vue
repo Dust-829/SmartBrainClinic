@@ -636,16 +636,6 @@ const features = [
 }
 
 
-@media (min-width: 720px) {
-  .patient-home-shell {
-    max-width: 430px;
-    min-height: 100dvh;
-    margin: 0 auto;
-    border-radius: 28px;
-    box-shadow: 0 24px 70px rgba(27, 57, 94, 0.18);
-  }
-}
-
 @media (max-width: 390px) {
   .patient-home-card--visit {
     grid-template-columns: 54px minmax(0, 1fr) 64px 12px;

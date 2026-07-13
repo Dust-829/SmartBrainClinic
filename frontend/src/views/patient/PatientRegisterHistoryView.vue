@@ -455,12 +455,6 @@ watch(
   margin-top: 6px;
 }
 
-@media (min-width: 720px) {
-  .patient-register-history-shell {
-    max-width: var(--patient-page-width);
-    margin: 0 auto;
-  }
-}
 </style>
 . : File C:\Users\Twilight\Documents\WindowsPowerShell\profile.ps1 cannot be loaded because running scripts is disabled
  on this system. For more information, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170.

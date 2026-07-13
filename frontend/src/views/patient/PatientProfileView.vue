@@ -569,11 +569,4 @@ async function logout() {
   font-style: normal;
 }
 
-@media (min-width: 720px) {
-  .patient-profile-shell {
-    max-width: var(--patient-page-width);
-    margin: 0 auto;
-    box-shadow: var(--patient-page-shadow);
-  }
-}
 </style>

@@ -457,14 +457,6 @@ const notifications: DemonstrationNotification[] = [
   border: 0;
 }
 
-@media (min-width: 720px) {
-  .patient-message-center-shell {
-    max-width: var(--patient-page-width);
-    margin: 0 auto;
-    box-shadow: var(--patient-page-shadow);
-  }
-}
-
 @media (max-width: 390px) {
   .patient-message-center-heading h1 {
     font-size: 30px;
