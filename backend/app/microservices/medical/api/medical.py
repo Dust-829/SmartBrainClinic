@@ -72,6 +72,15 @@ class ArtifactInferenceSubmit(BaseModel):
     submitted_by_employee_uuid: uuid_pkg.UUID
 
 
+class CheckReportDraftInput(BaseModel):
+    conclusion: str = Field(min_length=1, max_length=10000)
+    artifact_task_uuid: uuid_pkg.UUID | None = None
+
+
+class CheckReportPublishInput(BaseModel):
+    reviewer_employee_uuid: uuid_pkg.UUID
+
+
 class InspectionResultInput(BaseModel):
     test_results: Any = None
     input_employee_uuid: uuid_pkg.UUID
@@ -263,6 +272,41 @@ async def get_latest_artifact_inference_task(uuid: str, session: AsyncSession = 
     if not task:
         raise HTTPException(status_code=404, detail="当前检查单尚无伪影分析任务")
     return success(svc.serialize_artifact_inference_task(task))
+
+
+@router.get("/check/{uuid}/report/latest", summary="查询检查单最新报告")
+async def get_latest_check_report(uuid: str, session: AsyncSession = Depends(get_session)):
+    report = await svc.get_latest_check_report(session, uuid)
+    if not report:
+        raise HTTPException(status_code=404, detail="当前检查单尚无报告草稿")
+    return success(svc.serialize_medical_report(report))
+
+
+@router.put("/check/{uuid}/report", summary="保存检查报告草稿")
+async def save_check_report_draft(uuid: str, data: CheckReportDraftInput, session: AsyncSession = Depends(get_session)):
+    try:
+        report = await svc.save_check_report_draft(
+            session=session,
+            check_uuid=uuid,
+            conclusion=data.conclusion,
+            artifact_task_uuid=str(data.artifact_task_uuid) if data.artifact_task_uuid else None,
+        )
+        return success(svc.serialize_medical_report(report))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/report/{report_uuid}/publish", summary="审核并发布检查报告")
+async def publish_check_report(
+    report_uuid: str,
+    data: CheckReportPublishInput,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        report = await svc.publish_check_report(session, report_uuid, data.reviewer_employee_uuid)
+        return success(svc.serialize_medical_report(report))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/artifact-inference/{task_uuid}/overlay", summary="读取 CT 伪影分析预览")

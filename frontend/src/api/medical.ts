@@ -166,6 +166,29 @@ export interface ArtifactInferenceSubmitPayload {
   submitted_by_employee_uuid: string
 }
 
+export type MedicalReportState = 'draft' | 'published'
+
+export interface MedicalReport {
+  uuid: string
+  register_uuid: string
+  source_request_uuid: string
+  report_type: string
+  report_state: MedicalReportState
+  conclusion?: string | null
+  artifact_task_uuid?: string | null
+  reviewer_employee_uuid?: string | null
+  reviewed_at?: string | null
+  published_at?: string | null
+  version: number
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface CheckReportDraftPayload {
+  conclusion: string
+  artifact_task_uuid?: string
+}
+
 export const medicalApi = {
   createRecord(payload: MedicalRecordCreatePayload) {
     return http.post<ApiEnvelope<{ uuid: string }>>('/api/v1/medical/record', payload)
@@ -219,5 +242,16 @@ export const medicalApi = {
   },
   getArtifactInferenceOverlayUrl(taskUuid: string) {
     return `/api/v1/medical/artifact-inference/${encodeURIComponent(taskUuid)}/overlay`
+  },
+  getLatestCheckReport(checkUuid: string) {
+    return http.get<ApiEnvelope<MedicalReport>>(`/api/v1/medical/check/${checkUuid}/report/latest`)
+  },
+  saveCheckReportDraft(checkUuid: string, payload: CheckReportDraftPayload) {
+    return http.put<ApiEnvelope<MedicalReport>>(`/api/v1/medical/check/${checkUuid}/report`, payload)
+  },
+  publishCheckReport(reportUuid: string, reviewerEmployeeUuid: string) {
+    return http.post<ApiEnvelope<MedicalReport>>(`/api/v1/medical/report/${reportUuid}/publish`, {
+      reviewer_employee_uuid: reviewerEmployeeUuid,
+    })
   },
 }

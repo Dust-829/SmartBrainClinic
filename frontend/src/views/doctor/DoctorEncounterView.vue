@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   type ArtifactInferenceTask,
   type ArtifactInputSource,
+  type MedicalReport,
   medicalApi,
   type MedicalRecordDraft,
   type MedicalRecordDraftConfirmPayload,
@@ -58,6 +59,11 @@ const expandedArtifactCheckUuid = ref<string | null>(null)
 const artifactTaskByCheck = reactive<Record<string, ArtifactInferenceTask | null>>({})
 const artifactSourceByCheck = reactive<Record<string, string>>({})
 const artifactSubmittingByCheck = reactive<Record<string, boolean>>({})
+const expandedReportCheckUuid = ref<string | null>(null)
+const reportByCheck = reactive<Record<string, MedicalReport | null>>({})
+const reportDraftByCheck = reactive<Record<string, string>>({})
+const reportSavingByCheck = reactive<Record<string, boolean>>({})
+const reportPublishingByCheck = reactive<Record<string, boolean>>({})
 
 let queuePollTimer: number | null = null
 let artifactTaskPollTimer: number | null = null
@@ -208,7 +214,7 @@ async function loadRequestQueue(options: { silent?: boolean } = {}) {
     requestQueue.checks = response.data.data?.checks ?? []
     requestQueue.inspections = response.data.data?.inspections ?? []
     requestQueue.disposals = response.data.data?.disposals ?? []
-    await loadArtifactTasks()
+    await Promise.all([loadArtifactTasks(), loadCheckReports()])
   } catch (error) {
     requestQueue.checks = []
     requestQueue.inspections = []
@@ -251,6 +257,29 @@ async function loadArtifactTasks() {
     }),
   )
   syncArtifactTaskPolling()
+}
+
+async function loadCheckReports() {
+  await Promise.all(
+    requestQueue.checks.map(async (item) => {
+      try {
+        const response = await medicalApi.getLatestCheckReport(item.uuid)
+        const report = response.data.data ?? null
+        reportByCheck[item.uuid] = report
+        if (report && (reportDraftByCheck[item.uuid] === undefined || report.report_state === 'published')) {
+          reportDraftByCheck[item.uuid] = report.conclusion ?? ''
+        }
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response?.status
+        if (status === 404) {
+          reportByCheck[item.uuid] = null
+          if (reportDraftByCheck[item.uuid] === undefined) {
+            reportDraftByCheck[item.uuid] = ''
+          }
+        }
+      }
+    }),
+  )
 }
 
 function stopQueuePolling() {
@@ -602,6 +631,91 @@ function artifactOverlayUrl(task: ArtifactInferenceTask) {
   return task.overlay_object_ref ? medicalApi.getArtifactInferenceOverlayUrl(task.uuid) : ''
 }
 
+function toggleCheckReport(checkUuid: string) {
+  expandedReportCheckUuid.value = expandedReportCheckUuid.value === checkUuid ? null : checkUuid
+}
+
+function isCheckReportEligible(item: MedicalRequestItem) {
+  return item.state.includes('已执行')
+}
+
+function checkReportStateLabel(report?: MedicalReport | null) {
+  if (report?.report_state === 'published') return '已发布'
+  if (report?.report_state === 'draft') return '草稿待审核'
+  return '尚未填写'
+}
+
+function checkReportStateClass(report?: MedicalReport | null) {
+  if (report?.report_state === 'published') return 'is-complete'
+  if (report?.report_state === 'draft') return 'is-processing'
+  return 'is-idle'
+}
+
+function canSaveCheckReport(item: MedicalRequestItem) {
+  const report = reportByCheck[item.uuid]
+  return Boolean(
+    isCheckReportEligible(item) &&
+      report?.report_state !== 'published' &&
+      reportDraftByCheck[item.uuid]?.trim() &&
+      !reportSavingByCheck[item.uuid],
+  )
+}
+
+async function saveCheckReportDraft(item: MedicalRequestItem, silent = false) {
+  if (!canSaveCheckReport(item)) return null
+
+  reportSavingByCheck[item.uuid] = true
+  try {
+    const task = artifactTaskByCheck[item.uuid]
+    const response = await medicalApi.saveCheckReportDraft(item.uuid, {
+      conclusion: reportDraftByCheck[item.uuid].trim(),
+      artifact_task_uuid: task?.task_state === 'succeeded' ? task.uuid : undefined,
+    })
+    const report = response.data.data ?? null
+    reportByCheck[item.uuid] = report
+    if (!silent) ElMessage.success('检查报告草稿已保存。')
+    return report
+  } catch (error) {
+    if (!silent) ElMessage.error(getErrorMessage(error, '检查报告草稿保存失败，请稍后重试。'))
+    return null
+  } finally {
+    reportSavingByCheck[item.uuid] = false
+  }
+}
+
+function canPublishCheckReport(item: MedicalRequestItem) {
+  const report = reportByCheck[item.uuid]
+  return Boolean(
+    doctor.value?.employeeUuid &&
+      isCheckReportEligible(item) &&
+      report?.report_state !== 'published' &&
+      reportDraftByCheck[item.uuid]?.trim() &&
+      !reportPublishingByCheck[item.uuid],
+  )
+}
+
+async function publishCheckReport(item: MedicalRequestItem) {
+  const employeeUuid = doctor.value?.employeeUuid
+  if (!employeeUuid || !canPublishCheckReport(item)) return
+
+  reportPublishingByCheck[item.uuid] = true
+  try {
+    let report = reportByCheck[item.uuid]
+    if (!report) {
+      report = await saveCheckReportDraft(item, true)
+    }
+    if (!report) return
+
+    const response = await medicalApi.publishCheckReport(report.uuid, employeeUuid)
+    reportByCheck[item.uuid] = response.data.data ?? null
+    ElMessage.success('检查报告已审核发布。')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '检查报告发布失败，请稍后重试。'))
+  } finally {
+    reportPublishingByCheck[item.uuid] = false
+  }
+}
+
 function stateClass(state: string) {
   if (state.includes('已执行')) {
     return 'is-done'
@@ -933,6 +1047,69 @@ onBeforeUnmount(() => {
                                     @click="submitArtifactTask(item)"
                                   >
                                     {{ artifactSubmittingByCheck[item.uuid] ? '正在提交...' : '开始影像分析' }}
+                                  </button>
+                                </div>
+                              </template>
+                            </div>
+                          </section>
+                          <section v-if="group.key === 'check'" class="doctor-encounter__check-report">
+                            <button
+                              type="button"
+                              class="doctor-encounter__report-toggle"
+                              :aria-expanded="expandedReportCheckUuid === item.uuid"
+                              @click="toggleCheckReport(item.uuid)"
+                            >
+                              <span>检查报告</span>
+                              <span
+                                class="doctor-encounter__report-status"
+                                :class="checkReportStateClass(reportByCheck[item.uuid])"
+                              >
+                                {{ checkReportStateLabel(reportByCheck[item.uuid]) }}
+                              </span>
+                            </button>
+
+                            <div v-if="expandedReportCheckUuid === item.uuid" class="doctor-encounter__report-panel">
+                              <div v-if="reportByCheck[item.uuid]?.report_state === 'published'" class="doctor-encounter__report-published">
+                                <div class="doctor-encounter__report-published-meta">
+                                  <span>医生确认结论</span>
+                                  <strong>已发布 · v{{ reportByCheck[item.uuid]?.version }}</strong>
+                                </div>
+                                <p>{{ reportByCheck[item.uuid]?.conclusion }}</p>
+                                <small>发布时间：{{ formatCreationTime(reportByCheck[item.uuid]?.published_at) }}</small>
+                              </div>
+
+                              <template v-else>
+                                <label class="doctor-encounter__field">
+                                  <span>医生结论</span>
+                                  <textarea
+                                    v-model="reportDraftByCheck[item.uuid]"
+                                    rows="4"
+                                    :disabled="!isCheckReportEligible(item) || reportSavingByCheck[item.uuid] || reportPublishingByCheck[item.uuid]"
+                                    placeholder="填写影像所见与医生确认结论"
+                                  />
+                                </label>
+                                <p v-if="!isCheckReportEligible(item)" class="doctor-encounter__report-note">
+                                  检查完成执行后可填写并审核报告。
+                                </p>
+                                <p v-else class="doctor-encounter__report-note">
+                                  模型掩码仅作为当前检查项目的辅助信息，正式结论以医生填写内容为准。
+                                </p>
+                                <div class="doctor-encounter__report-actions">
+                                  <button
+                                    type="button"
+                                    class="doctor-encounter__report-save"
+                                    :disabled="!canSaveCheckReport(item)"
+                                    @click="saveCheckReportDraft(item)"
+                                  >
+                                    {{ reportSavingByCheck[item.uuid] ? '保存中...' : '保存草稿' }}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="doctor-encounter__report-publish"
+                                    :disabled="!canPublishCheckReport(item)"
+                                    @click="publishCheckReport(item)"
+                                  >
+                                    {{ reportPublishingByCheck[item.uuid] ? '发布中...' : '审核并发布' }}
                                   </button>
                                 </div>
                               </template>
@@ -1687,6 +1864,155 @@ onBeforeUnmount(() => {
   cursor: not-allowed;
 }
 
+.doctor-encounter__check-report {
+  display: grid;
+  gap: 10px;
+}
+
+.doctor-encounter__report-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid #d5dee7;
+  border-radius: 11px;
+  background: #ffffff;
+  color: #263949;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 180ms ease-out, background-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.doctor-encounter__report-toggle:hover {
+  border-color: #a9bdcd;
+  background: #f8fafc;
+}
+
+.doctor-encounter__report-toggle:focus-visible,
+.doctor-encounter__report-save:focus-visible,
+.doctor-encounter__report-publish:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
+}
+
+.doctor-encounter__report-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #52616f;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.doctor-encounter__report-status.is-processing {
+  background: #fff5df;
+  color: #98650f;
+}
+
+.doctor-encounter__report-status.is-complete {
+  background: #e9f7ef;
+  color: #19734a;
+}
+
+.doctor-encounter__report-panel {
+  display: grid;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid #dfe7ee;
+  border-radius: 13px;
+  background: #ffffff;
+}
+
+.doctor-encounter__report-note,
+.doctor-encounter__report-published small {
+  margin: 0;
+  color: #5c6f7e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.doctor-encounter__report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.doctor-encounter__report-save,
+.doctor-encounter__report-publish {
+  min-height: 40px;
+  padding: 0 15px;
+  border-radius: 10px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, transform 180ms ease-out;
+}
+
+.doctor-encounter__report-save {
+  border: 1px solid #9eb5c4;
+  background: #ffffff;
+  color: #2f586c;
+}
+
+.doctor-encounter__report-publish {
+  border: 1px solid #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.doctor-encounter__report-save:hover:not(:disabled) {
+  border-color: #638da4;
+  background: #f3f8fb;
+}
+
+.doctor-encounter__report-publish:hover:not(:disabled) {
+  border-color: #0b615b;
+  background: #0b615b;
+  transform: translateY(-1px);
+}
+
+.doctor-encounter__report-save:disabled,
+.doctor-encounter__report-publish:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.doctor-encounter__report-published {
+  display: grid;
+  gap: 9px;
+}
+
+.doctor-encounter__report-published-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #486272;
+  font-size: 12px;
+}
+
+.doctor-encounter__report-published-meta strong {
+  color: #19734a;
+}
+
+.doctor-encounter__report-published p {
+  margin: 0;
+  color: #183746;
+  font-size: 14px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+}
+
 .doctor-encounter__request-state {
   display: inline-flex;
   align-items: center;
@@ -1807,11 +2133,24 @@ onBeforeUnmount(() => {
   .doctor-encounter__artifact-submit {
     width: 100%;
   }
+
+  .doctor-encounter__report-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .doctor-encounter__report-save,
+  .doctor-encounter__report-publish {
+    width: 100%;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .doctor-encounter__artifact-toggle,
-  .doctor-encounter__artifact-submit {
+  .doctor-encounter__artifact-submit,
+  .doctor-encounter__report-toggle,
+  .doctor-encounter__report-save,
+  .doctor-encounter__report-publish {
     transition: none;
   }
 }

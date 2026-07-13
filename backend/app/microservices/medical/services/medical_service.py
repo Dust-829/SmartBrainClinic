@@ -67,6 +67,24 @@ def serialize_artifact_inference_task(task: ArtifactInferenceTask) -> dict:
     }
 
 
+def serialize_medical_report(report: MedicalReport) -> dict:
+    return {
+        "uuid": str(report.uuid),
+        "register_uuid": str(report.register_uuid),
+        "source_request_uuid": str(report.source_request_uuid),
+        "report_type": report.report_type,
+        "report_state": report.report_state,
+        "conclusion": report.conclusion,
+        "artifact_task_uuid": str(report.artifact_task_uuid) if report.artifact_task_uuid else None,
+        "reviewer_employee_uuid": str(report.reviewer_employee_uuid) if report.reviewer_employee_uuid else None,
+        "reviewed_at": report.reviewed_at.isoformat() if report.reviewed_at else None,
+        "published_at": report.published_at.isoformat() if report.published_at else None,
+        "version": report.version,
+        "created_at": report.created_at.isoformat() if report.created_at else None,
+        "updated_at": report.updated_at.isoformat() if report.updated_at else None,
+    }
+
+
 async def create_artifact_inference_task(
     session: AsyncSession,
     check_uuid: str,
@@ -104,6 +122,97 @@ async def get_latest_artifact_inference_task(session: AsyncSession, check_uuid: 
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def get_latest_check_report(session: AsyncSession, check_uuid: str) -> MedicalReport | None:
+    result = await session.execute(
+        select(MedicalReport)
+        .where(
+            MedicalReport.source_request_uuid == uuid_pkg.UUID(check_uuid),
+            MedicalReport.report_type == "check",
+        )
+        .order_by(MedicalReport.version.desc(), MedicalReport.created_at.desc(), MedicalReport.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def save_check_report_draft(
+    session: AsyncSession,
+    check_uuid: str,
+    conclusion: str,
+    artifact_task_uuid: str | None = None,
+) -> MedicalReport:
+    normalized_conclusion = conclusion.strip()
+    if not normalized_conclusion:
+        raise ValueError("报告结论不能为空")
+
+    check_result = await session.execute(select(CheckRequest).where(CheckRequest.uuid == uuid_pkg.UUID(check_uuid)))
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise ValueError("检查单不存在")
+    if normalize_check_state(check.check_state) != CheckState.EXECUTED:
+        raise ValueError("检查单执行完成后才能保存正式报告")
+
+    artifact_task_uuid_obj = uuid_pkg.UUID(artifact_task_uuid) if artifact_task_uuid else None
+    if artifact_task_uuid_obj:
+        task_result = await session.execute(
+            select(ArtifactInferenceTask).where(
+                ArtifactInferenceTask.uuid == artifact_task_uuid_obj,
+                ArtifactInferenceTask.check_uuid == check.uuid,
+            )
+        )
+        if not task_result.scalar_one_or_none():
+            raise ValueError("伪影分析任务不属于当前检查单")
+
+    report = await get_latest_check_report(session, check_uuid)
+    if report and report.report_state == "published":
+        raise ValueError("已发布报告不可直接修改，请创建更正版本")
+
+    if report is None:
+        report = MedicalReport(
+            register_uuid=check.register_uuid,
+            source_request_uuid=check.uuid,
+            report_type="check",
+            report_state="draft",
+            conclusion=normalized_conclusion,
+            artifact_task_uuid=artifact_task_uuid_obj,
+        )
+    else:
+        report.conclusion = normalized_conclusion
+        report.artifact_task_uuid = artifact_task_uuid_obj
+        report.updated_at = datetime.now()
+
+    session.add(report)
+    await session.flush()
+    return report
+
+
+async def publish_check_report(
+    session: AsyncSession,
+    report_uuid: str,
+    reviewer_employee_uuid: uuid_pkg.UUID,
+) -> MedicalReport:
+    result = await session.execute(
+        select(MedicalReport).where(MedicalReport.uuid == uuid_pkg.UUID(report_uuid)).with_for_update()
+    )
+    report = result.scalar_one_or_none()
+    if not report or report.report_type != "check":
+        raise ValueError("检查报告不存在")
+    if report.report_state == "published":
+        return report
+    if not (report.conclusion or "").strip():
+        raise ValueError("请先填写报告结论")
+
+    now = datetime.now()
+    report.report_state = "published"
+    report.reviewer_employee_uuid = reviewer_employee_uuid
+    report.reviewed_at = now
+    report.published_at = now
+    report.updated_at = now
+    session.add(report)
+    await session.flush()
+    return report
 
 
 async def list_artifact_input_sources() -> list[dict[str, str]]:
