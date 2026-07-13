@@ -1,6 +1,6 @@
 import uuid as uuid_pkg
 from dataclasses import dataclass
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.medical import ArtifactInferenceTask, CheckRequest, DisposalRequest, InspectionRequest, MedicalRecord, MedicalReport, MedicalTechnology
@@ -94,6 +94,30 @@ async def create_artifact_inference_task(
 async def get_artifact_inference_task(session: AsyncSession, task_uuid: str) -> ArtifactInferenceTask | None:
     result = await session.execute(select(ArtifactInferenceTask).where(ArtifactInferenceTask.uuid == uuid_pkg.UUID(task_uuid)))
     return result.scalar_one_or_none()
+
+
+async def get_latest_artifact_inference_task(session: AsyncSession, check_uuid: str) -> ArtifactInferenceTask | None:
+    result = await session.execute(
+        select(ArtifactInferenceTask)
+        .where(ArtifactInferenceTask.check_uuid == uuid_pkg.UUID(check_uuid))
+        .order_by(ArtifactInferenceTask.created_at.desc(), ArtifactInferenceTask.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_artifact_input_sources() -> list[dict[str, str]]:
+    return await ArtifactInferenceClient.list_input_sources()
+
+
+def resolve_artifact_output_file(task: ArtifactInferenceTask) -> Path:
+    if not task.overlay_object_ref or not task.overlay_object_ref.startswith("output/"):
+        raise ValueError("任务尚未生成预览图")
+    runtime_root = Path(__file__).resolve().parents[4] / "runtime" / "data" / "ct_artifact"
+    candidate = (runtime_root / Path(*PurePosixPath(task.overlay_object_ref).parts)).resolve()
+    if runtime_root.resolve() not in candidate.parents or not candidate.is_file():
+        raise ValueError("任务预览图不可用")
+    return candidate
 
 
 async def run_artifact_inference_task(task_uuid: str) -> None:

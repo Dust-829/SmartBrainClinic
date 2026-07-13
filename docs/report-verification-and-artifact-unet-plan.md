@@ -242,6 +242,12 @@ Medical 新增以下内部接口，暂不接入医生页面：
 
 端到端服务验证已完成：在临时端口启动独立服务后，提交 `CQ500CT0 CQ500CT0/Unknown Study/CT 4cc sec 150cc D3D on` 的 DICOM 引用，服务健康检查通过，并写出 `output/e2e-cq500ct0-20260713/artifact_mask.nii.gz` 与 `artifact_overlay.png`。输出尺寸为 `512 × 512 × 239`，检测到 `21,362` 个 mask 像素；临时服务进程已在验证结束后关闭。
 
+### 第五阶段：医生接诊页内嵌分析区（2026-07-13）
+
+分析入口位于既有“本次挂号已开项目”的每一条检查项目内，不新增普通分析页面。医生展开 `CT 伪影分析` 后可选择受控 `input/` 目录中的 DICOM/NIfTI 输入、提交任务、看到 `等待分析 / 分析中 / 分析已完成` 状态，并在任务完成后直接查看 mask 叠加预览和切片/像素元数据。
+
+为支持该页面，Medical 服务新增受控的可选序列列表、单检查单最新任务查询和预览图读取接口；前端只接收相对引用和任务 UUID，不接触模型权重、本机绝对路径或原始 DICOM 文件。任务尚未完成时保持在条目内同步，不打断医生继续接诊。
+
 ## Expected file changes
 
 - `backend/app/microservices/medical/models/medical.py`：报告、推理任务和发布版本数据模型。

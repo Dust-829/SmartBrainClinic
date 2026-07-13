@@ -1,6 +1,7 @@
 import uuid as uuid_pkg
 from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..services import medical_service as svc
@@ -240,12 +241,39 @@ async def submit_artifact_inference_task(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/artifact-inference/input-sources", summary="获取可选 CT 伪影分析影像")
+async def list_artifact_input_sources():
+    try:
+        return success(await svc.list_artifact_input_sources())
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="本地伪影推理服务暂不可用") from exc
+
+
 @router.get("/artifact-inference/{task_uuid}", summary="查询 CT 伪影分析任务")
 async def get_artifact_inference_task(task_uuid: str, session: AsyncSession = Depends(get_session)):
     task = await svc.get_artifact_inference_task(session, task_uuid)
     if not task:
         raise HTTPException(status_code=404, detail="伪影分析任务不存在")
     return success(svc.serialize_artifact_inference_task(task))
+
+
+@router.get("/check/{uuid}/artifact-inference/latest", summary="查询检查单最新 CT 伪影分析任务")
+async def get_latest_artifact_inference_task(uuid: str, session: AsyncSession = Depends(get_session)):
+    task = await svc.get_latest_artifact_inference_task(session, uuid)
+    if not task:
+        raise HTTPException(status_code=404, detail="当前检查单尚无伪影分析任务")
+    return success(svc.serialize_artifact_inference_task(task))
+
+
+@router.get("/artifact-inference/{task_uuid}/overlay", summary="读取 CT 伪影分析预览")
+async def get_artifact_inference_overlay(task_uuid: str, session: AsyncSession = Depends(get_session)):
+    task = await svc.get_artifact_inference_task(session, task_uuid)
+    if not task:
+        raise HTTPException(status_code=404, detail="伪影分析任务不存在")
+    try:
+        return FileResponse(svc.resolve_artifact_output_file(task), media_type="image/png")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 @router.get("/inspection/{uuid}", summary="获取检验单明细")
 async def get_inspection_request(uuid: str, session: AsyncSession = Depends(get_session)):

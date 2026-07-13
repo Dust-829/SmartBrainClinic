@@ -46,6 +46,21 @@ def resolve_input_ref(source_ref: str) -> Path:
     return candidate
 
 
+def _list_input_sources() -> list[dict[str, str]]:
+    sources: list[dict[str, str]] = []
+    if not INPUT_ROOT.exists():
+        return sources
+
+    for path in sorted(INPUT_ROOT.rglob("*")):
+        if path.is_file() and (path.name.endswith(".nii") or path.name.endswith(".nii.gz")):
+            sources.append({"source_ref": path.relative_to(INPUT_ROOT).as_posix(), "source_format": "nifti"})
+        elif path.is_dir() and not any(child.is_dir() for child in path.iterdir()):
+            series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(str(path)) or []
+            if len(series_ids) == 1:
+                sources.append({"source_ref": path.relative_to(INPUT_ROOT).as_posix(), "source_format": "dicom"})
+    return sources
+
+
 def _write_overlay(ct_image: sitk.Image, mask_image: sitk.Image, destination: Path) -> tuple[int, int]:
     volume = sitk.GetArrayViewFromImage(ct_image)
     mask = sitk.GetArrayViewFromImage(mask_image)
@@ -108,6 +123,11 @@ app = FastAPI(title="CT Artifact Inference Service", version="1.0.0", lifespan=l
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "model_name": MODEL_NAME, "model_version": MODEL_VERSION}
+
+
+@app.get("/v1/artifact-inputs")
+async def list_artifact_inputs():
+    return {"items": await asyncio.to_thread(_list_input_sources)}
 
 
 @app.post("/v1/artifact-segmentation")

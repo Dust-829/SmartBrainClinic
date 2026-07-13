@@ -47,6 +47,9 @@ def test_medical_api_exposes_artifact_task_submit_and_query_routes():
 
     assert '@router.post("/check/{uuid}/artifact-inference"' in source
     assert '@router.get("/artifact-inference/{task_uuid}"' in source
+    assert '@router.get("/check/{uuid}/artifact-inference/latest"' in source
+    assert '@router.get("/artifact-inference/{task_uuid}/overlay"' in source
+    assert '@router.get("/artifact-inference/input-sources"' in source
     assert "background_tasks.add_task(svc.run_artifact_inference_task, str(task.uuid))" in source
 
 
@@ -56,4 +59,5 @@ def test_ct_artifact_service_keeps_input_and_output_references_relative():
     assert 'INPUT_ROOT = RUNTIME_ROOT / "input"' in source
     assert 'OUTPUT_ROOT = RUNTIME_ROOT / "output"' in source
     assert 'async with _inference_lock:' in source
+    assert '@app.get("/v1/artifact-inputs")' in source
     assert '"mask_object_ref": f"output/{request.task_id}/artifact_mask.nii.gz"' in source

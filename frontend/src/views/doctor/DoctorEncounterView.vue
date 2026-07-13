@@ -4,6 +4,8 @@ import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 
 import {
+  type ArtifactInferenceTask,
+  type ArtifactInputSource,
   medicalApi,
   type MedicalRecordDraft,
   type MedicalRecordDraftConfirmPayload,
@@ -49,8 +51,16 @@ const technologyErrorMessage = ref('')
 const queueLoading = ref(false)
 const queueErrorMessage = ref('')
 const signingOrders = ref(false)
+const artifactSources = ref<ArtifactInputSource[]>([])
+const artifactSourcesLoading = ref(false)
+const artifactSourcesError = ref('')
+const expandedArtifactCheckUuid = ref<string | null>(null)
+const artifactTaskByCheck = reactive<Record<string, ArtifactInferenceTask | null>>({})
+const artifactSourceByCheck = reactive<Record<string, string>>({})
+const artifactSubmittingByCheck = reactive<Record<string, boolean>>({})
 
 let queuePollTimer: number | null = null
+let artifactTaskPollTimer: number | null = null
 let pendingOrderSequence = 0
 
 const technologyOptions = reactive<Record<OrderType, MedicalTechnologyOption[]>>({
@@ -198,6 +208,7 @@ async function loadRequestQueue(options: { silent?: boolean } = {}) {
     requestQueue.checks = response.data.data?.checks ?? []
     requestQueue.inspections = response.data.data?.inspections ?? []
     requestQueue.disposals = response.data.data?.disposals ?? []
+    await loadArtifactTasks()
   } catch (error) {
     requestQueue.checks = []
     requestQueue.inspections = []
@@ -210,11 +221,67 @@ async function loadRequestQueue(options: { silent?: boolean } = {}) {
   }
 }
 
+async function loadArtifactSources() {
+  artifactSourcesLoading.value = true
+  artifactSourcesError.value = ''
+  try {
+    const response = await medicalApi.listArtifactInputSources()
+    artifactSources.value = response.data.data ?? []
+  } catch (error) {
+    artifactSources.value = []
+    artifactSourcesError.value = getErrorMessage(error, '本地影像序列暂时不可读取。')
+  } finally {
+    artifactSourcesLoading.value = false
+  }
+}
+
+async function loadArtifactTasks() {
+  const checks = requestQueue.checks
+  await Promise.all(
+    checks.map(async (item) => {
+      try {
+        const response = await medicalApi.getLatestArtifactInferenceTask(item.uuid)
+        artifactTaskByCheck[item.uuid] = response.data.data ?? null
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response?.status
+        if (status === 404) {
+          artifactTaskByCheck[item.uuid] = null
+        }
+      }
+    }),
+  )
+  syncArtifactTaskPolling()
+}
+
 function stopQueuePolling() {
   if (queuePollTimer !== null) {
     window.clearInterval(queuePollTimer)
     queuePollTimer = null
   }
+}
+
+function stopArtifactTaskPolling() {
+  if (artifactTaskPollTimer !== null) {
+    window.clearInterval(artifactTaskPollTimer)
+    artifactTaskPollTimer = null
+  }
+}
+
+function syncArtifactTaskPolling() {
+  const hasActiveTask = requestQueue.checks.some((item) => {
+    const task = artifactTaskByCheck[item.uuid]
+    return task?.task_state === 'queued' || task?.task_state === 'running'
+  })
+
+  if (!hasActiveTask) {
+    stopArtifactTaskPolling()
+    return
+  }
+
+  if (artifactTaskPollTimer !== null) return
+  artifactTaskPollTimer = window.setInterval(() => {
+    void loadArtifactTasks()
+  }, 5000)
 }
 
 function startQueuePolling() {
@@ -256,7 +323,7 @@ async function loadEncounter() {
       }
     }
 
-    await Promise.all([loadMedicalTechnologies(), loadRequestQueue()])
+    await Promise.all([loadMedicalTechnologies(), loadRequestQueue(), loadArtifactSources()])
   } catch (error) {
     registerDetail.value = null
     errorMessage.value = getErrorMessage(error, '接诊详情加载失败，请稍后重试。')
@@ -471,6 +538,70 @@ function buildRequestSummary(item: MedicalRequestItem) {
   return parts.join(' · ') || '等待缴费后继续流转'
 }
 
+function toggleArtifactAnalysis(checkUuid: string) {
+  expandedArtifactCheckUuid.value = expandedArtifactCheckUuid.value === checkUuid ? null : checkUuid
+}
+
+function isArtifactAnalysisEligible(item: MedicalRequestItem) {
+  return item.state.includes('已缴费') || item.state.includes('已执行')
+}
+
+function artifactTaskStateLabel(state?: ArtifactInferenceTask['task_state']) {
+  if (state === 'queued') return '等待分析'
+  if (state === 'running') return '分析中'
+  if (state === 'succeeded') return '分析已完成'
+  if (state === 'failed') return '分析暂未完成'
+  return '尚未分析'
+}
+
+function artifactTaskStateClass(state?: ArtifactInferenceTask['task_state']) {
+  if (state === 'succeeded') return 'is-complete'
+  if (state === 'running' || state === 'queued') return 'is-processing'
+  if (state === 'failed') return 'is-idle'
+  return 'is-idle'
+}
+
+function selectedArtifactSource(checkUuid: string) {
+  const sourceRef = artifactSourceByCheck[checkUuid]
+  return artifactSources.value.find((item) => item.source_ref === sourceRef) ?? null
+}
+
+function canSubmitArtifactTask(item: MedicalRequestItem) {
+  return Boolean(
+    doctor.value?.employeeUuid &&
+      isArtifactAnalysisEligible(item) &&
+      selectedArtifactSource(item.uuid) &&
+      !artifactSubmittingByCheck[item.uuid],
+  )
+}
+
+async function submitArtifactTask(item: MedicalRequestItem) {
+  const source = selectedArtifactSource(item.uuid)
+  const employeeUuid = doctor.value?.employeeUuid
+  if (!source || !employeeUuid || !canSubmitArtifactTask(item)) return
+
+  artifactSubmittingByCheck[item.uuid] = true
+  try {
+    const response = await medicalApi.submitArtifactInferenceTask(item.uuid, {
+      source_image_ref: source.source_ref,
+      source_format: source.source_format,
+      submitted_by_employee_uuid: employeeUuid,
+    })
+    artifactTaskByCheck[item.uuid] = response.data.data ?? null
+    expandedArtifactCheckUuid.value = item.uuid
+    ElMessage.success('伪影分析任务已提交。')
+    syncArtifactTaskPolling()
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '伪影分析任务提交失败，请稍后重试。'))
+  } finally {
+    artifactSubmittingByCheck[item.uuid] = false
+  }
+}
+
+function artifactOverlayUrl(task: ArtifactInferenceTask) {
+  return task.overlay_object_ref ? medicalApi.getArtifactInferenceOverlayUrl(task.uuid) : ''
+}
+
 function stateClass(state: string) {
   if (state.includes('已执行')) {
     return 'is-done'
@@ -497,6 +628,7 @@ watch(
 
 onBeforeUnmount(() => {
   stopQueuePolling()
+  stopArtifactTaskPolling()
 })
 </script>
 
@@ -709,6 +841,103 @@ onBeforeUnmount(() => {
                             <span>{{ formatPrice(item.price) }}</span>
                             <span>{{ formatCreationTime(item.creation_time) }}</span>
                           </div>
+                          <section v-if="group.key === 'check'" class="doctor-encounter__artifact-analysis">
+                            <button
+                              type="button"
+                              class="doctor-encounter__artifact-toggle"
+                              :aria-expanded="expandedArtifactCheckUuid === item.uuid"
+                              @click="toggleArtifactAnalysis(item.uuid)"
+                            >
+                              <span>CT 伪影分析</span>
+                              <span
+                                class="doctor-encounter__artifact-status"
+                                :class="artifactTaskStateClass(artifactTaskByCheck[item.uuid]?.task_state)"
+                              >
+                                {{ artifactTaskStateLabel(artifactTaskByCheck[item.uuid]?.task_state) }}
+                              </span>
+                            </button>
+
+                            <div v-if="expandedArtifactCheckUuid === item.uuid" class="doctor-encounter__artifact-panel">
+                              <template v-if="artifactTaskByCheck[item.uuid]">
+                                <div class="doctor-encounter__artifact-meta">
+                                  <div>
+                                    <span>模型</span>
+                                    <strong>{{ artifactTaskByCheck[item.uuid]?.model_name || 'attention-unet2d' }}</strong>
+                                  </div>
+                                  <div>
+                                    <span>阈值</span>
+                                    <strong>{{ artifactTaskByCheck[item.uuid]?.threshold || '0.5' }}</strong>
+                                  </div>
+                                  <div>
+                                    <span>状态</span>
+                                    <strong>{{ artifactTaskStateLabel(artifactTaskByCheck[item.uuid]?.task_state) }}</strong>
+                                  </div>
+                                </div>
+
+                                <div v-if="artifactTaskByCheck[item.uuid]?.task_state === 'succeeded'" class="doctor-encounter__artifact-result">
+                                  <img
+                                    :src="artifactOverlayUrl(artifactTaskByCheck[item.uuid]!)"
+                                    alt="CT 伪影掩码叠加预览"
+                                    class="doctor-encounter__artifact-preview"
+                                  />
+                                  <div class="doctor-encounter__artifact-findings">
+                                    <strong>掩码叠加预览</strong>
+                                    <p>
+                                      第 {{ (artifactTaskByCheck[item.uuid]?.result_metadata?.selected_slice ?? 0) + 1 }} 层，
+                                      共 {{ artifactTaskByCheck[item.uuid]?.result_metadata?.artifact_pixel_count ?? 0 }} 个伪影像素。
+                                    </p>
+                                    <span>分析结果仅在医生端当前检查项目内查看。</span>
+                                  </div>
+                                </div>
+                                <div v-else class="doctor-encounter__artifact-waiting">
+                                  <strong>{{ artifactTaskStateLabel(artifactTaskByCheck[item.uuid]?.task_state) }}</strong>
+                                  <p>页面会自动同步任务状态；完成后将在这里显示叠加预览。</p>
+                                </div>
+                              </template>
+
+                              <template v-else>
+                                <div class="doctor-encounter__artifact-setup">
+                                  <label class="doctor-encounter__field">
+                                    <span>选择影像序列</span>
+                                    <el-select
+                                      v-model="artifactSourceByCheck[item.uuid]"
+                                      filterable
+                                      placeholder="选择已导入的 CT 序列"
+                                      :loading="artifactSourcesLoading"
+                                      :disabled="!isArtifactAnalysisEligible(item) || !artifactSources.length"
+                                    >
+                                      <el-option
+                                        v-for="source in artifactSources"
+                                        :key="`${source.source_format}:${source.source_ref}`"
+                                        :label="source.source_ref"
+                                        :value="source.source_ref"
+                                      >
+                                        <div class="doctor-encounter__artifact-source-option">
+                                          <span>{{ source.source_ref }}</span>
+                                          <small>{{ source.source_format === 'dicom' ? 'DICOM 序列' : 'NIfTI 体数据' }}</small>
+                                        </div>
+                                      </el-option>
+                                    </el-select>
+                                  </label>
+                                  <p v-if="artifactSourcesError" class="doctor-encounter__artifact-note">{{ artifactSourcesError }}</p>
+                                  <p v-else-if="!isArtifactAnalysisEligible(item)" class="doctor-encounter__artifact-note">
+                                    完成缴费后即可选择已导入影像并发起分析。
+                                  </p>
+                                  <p v-else class="doctor-encounter__artifact-note">
+                                    分析完成后会在当前条目内生成掩码叠加预览。
+                                  </p>
+                                  <button
+                                    type="button"
+                                    class="doctor-encounter__artifact-submit"
+                                    :disabled="!canSubmitArtifactTask(item)"
+                                    @click="submitArtifactTask(item)"
+                                  >
+                                    {{ artifactSubmittingByCheck[item.uuid] ? '正在提交...' : '开始影像分析' }}
+                                  </button>
+                                </div>
+                              </template>
+                            </div>
+                          </section>
                         </article>
                       </div>
                     </section>
@@ -1276,6 +1505,188 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
+.doctor-encounter__artifact-analysis {
+  display: grid;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.doctor-encounter__artifact-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 13px;
+  border: 1px solid #cbdbe7;
+  border-radius: 11px;
+  background: #f8fbfd;
+  color: #0f3f4a;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 180ms ease-out, background-color 180ms ease-out, box-shadow 180ms ease-out;
+}
+
+.doctor-encounter__artifact-toggle:hover {
+  border-color: #7bb7c4;
+  background: #f0f8f9;
+}
+
+.doctor-encounter__artifact-toggle:focus-visible,
+.doctor-encounter__artifact-submit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
+}
+
+.doctor-encounter__artifact-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #52616f;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.doctor-encounter__artifact-status.is-processing {
+  background: #e7f4f5;
+  color: #0f6d72;
+}
+
+.doctor-encounter__artifact-status.is-complete {
+  background: #e9f7ef;
+  color: #19734a;
+}
+
+.doctor-encounter__artifact-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid #d5e3eb;
+  border-radius: 13px;
+  background: #fbfdff;
+}
+
+.doctor-encounter__artifact-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.doctor-encounter__artifact-meta div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: #f2f7fa;
+}
+
+.doctor-encounter__artifact-meta span,
+.doctor-encounter__artifact-findings span,
+.doctor-encounter__artifact-note {
+  color: #5c6f7e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.doctor-encounter__artifact-meta strong {
+  overflow: hidden;
+  color: #183746;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doctor-encounter__artifact-result {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(180px, 1.1fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.doctor-encounter__artifact-preview {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: #0f172a;
+}
+
+.doctor-encounter__artifact-findings,
+.doctor-encounter__artifact-waiting,
+.doctor-encounter__artifact-setup {
+  display: grid;
+  gap: 8px;
+}
+
+.doctor-encounter__artifact-findings strong,
+.doctor-encounter__artifact-waiting strong {
+  color: #173d49;
+}
+
+.doctor-encounter__artifact-findings p,
+.doctor-encounter__artifact-waiting p,
+.doctor-encounter__artifact-note {
+  margin: 0;
+}
+
+.doctor-encounter__artifact-waiting {
+  padding: 3px 0;
+}
+
+.doctor-encounter__artifact-source-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.doctor-encounter__artifact-source-option span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.doctor-encounter__artifact-source-option small {
+  margin-left: auto;
+  color: #5c6f7e;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.doctor-encounter__artifact-submit {
+  justify-self: start;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid #0f766e;
+  border-radius: 10px;
+  background: #0f766e;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out, transform 180ms ease-out;
+}
+
+.doctor-encounter__artifact-submit:hover:not(:disabled) {
+  border-color: #0b615b;
+  background: #0b615b;
+  transform: translateY(-1px);
+}
+
+.doctor-encounter__artifact-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .doctor-encounter__request-state {
   display: inline-flex;
   align-items: center;
@@ -1386,6 +1797,22 @@ onBeforeUnmount(() => {
 
   .doctor-encounter__order-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .doctor-encounter__artifact-meta,
+  .doctor-encounter__artifact-result {
+    grid-template-columns: 1fr;
+  }
+
+  .doctor-encounter__artifact-submit {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .doctor-encounter__artifact-toggle,
+  .doctor-encounter__artifact-submit {
+    transition: none;
   }
 }
 </style>

@@ -127,6 +127,45 @@ export interface RegisterMedicalRequests {
   disposals: MedicalRequestItem[]
 }
 
+export type ArtifactSourceFormat = 'dicom' | 'nifti'
+export type ArtifactInferenceTaskState = 'queued' | 'running' | 'succeeded' | 'failed'
+
+export interface ArtifactInputSource {
+  source_ref: string
+  source_format: ArtifactSourceFormat
+}
+
+export interface ArtifactInferenceTask {
+  uuid: string
+  check_uuid: string
+  register_uuid: string
+  source_format: ArtifactSourceFormat | null
+  task_state: ArtifactInferenceTaskState
+  model_name: string
+  model_version?: string | null
+  model_weight_sha256?: string | null
+  threshold?: string | null
+  mask_object_ref?: string | null
+  overlay_object_ref?: string | null
+  result_metadata?: {
+    artifact_pixel_count?: number
+    selected_slice?: number
+    selected_slice_artifact_pixel_count?: number
+    image_size?: number[]
+    image_spacing?: number[]
+  } | null
+  error_code?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+}
+
+export interface ArtifactInferenceSubmitPayload {
+  source_image_ref: string
+  source_format: ArtifactSourceFormat
+  submitted_by_employee_uuid: string
+}
+
 export const medicalApi = {
   createRecord(payload: MedicalRecordCreatePayload) {
     return http.post<ApiEnvelope<{ uuid: string }>>('/api/v1/medical/record', payload)
@@ -168,5 +207,17 @@ export const medicalApi = {
   },
   getRegisterRequests(registerUuid: string) {
     return http.get<ApiEnvelope<RegisterMedicalRequests>>(`/api/v1/medical/requests/register/${registerUuid}`)
+  },
+  listArtifactInputSources() {
+    return http.get<ApiEnvelope<ArtifactInputSource[]>>('/api/v1/medical/artifact-inference/input-sources')
+  },
+  submitArtifactInferenceTask(checkUuid: string, payload: ArtifactInferenceSubmitPayload) {
+    return http.post<ApiEnvelope<ArtifactInferenceTask>>(`/api/v1/medical/check/${checkUuid}/artifact-inference`, payload)
+  },
+  getLatestArtifactInferenceTask(checkUuid: string) {
+    return http.get<ApiEnvelope<ArtifactInferenceTask>>(`/api/v1/medical/check/${checkUuid}/artifact-inference/latest`)
+  },
+  getArtifactInferenceOverlayUrl(taskUuid: string) {
+    return `/api/v1/medical/artifact-inference/${encodeURIComponent(taskUuid)}/overlay`
   },
 }
