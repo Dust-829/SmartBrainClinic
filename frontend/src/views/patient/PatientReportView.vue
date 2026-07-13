@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { patientApi, type PatientPublishedReport } from '@/api/patient'
@@ -13,9 +13,6 @@ const loading = ref(false)
 const loadError = ref('')
 const reports = ref<PatientPublishedReport[]>([])
 const expandedReportUuid = ref('')
-
-const checkCount = computed(() => reports.value.filter((report) => report.report_type === 'check').length)
-const inspectionCount = computed(() => reports.value.filter((report) => report.report_type === 'inspection').length)
 
 onMounted(() => {
   if (!session.patient?.uuid) {
@@ -73,22 +70,19 @@ function goBack() {
     <PatientFlowHeader title="报告查询" subtitle="仅展示医生审核并发布的检查、检验报告" back-label="返回首页" @back="goBack" />
 
     <main class="patient-report__content">
-      <section class="patient-report__overview" aria-live="polite">
-        <span class="patient-report__overview-icon" aria-hidden="true"></span>
-        <div class="patient-report__overview-copy">
+      <section class="patient-report__summary" aria-live="polite">
+        <span class="patient-report__summary-icon" aria-hidden="true"></span>
+        <div>
           <strong>已发布报告</strong>
-          <p>{{ reports.length ? '可查看医生结论与检验明细' : '医生审核发布后，可在这里查看' }}</p>
+          <p>{{ reports.length ? `当前可查看 ${reports.length} 份医生审核发布的报告` : '医生审核发布后，可在这里查看' }}</p>
         </div>
-        <div class="patient-report__overview-counts" aria-label="报告数量">
-          <span>检查 <b>{{ checkCount }}</b></span><span>检验 <b>{{ inspectionCount }}</b></span>
-        </div>
-        <button type="button" :disabled="loading" @click="loadReports">{{ loading ? '刷新中' : '刷新' }}</button>
+        <span class="patient-report__summary-count">{{ reports.length }} 份</span>
       </section>
 
       <section class="patient-report__panel" aria-labelledby="patient-report-list-title">
         <div class="patient-report__heading">
-          <div><h2 id="patient-report-list-title">报告明细</h2><p>仅展示经医生审核发布的结果</p></div>
-          <span v-if="reports.length">共 {{ reports.length }} 份</span>
+          <div><h2 id="patient-report-list-title">报告明细</h2><p>仅展示经医生审核发布的检查、检验结果</p></div>
+          <button type="button" :disabled="loading" @click="loadReports">{{ loading ? '刷新中' : '刷新' }}</button>
         </div>
 
         <div v-if="loading && !reports.length" class="patient-report__skeleton" aria-label="正在加载报告"><span v-for="index in 3" :key="index"></span></div>
@@ -128,20 +122,19 @@ function goBack() {
 
 <style scoped>
 .patient-report { min-height: 100vh; padding-bottom: calc(var(--patient-nav-height) + 24px); background: var(--patient-flow-page-bg); color: var(--patient-text); }
-.patient-report__content { display: grid; gap: 12px; margin-top: -22px; padding: 0 var(--patient-page-gutter) 24px; }
-.patient-report__overview { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 10px 12px; padding: 14px; border: 1px solid #d7e8f8; border-radius: 16px; background: #fff; box-shadow: 0 10px 24px rgba(28, 100, 162, .08); }
-.patient-report__overview-icon, .patient-report__type-icon, .patient-report__empty-icon { position: relative; flex: 0 0 auto; }
-.patient-report__overview-icon { width: 42px; height: 42px; border-radius: 13px; background: #eaf5ff; }
-.patient-report__overview-icon::before, .patient-report__overview-icon::after { position: absolute; left: 12px; width: 18px; border: 2px solid #187de9; border-radius: 4px; content: ''; }
-.patient-report__overview-icon::before { top: 8px; height: 24px; }.patient-report__overview-icon::after { top: 16px; height: 0; box-shadow: 0 6px #187de9; }
-.patient-report__overview-copy { min-width: 0; }.patient-report__overview-copy strong { display: block; color: #18395e; font-size: 16px; }.patient-report__overview-copy p { margin: 4px 0 0; color: #617f9f; font-size: 12px; line-height: 1.45; }
-.patient-report__overview-counts { grid-column: 2 / -1; display: flex; gap: 8px; }.patient-report__overview-counts span { padding: 5px 8px; border-radius: 8px; background: #f2f8fe; color: #66839f; font-size: 12px; }.patient-report__overview-counts b { margin-left: 4px; color: #1678df; font-size: 13px; }
-.patient-report__overview > button { min-height: 32px; border: 0; background: transparent; color: #1478df; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }.patient-report__overview > button:disabled { cursor: default; opacity: .55; }
+.patient-report__content { display: grid; gap: 14px; margin-top: -22px; padding: 0 var(--patient-page-gutter) 24px; }
+.patient-report__summary { display: flex; align-items: center; gap: 11px; padding: 14px; border: 1px solid #d7e8f8; border-radius: 16px; background: #fff; box-shadow: 0 10px 24px rgba(28, 100, 162, .08); }
+.patient-report__summary-icon, .patient-report__type-icon, .patient-report__empty-icon { position: relative; flex: 0 0 auto; }
+.patient-report__summary-icon { width: 42px; height: 42px; border-radius: 13px; background: #eaf5ff; }
+.patient-report__summary-icon::before, .patient-report__summary-icon::after { position: absolute; left: 12px; width: 18px; border: 2px solid #187de9; border-radius: 4px; content: ''; }
+.patient-report__summary-icon::before { top: 8px; height: 24px; }.patient-report__summary-icon::after { top: 16px; height: 0; box-shadow: 0 6px #187de9; }
+.patient-report__summary div { min-width: 0; flex: 1; }.patient-report__summary strong { display: block; color: #18395e; font-size: 16px; }.patient-report__summary p { margin: 4px 0 0; color: #617f9f; font-size: 12px; line-height: 1.45; }
+.patient-report__summary-count { flex: 0 0 auto; padding: 5px 9px; border-radius: 999px; background: #eaf6ff; color: #1478df; font-size: 12px; font-weight: 800; }
 .patient-report__panel { min-height: 376px; padding: 18px; border: 1px solid #d7e6f4; border-radius: 18px; background: #fff; box-shadow: 0 10px 25px rgba(28, 100, 162, .06); }
-.patient-report__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid #e7f0f8; }
+.patient-report__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid #e7f0f8; }
 .patient-report__heading h2 { margin: 0; color: #18395e; font-size: 19px; }
 .patient-report__heading p { margin: 5px 0 0; color: #718aa4; font-size: 12px; }
-.patient-report__heading > span { padding: 4px 8px; border-radius: 999px; background: #eaf6ff; color: #1478df; font-size: 12px; font-weight: 800; }
+.patient-report__heading > button { min-height: 30px; padding: 0 4px; border: 0; background: transparent; color: #1478df; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; }.patient-report__heading > button:disabled { cursor: default; opacity: .55; }
 .patient-report__list { display: grid; gap: 10px; padding-top: 14px; }
 .patient-report__list article { overflow: hidden; border: 1px solid #dfeaf4; border-radius: 13px; background: #fbfdff; }
 .patient-report__list article.is-expanded { border-color: #b8d8f5; background: #fff; }
@@ -168,7 +161,7 @@ function goBack() {
 .patient-report__detail dd strong { font-size: 13px; }.patient-report__detail dd small { color: #7890a9; font-size: 11px; }
 .patient-report__detail footer { padding-top: 11px; border-top: 1px dashed #dce9f5; color: #7890a9; font-size: 11px; }
 .patient-report__skeleton { display: grid; gap: 10px; padding-top: 15px; }.patient-report__skeleton span { height: 72px; border-radius: 13px; background: linear-gradient(90deg, #eef5fb 25%, #f8fbfe 37%, #eef5fb 63%); background-size: 400% 100%; animation: patient-report-loading 1.25s ease infinite; }
-.patient-report__empty { display: grid; justify-items: center; gap: 10px; padding: 44px 20px 28px; color: #5e7d9c; text-align: center; }.patient-report__empty strong { color: #244766; font-size: 16px; }.patient-report__empty p { max-width: 27ch; margin: 0; font-size: 13px; line-height: 1.65; }.patient-report__empty button { min-height: 36px; padding: 0 13px; border: 1px solid #1681ed; border-radius: 9px; background: #fff; color: #1478df; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }.patient-report__empty.is-error strong { color: #a84b36; }.patient-report__empty-icon { width: 50px; height: 50px; border-radius: 16px; background: #eaf5ff; }.patient-report__empty-icon::before { position: absolute; inset: 11px 13px; border: 2px solid #2585e9; border-radius: 4px; content: ''; }.patient-report__empty-icon::after { position: absolute; left: 20px; top: 25px; width: 11px; height: 2px; background: #2585e9; box-shadow: 0 5px #2585e9; content: ''; }
+.patient-report__empty { display: grid; justify-items: center; align-content: center; min-height: 285px; gap: 10px; padding: 26px 12px 12px; color: #5e7d9c; text-align: center; }.patient-report__empty strong { color: #1b3d62; font-size: 18px; }.patient-report__empty p { max-width: 280px; margin: 0; font-size: 13px; line-height: 1.65; }.patient-report__empty button { min-height: 42px; margin-top: 7px; padding: 0 16px; border: 1px solid #1684ed; border-radius: 11px; background: #fff; color: #1478df; font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; }.patient-report__empty.is-error strong { color: #ad4b1f; }.patient-report__empty-icon { width: 70px; height: 70px; border-radius: 50%; background: #eaf6ff; }.patient-report__empty-icon::before { position: absolute; left: 20px; top: 17px; width: 30px; height: 35px; border: 2px solid #1684ed; border-radius: 7px; content: ''; }.patient-report__empty-icon::after { position: absolute; left: 28px; top: 31px; width: 14px; height: 2px; border-radius: 2px; background: #1684ed; box-shadow: 0 7px #1684ed; content: ''; }
 @keyframes patient-report-loading { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
 @media (prefers-reduced-motion: reduce) { .patient-report__skeleton span { animation: none; }.patient-report__card-head i { transition: none; } }
 </style>

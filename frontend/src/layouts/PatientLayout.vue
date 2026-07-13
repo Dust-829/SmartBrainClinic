@@ -19,6 +19,7 @@ const immersiveRoutes = [
   'patient-payment',
   'patient-payments',
   'patient-payment-records',
+  'patient-reports',
   'patient-queue',
 ]
 const isImmersive = computed(() => immersiveRoutes.includes(String(route.name)))
