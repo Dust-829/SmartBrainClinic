@@ -1,0 +1,6 @@
+# Install these only in the dedicated local inference environment (py3106),
+# not into the Medical microservice's general dependency set.
+torch==2.11.0+cu130
+SimpleITK==2.5.5
+pydicom==3.0.2
+numpy==2.2.6

@@ -26,5 +26,9 @@ logs/
 frontend/node_modules/
 frontend/dist/
 
+# Local CT artifact model, source image data, and generated inference artifacts
+backend/runtime/models/
+backend/runtime/data/
+
 # 代码审查报告 (可选忽略)
 # code_review_report.md
