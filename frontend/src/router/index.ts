@@ -38,6 +38,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/patient/PatientHomeView.vue'),
       },
       {
+        path: 'hospital',
+        name: 'patient-hospital',
+        component: () => import('@/views/patient/PatientHospitalInfoView.vue'),
+      },
+      {
         path: 'profile',
         name: 'patient-profile',
         component: () => import('@/views/patient/PatientProfileView.vue'),

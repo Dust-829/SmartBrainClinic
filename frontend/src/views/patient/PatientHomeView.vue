@@ -68,7 +68,7 @@ const features = [
     subtitle: '\u79d1\u5ba4\u4ecb\u7ecd\u3001\u5c31\u8bca\u6307\u5357',
     icon: 'building',
     tone: 'teal',
-    action: () => undefined,
+    action: () => router.push('/patient/hospital'),
   },
 ]
 </script>
