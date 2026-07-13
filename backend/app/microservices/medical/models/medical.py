@@ -59,6 +59,57 @@ class CheckRequest(SQLModel, table=True):
     check_result: Optional[str] = Field(default=None, sa_column=Column(Text))
     check_state: str = Field(default=CheckState.UNPAID, max_length=64, nullable=False)
 
+
+class ArtifactInferenceTask(SQLModel, table=True):
+    """An internal CT artifact-segmentation task bound to one check request."""
+
+    __tablename__ = "artifact_inference_task"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    uuid: uuid_pkg.UUID = Field(default_factory=uuid_pkg.uuid4, unique=True, nullable=False, index=True)
+    check_uuid: uuid_pkg.UUID = Field(nullable=False, index=True)
+    register_uuid: uuid_pkg.UUID = Field(nullable=False, index=True)
+    submitted_by_employee_uuid: Optional[uuid_pkg.UUID] = Field(default=None)
+    source_image_ref: str = Field(max_length=1024, nullable=False)
+    source_format: Optional[str] = Field(default=None, max_length=32)
+    selected_series_ref: Optional[str] = Field(default=None, max_length=1024)
+    task_state: str = Field(default="queued", max_length=32, nullable=False, index=True)
+    model_name: str = Field(default="attention-unet2d", max_length=128, nullable=False)
+    model_version: Optional[str] = Field(default=None, max_length=128)
+    model_weight_sha256: Optional[str] = Field(default=None, max_length=64)
+    threshold: Optional[Decimal] = Field(default=None, max_digits=4, decimal_places=3)
+    mask_object_ref: Optional[str] = Field(default=None, max_length=1024)
+    overlay_object_ref: Optional[str] = Field(default=None, max_length=1024)
+    result_metadata: Optional[Any] = Field(default=None, sa_column=Column(JSONB))
+    error_code: Optional[str] = Field(default=None, max_length=64)
+    error_message: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=datetime.now, nullable=False)
+    started_at: Optional[datetime] = Field(default=None)
+    completed_at: Optional[datetime] = Field(default=None)
+
+
+class MedicalReport(SQLModel, table=True):
+    """A doctor-controlled report draft and publication record."""
+
+    __tablename__ = "medical_report"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    uuid: uuid_pkg.UUID = Field(default_factory=uuid_pkg.uuid4, unique=True, nullable=False, index=True)
+    register_uuid: uuid_pkg.UUID = Field(nullable=False, index=True)
+    source_request_uuid: uuid_pkg.UUID = Field(nullable=False, index=True)
+    report_type: str = Field(max_length=32, nullable=False)
+    report_state: str = Field(default="draft", max_length=32, nullable=False, index=True)
+    conclusion: Optional[str] = Field(default=None, sa_column=Column(Text))
+    structured_result: Optional[Any] = Field(default=None, sa_column=Column(JSONB))
+    artifact_task_uuid: Optional[uuid_pkg.UUID] = Field(default=None, index=True)
+    reviewer_employee_uuid: Optional[uuid_pkg.UUID] = Field(default=None)
+    reviewed_at: Optional[datetime] = Field(default=None)
+    published_at: Optional[datetime] = Field(default=None)
+    version: int = Field(default=1, nullable=False)
+    supersedes_report_uuid: Optional[uuid_pkg.UUID] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=datetime.now, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.now, nullable=False)
+
 class InspectionRequest(SQLModel, table=True):
     __tablename__ = "inspection_request"
     id: Optional[int] = Field(default=None, primary_key=True)
