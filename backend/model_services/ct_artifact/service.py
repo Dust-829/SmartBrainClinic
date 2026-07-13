@@ -55,8 +55,11 @@ def _list_input_sources() -> list[dict[str, str]]:
         if path.is_file() and (path.name.endswith(".nii") or path.name.endswith(".nii.gz")):
             sources.append({"source_ref": path.relative_to(INPUT_ROOT).as_posix(), "source_format": "nifti"})
         elif path.is_dir() and not any(child.is_dir() for child in path.iterdir()):
-            series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(str(path)) or []
-            if len(series_ids) == 1:
+            # This list endpoint is called while the doctor opens the encounter page.
+            # Reading every DICOM header to discover a SeriesInstanceUID makes the UI
+            # block on large local data sets. The inference path performs the strict
+            # single-series validation before it reads any volume.
+            if any(child.is_file() and child.suffix.lower() == ".dcm" for child in path.iterdir()):
                 sources.append({"source_ref": path.relative_to(INPUT_ROOT).as_posix(), "source_format": "dicom"})
     return sources
 

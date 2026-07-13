@@ -84,6 +84,15 @@ docker compose up -d postgres redis rabbitmq nacos
 
 ### 4. 启动服务
 
+演示时可通过统一脚本启动 Gateway、业务微服务、后台守护任务和独立的 CT 伪影推理服务：
+
+```powershell
+cd backend
+python run_microservices.py
+```
+
+CT 推理服务仍使用专用 `py3106` 环境，不会加载到 Medical 进程中。默认解释器为 `D:\develop\Anaconda\envs\py3106\python.exe`；如路径不同，先设置 `$env:CT_ARTIFACT_PYTHON`。脚本会检查 8013 的模型健康状态；模型未就绪只会影响影像分析，其他诊疗服务可继续运行。
+
 Windows 本地建议分别启动，便于查看每个服务日志：
 
 ```powershell

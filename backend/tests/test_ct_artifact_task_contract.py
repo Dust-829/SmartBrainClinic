@@ -61,3 +61,5 @@ def test_ct_artifact_service_keeps_input_and_output_references_relative():
     assert 'async with _inference_lock:' in source
     assert '@app.get("/v1/artifact-inputs")' in source
     assert '"mask_object_ref": f"output/{request.task_id}/artifact_mask.nii.gz"' in source
+    assert 'child.suffix.lower() == ".dcm"' in source
+    assert "The inference path performs the strict" in source

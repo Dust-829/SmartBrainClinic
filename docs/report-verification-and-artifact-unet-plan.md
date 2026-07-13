@@ -303,7 +303,7 @@ Medical 新增以下内部接口，暂不接入医生页面：
 - `frontend/src/views/doctor/DoctorEncounterView.vue`：在既有“本次挂号已开项目”中增加可展开的影像分析区。
 - `docs/assets/doctor-encounter-artifact-analysis-concept-2026-07-13.png`：本次接诊页内嵌影像分析概念图。
 
-### 第十阶段：统一启动脚本托管 CT 伪影推理微服务（计划，2026-07-14）
+### 第十阶段：统一启动脚本托管 CT 伪影推理微服务（已实施，2026-07-14）
 
 #### Goal
 
@@ -351,6 +351,14 @@ Medical 新增以下内部接口，暂不接入医生页面：
 2. 运行启动脚本并检查 8000 至 8005 与 8013 的端口；调用模型 `/health` 和 `/v1/artifact-inputs`。
 3. 选择一个已缴费 CT 检查单，完成“选择序列 → 开始影像分析 → 查询任务状态”的端到端回归；只核对任务和预览产物，不将掩码自动表述为诊断结论。
 4. 人为提供错误的 `CT_ARTIFACT_PYTHON` 或占用 8013，验证核心服务仍可启动、模型状态明确为不可用，且日志可定位原因。
+
+#### 实施验证（2026-07-14）
+
+- `run_microservices.py` 已将 CTArtifact 定义为使用 `py3106`、监听 `127.0.0.1:8013` 的非核心服务；支持用 `CT_ARTIFACT_PYTHON` 覆盖解释器。核心服务仍使用项目当前 Python 解释器。
+- 启动配置测试与既有 CT 任务契约测试共 5 项通过；`python -m py_compile run_microservices.py verify_services.py` 通过。
+- 使用 `D:\develop\Anaconda\envs\py3106\python.exe` 实际启动模型服务，`/health` 返回 `attention-unet2d`，`/v1/artifact-inputs` 在 0.593 秒内列出 46 个本地 DICOM 序列。
+- 对其中一个本地 CT 序列实际调用 `/v1/artifact-segmentation` 成功，耗时 15.906 秒，并生成受控的 mask NIfTI 与叠加预览 PNG；该结果仅验证推理链路，不自动形成诊断结论。
+- 当前 8000 至 8005 已由既有进程监听，统一启动脚本按端口冲突保护主动退出，未接管或终止这些正在运行的服务。下次停止旧服务后执行 `python run_microservices.py`，即可由统一脚本一并托管 8013。
 
 ## Risks
 
