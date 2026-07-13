@@ -53,10 +53,6 @@ function goDepartments() {
   router.push('/patient/departments')
 }
 
-function goHome() {
-  router.push('/patient/home')
-}
-
 onMounted(() => {
   void loadRecords()
 })
@@ -71,17 +67,9 @@ watch(
 
 <template>
   <div class="patient-register-history-shell">
-    <header class="patient-register-history-hero">
-      <div class="patient-register-history-hero__top">
-        <button type="button" class="patient-register-history-back" aria-label="返回首页" @click="goHome">
-          <span aria-hidden="true"></span>
-        </button>
-        <p class="patient-register-history-hero__eyebrow">我的就诊</p>
-      </div>
-      <div>
-        <h1>挂号记录</h1>
-        <p class="patient-register-history-hero__description">{{ isLoggedIn ? '查看当前患者的线上挂号与候诊信息' : '登录后查看个人挂号历史' }}</p>
-      </div>
+    <header class="patient-register-history-hero patient-flow-hero">
+      <h1>挂号记录</h1>
+      <p>{{ isLoggedIn ? '查看当前患者的线上挂号与候诊信息' : '登录后查看个人挂号历史' }}</p>
     </header>
 
     <main class="patient-register-history-content">
@@ -174,72 +162,30 @@ watch(
 }
 
 .patient-register-history-hero {
-  padding: 20px var(--patient-page-gutter) 24px;
-  color: var(--patient-text);
-}
-
-.patient-register-history-hero__top {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  padding: 42px var(--patient-page-gutter) 92px;
+  background: linear-gradient(135deg, #087df6 0%, #35a7ff 100%);
+  color: #fff;
 }
 
 .patient-register-history-hero h1 {
-  margin: 10px 0 0;
-  font-size: 28px;
+  margin: 0 0 8px;
+  font-size: 30px;
   line-height: 1.2;
   text-wrap: balance;
 }
 
-.patient-register-history-hero__eyebrow,
-.patient-register-history-hero__description {
-  margin: 0;
-}
-
-.patient-register-history-hero__eyebrow {
-  color: var(--patient-primary);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.patient-register-history-hero__description {
+.patient-register-history-hero p {
   max-width: 28em;
-  margin-top: 8px;
-  color: var(--patient-text-muted);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.patient-register-history-back {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 1px solid var(--patient-border);
-  border-radius: 50%;
-  background: var(--patient-surface);
-  color: var(--patient-primary);
-  box-shadow: 0 8px 20px rgba(31, 92, 153, 0.08);
-  cursor: pointer;
-}
-
-.patient-register-history-back span {
-  width: 10px;
-  height: 10px;
-  border-bottom: 2px solid currentColor;
-  border-left: 2px solid currentColor;
-  transform: translateX(2px) rotate(45deg);
-}
-
-.patient-register-history-back:focus-visible {
-  outline: 3px solid rgba(8, 124, 240, 0.28);
-  outline-offset: 2px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 16px;
+  line-height: 1.7;
 }
 
 .patient-register-history-content {
   display: grid;
-  gap: 16px;
+  gap: 14px;
+  margin-top: var(--patient-flow-hero-content-offset);
   padding: 0 var(--patient-page-gutter);
 }
 
