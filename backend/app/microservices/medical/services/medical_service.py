@@ -75,6 +75,7 @@ def serialize_medical_report(report: MedicalReport) -> dict:
         "report_type": report.report_type,
         "report_state": report.report_state,
         "conclusion": report.conclusion,
+        "structured_result": report.structured_result,
         "artifact_task_uuid": str(report.artifact_task_uuid) if report.artifact_task_uuid else None,
         "reviewer_employee_uuid": str(report.reviewer_employee_uuid) if report.reviewer_employee_uuid else None,
         "reviewed_at": report.reviewed_at.isoformat() if report.reviewed_at else None,
@@ -155,6 +156,165 @@ async def get_latest_check_report(session: AsyncSession, check_uuid: str) -> Med
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def get_latest_inspection_report(session: AsyncSession, inspection_uuid: str) -> MedicalReport | None:
+    result = await session.execute(
+        select(MedicalReport)
+        .where(
+            MedicalReport.source_request_uuid == uuid_pkg.UUID(inspection_uuid),
+            MedicalReport.report_type == "inspection",
+        )
+        .order_by(MedicalReport.version.desc(), MedicalReport.created_at.desc(), MedicalReport.id.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def ensure_inspection_report_doctor_assignment(
+    inspection: InspectionRequest,
+    employee_uuid: uuid_pkg.UUID,
+) -> None:
+    register = await PatientClient.get_register(inspection.register_uuid)
+    if not register or not register.get("employee_uuid"):
+        raise ValueError("未能确认本次挂号的接诊医生")
+
+    try:
+        assigned_employee_uuid = uuid_pkg.UUID(str(register["employee_uuid"]))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("本次挂号的接诊医生信息无效") from exc
+
+    if assigned_employee_uuid != employee_uuid:
+        raise ValueError("当前医生无权处理该检验报告")
+
+
+async def save_inspection_report_draft(
+    session: AsyncSession,
+    inspection_uuid: str,
+    conclusion: str,
+    structured_result: list[dict[str, Any]],
+    author_employee_uuid: uuid_pkg.UUID,
+) -> MedicalReport:
+    normalized_conclusion = conclusion.strip()
+    normalized_result = [item for item in structured_result if item.get("item_name", "").strip() and item.get("value", "").strip()]
+    if not normalized_conclusion:
+        raise ValueError("检验报告结论不能为空")
+    if not normalized_result:
+        raise ValueError("请至少填写一项检验结果")
+
+    inspection_result = await session.execute(select(InspectionRequest).where(InspectionRequest.uuid == uuid_pkg.UUID(inspection_uuid)))
+    inspection = inspection_result.scalar_one_or_none()
+    if not inspection:
+        raise ValueError("检验单不存在")
+    if normalize_inspection_state(inspection.inspection_state) != InspectionState.EXECUTED:
+        raise ValueError("检验单执行完成后才能保存正式报告")
+    await ensure_inspection_report_doctor_assignment(inspection, author_employee_uuid)
+
+    report = await get_latest_inspection_report(session, inspection_uuid)
+    if report and report.report_state == "published":
+        raise ValueError("已发布报告不可直接修改，请创建更正版本")
+
+    if report is None:
+        report = MedicalReport(
+            register_uuid=inspection.register_uuid,
+            source_request_uuid=inspection.uuid,
+            report_type="inspection",
+            report_state="draft",
+            conclusion=normalized_conclusion,
+            structured_result=normalized_result,
+        )
+    else:
+        report.conclusion = normalized_conclusion
+        report.structured_result = normalized_result
+        report.updated_at = datetime.now()
+
+    session.add(report)
+    await session.flush()
+    return report
+
+
+async def publish_inspection_report(
+    session: AsyncSession,
+    report_uuid: str,
+    reviewer_employee_uuid: uuid_pkg.UUID,
+) -> MedicalReport:
+    result = await session.execute(
+        select(MedicalReport).where(MedicalReport.uuid == uuid_pkg.UUID(report_uuid)).with_for_update()
+    )
+    report = result.scalar_one_or_none()
+    if not report or report.report_type != "inspection":
+        raise ValueError("检验报告不存在")
+    inspection_result = await session.execute(select(InspectionRequest).where(InspectionRequest.uuid == report.source_request_uuid))
+    inspection = inspection_result.scalar_one_or_none()
+    if not inspection:
+        raise ValueError("检验单不存在")
+    if normalize_inspection_state(inspection.inspection_state) != InspectionState.EXECUTED:
+        raise ValueError("检验单执行完成后才能审核发布报告")
+    await ensure_inspection_report_doctor_assignment(inspection, reviewer_employee_uuid)
+    if report.report_state == "published":
+        return report
+    if not (report.conclusion or "").strip() or not report.structured_result:
+        raise ValueError("请先填写检验结论和结构化结果")
+
+    now = datetime.now()
+    report.report_state = "published"
+    report.reviewer_employee_uuid = reviewer_employee_uuid
+    report.reviewed_at = now
+    report.published_at = now
+    report.updated_at = now
+    session.add(report)
+    await session.flush()
+    return report
+
+
+async def create_inspection_report_correction_draft(
+    session: AsyncSession,
+    report_uuid: str,
+    author_employee_uuid: uuid_pkg.UUID,
+) -> MedicalReport:
+    result = await session.execute(
+        select(MedicalReport).where(MedicalReport.uuid == uuid_pkg.UUID(report_uuid)).with_for_update()
+    )
+    source_report = result.scalar_one_or_none()
+    if not source_report or source_report.report_type != "inspection":
+        raise ValueError("检验报告不存在")
+    if source_report.report_state != "published":
+        raise ValueError("仅已发布报告可以创建更正版本")
+
+    inspection_result = await session.execute(select(InspectionRequest).where(InspectionRequest.uuid == source_report.source_request_uuid))
+    inspection = inspection_result.scalar_one_or_none()
+    if not inspection:
+        raise ValueError("检验单不存在")
+    if normalize_inspection_state(inspection.inspection_state) != InspectionState.EXECUTED:
+        raise ValueError("检验单执行完成后才能创建更正版本")
+    await ensure_inspection_report_doctor_assignment(inspection, author_employee_uuid)
+
+    existing_result = await session.execute(
+        select(MedicalReport)
+        .where(
+            MedicalReport.supersedes_report_uuid == source_report.uuid,
+            MedicalReport.report_state == "draft",
+        )
+        .order_by(MedicalReport.created_at.desc(), MedicalReport.id.desc())
+        .limit(1)
+    )
+    existing_draft = existing_result.scalar_one_or_none()
+    if existing_draft:
+        return existing_draft
+
+    correction = MedicalReport(
+        register_uuid=source_report.register_uuid,
+        source_request_uuid=source_report.source_request_uuid,
+        report_type="inspection",
+        report_state="draft",
+        conclusion=source_report.conclusion,
+        structured_result=source_report.structured_result,
+        version=source_report.version + 1,
+        supersedes_report_uuid=source_report.uuid,
+    )
+    session.add(correction)
+    await session.flush()
+    return correction
 
 
 async def save_check_report_draft(

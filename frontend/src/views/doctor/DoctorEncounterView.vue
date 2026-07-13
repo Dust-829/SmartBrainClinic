@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   type ArtifactInferenceTask,
   type ArtifactInputSource,
+  type InspectionReportResultItem,
   type MedicalReport,
   medicalApi,
   type MedicalRecordDraft,
@@ -65,6 +66,13 @@ const reportDraftByCheck = reactive<Record<string, string>>({})
 const reportSavingByCheck = reactive<Record<string, boolean>>({})
 const reportPublishingByCheck = reactive<Record<string, boolean>>({})
 const reportCorrectingByCheck = reactive<Record<string, boolean>>({})
+const expandedReportInspectionUuid = ref<string | null>(null)
+const reportByInspection = reactive<Record<string, MedicalReport | null>>({})
+const reportDraftByInspection = reactive<Record<string, string>>({})
+const reportResultsByInspection = reactive<Record<string, InspectionReportResultItem[]>>({})
+const reportSavingByInspection = reactive<Record<string, boolean>>({})
+const reportPublishingByInspection = reactive<Record<string, boolean>>({})
+const reportCorrectingByInspection = reactive<Record<string, boolean>>({})
 
 let queuePollTimer: number | null = null
 let artifactTaskPollTimer: number | null = null
@@ -215,7 +223,7 @@ async function loadRequestQueue(options: { silent?: boolean } = {}) {
     requestQueue.checks = response.data.data?.checks ?? []
     requestQueue.inspections = response.data.data?.inspections ?? []
     requestQueue.disposals = response.data.data?.disposals ?? []
-    await Promise.all([loadArtifactTasks(), loadCheckReports()])
+    await Promise.all([loadArtifactTasks(), loadCheckReports(), loadInspectionReports()])
   } catch (error) {
     requestQueue.checks = []
     requestQueue.inspections = []
@@ -277,6 +285,43 @@ async function loadCheckReports() {
           if (reportDraftByCheck[item.uuid] === undefined) {
             reportDraftByCheck[item.uuid] = ''
           }
+        }
+      }
+    }),
+  )
+}
+
+function emptyInspectionResult(): InspectionReportResultItem {
+  return { item_name: '', value: '', unit: '', reference_range: '' }
+}
+
+function normalizeInspectionResults(value: MedicalReport['structured_result']): InspectionReportResultItem[] {
+  if (!Array.isArray(value) || !value.length) return [emptyInspectionResult()]
+  return value.map((item) => ({
+    item_name: String(item.item_name ?? ''),
+    value: String(item.value ?? ''),
+    unit: item.unit ?? '',
+    reference_range: item.reference_range ?? '',
+  }))
+}
+
+async function loadInspectionReports() {
+  await Promise.all(
+    requestQueue.inspections.map(async (item) => {
+      try {
+        const response = await medicalApi.getLatestInspectionReport(item.uuid)
+        const report = response.data.data ?? null
+        reportByInspection[item.uuid] = report
+        if (report && (reportDraftByInspection[item.uuid] === undefined || report.report_state === 'published')) {
+          reportDraftByInspection[item.uuid] = report.conclusion ?? ''
+          reportResultsByInspection[item.uuid] = normalizeInspectionResults(report.structured_result)
+        }
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response?.status
+        if (status === 404) {
+          reportByInspection[item.uuid] = null
+          reportDraftByInspection[item.uuid] ??= ''
+          reportResultsByInspection[item.uuid] ??= [emptyInspectionResult()]
         }
       }
     }),
@@ -747,6 +792,126 @@ async function publishCheckReport(item: MedicalRequestItem) {
   }
 }
 
+function toggleInspectionReport(inspectionUuid: string) {
+  expandedReportInspectionUuid.value = expandedReportInspectionUuid.value === inspectionUuid ? null : inspectionUuid
+}
+
+function isInspectionReportEligible(item: MedicalRequestItem) {
+  return item.state.includes('已执行')
+}
+
+function canSaveInspectionReport(item: MedicalRequestItem) {
+  const results = reportResultsByInspection[item.uuid] ?? []
+  return Boolean(
+    doctor.value?.employeeUuid &&
+      isInspectionReportEligible(item) &&
+      reportByInspection[item.uuid]?.report_state !== 'published' &&
+      reportDraftByInspection[item.uuid]?.trim() &&
+      results.some((result) => result.item_name.trim() && result.value.trim()) &&
+      !reportSavingByInspection[item.uuid],
+  )
+}
+
+async function saveInspectionReportDraft(item: MedicalRequestItem, silent = false) {
+  if (!canSaveInspectionReport(item)) return null
+
+  reportSavingByInspection[item.uuid] = true
+  try {
+    const response = await medicalApi.saveInspectionReportDraft(item.uuid, {
+      conclusion: reportDraftByInspection[item.uuid].trim(),
+      structured_result: (reportResultsByInspection[item.uuid] ?? [])
+        .filter((result) => result.item_name.trim() && result.value.trim())
+        .map((result) => ({
+          item_name: result.item_name.trim(),
+          value: result.value.trim(),
+          unit: result.unit?.trim() || undefined,
+          reference_range: result.reference_range?.trim() || undefined,
+        })),
+      author_employee_uuid: doctor.value?.employeeUuid ?? '',
+    })
+    const report = response.data.data ?? null
+    reportByInspection[item.uuid] = report
+    if (!silent) ElMessage.success('检验报告草稿已保存。')
+    return report
+  } catch (error) {
+    if (!silent) ElMessage.error(getErrorMessage(error, '检验报告草稿保存失败，请稍后重试。'))
+    return null
+  } finally {
+    reportSavingByInspection[item.uuid] = false
+  }
+}
+
+function canCreateInspectionReportCorrection(item: MedicalRequestItem) {
+  return Boolean(
+    doctor.value?.employeeUuid &&
+      isInspectionReportEligible(item) &&
+      reportByInspection[item.uuid]?.report_state === 'published' &&
+      !reportCorrectingByInspection[item.uuid],
+  )
+}
+
+async function createInspectionReportCorrectionDraft(item: MedicalRequestItem) {
+  const report = reportByInspection[item.uuid]
+  const employeeUuid = doctor.value?.employeeUuid
+  if (!report || !employeeUuid || !canCreateInspectionReportCorrection(item)) return
+
+  reportCorrectingByInspection[item.uuid] = true
+  try {
+    const response = await medicalApi.createInspectionReportCorrectionDraft(report.uuid, employeeUuid)
+    const correction = response.data.data ?? null
+    reportByInspection[item.uuid] = correction
+    reportDraftByInspection[item.uuid] = correction?.conclusion ?? ''
+    reportResultsByInspection[item.uuid] = normalizeInspectionResults(correction?.structured_result)
+    ElMessage.success('已创建检验报告更正草稿。')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '创建检验报告更正草稿失败，请稍后重试。'))
+  } finally {
+    reportCorrectingByInspection[item.uuid] = false
+  }
+}
+
+function canPublishInspectionReport(item: MedicalRequestItem) {
+  return Boolean(
+    doctor.value?.employeeUuid &&
+      isInspectionReportEligible(item) &&
+      reportByInspection[item.uuid]?.report_state !== 'published' &&
+      reportDraftByInspection[item.uuid]?.trim() &&
+      (reportResultsByInspection[item.uuid] ?? []).some((result) => result.item_name.trim() && result.value.trim()) &&
+      !reportPublishingByInspection[item.uuid],
+  )
+}
+
+async function publishInspectionReport(item: MedicalRequestItem) {
+  const employeeUuid = doctor.value?.employeeUuid
+  if (!employeeUuid || !canPublishInspectionReport(item)) return
+
+  reportPublishingByInspection[item.uuid] = true
+  try {
+    let report = reportByInspection[item.uuid]
+    if (!report) report = await saveInspectionReportDraft(item, true)
+    if (!report) return
+
+    const response = await medicalApi.publishInspectionReport(report.uuid, employeeUuid)
+    reportByInspection[item.uuid] = response.data.data ?? null
+    ElMessage.success('检验报告已审核发布。')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '检验报告发布失败，请稍后重试。'))
+  } finally {
+    reportPublishingByInspection[item.uuid] = false
+  }
+}
+
+function addInspectionResultRow(inspectionUuid: string) {
+  reportResultsByInspection[inspectionUuid] ??= []
+  reportResultsByInspection[inspectionUuid].push(emptyInspectionResult())
+}
+
+function removeInspectionResultRow(inspectionUuid: string, index: number) {
+  const results = reportResultsByInspection[inspectionUuid]
+  if (!results || results.length <= 1) return
+  results.splice(index, 1)
+}
+
 function stateClass(state: string) {
   if (state.includes('已执行')) {
     return 'is-done'
@@ -1152,6 +1317,70 @@ onBeforeUnmount(() => {
                                   >
                                     {{ reportPublishingByCheck[item.uuid] ? '发布中...' : '审核并发布' }}
                                   </button>
+                                </div>
+                              </template>
+                            </div>
+                          </section>
+                          <section v-if="group.key === 'inspection'" class="doctor-encounter__check-report">
+                            <button
+                              type="button"
+                              class="doctor-encounter__report-toggle"
+                              :aria-expanded="expandedReportInspectionUuid === item.uuid"
+                              @click="toggleInspectionReport(item.uuid)"
+                            >
+                              <span>检验报告</span>
+                              <span class="doctor-encounter__report-status" :class="checkReportStateClass(reportByInspection[item.uuid])">
+                                {{ checkReportStateLabel(reportByInspection[item.uuid]) }}
+                              </span>
+                            </button>
+
+                            <div v-if="expandedReportInspectionUuid === item.uuid" class="doctor-encounter__report-panel">
+                              <div v-if="reportByInspection[item.uuid]?.report_state === 'published'" class="doctor-encounter__report-published">
+                                <div class="doctor-encounter__report-published-meta">
+                                  <span>医生确认结论</span>
+                                  <strong>已发布 · v{{ reportByInspection[item.uuid]?.version }}</strong>
+                                </div>
+                                <p>{{ reportByInspection[item.uuid]?.conclusion }}</p>
+                                <div class="doctor-encounter__inspection-result-readonly">
+                                  <div v-for="(result, index) in reportByInspection[item.uuid]?.structured_result ?? []" :key="`${result.item_name}-${index}`">
+                                    <strong>{{ result.item_name }}</strong>
+                                    <span>{{ result.value }}{{ result.unit ? ` ${result.unit}` : '' }}</span>
+                                    <small v-if="result.reference_range">参考范围：{{ result.reference_range }}</small>
+                                  </div>
+                                </div>
+                                <small>发布时间：{{ formatCreationTime(reportByInspection[item.uuid]?.published_at) }}</small>
+                                <div class="doctor-encounter__report-actions">
+                                  <button type="button" class="doctor-encounter__report-save" :disabled="!canCreateInspectionReportCorrection(item)" @click="createInspectionReportCorrectionDraft(item)">
+                                    {{ reportCorrectingByInspection[item.uuid] ? '创建中...' : '创建更正版本' }}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <template v-else>
+                                <label class="doctor-encounter__field">
+                                  <span>医生结论</span>
+                                  <textarea
+                                    v-model="reportDraftByInspection[item.uuid]"
+                                    rows="3"
+                                    :disabled="!isInspectionReportEligible(item) || reportSavingByInspection[item.uuid] || reportPublishingByInspection[item.uuid]"
+                                    placeholder="填写检验结果的临床解释与医生确认结论"
+                                  />
+                                </label>
+                                <div class="doctor-encounter__inspection-results">
+                                  <div class="doctor-encounter__inspection-results-heading"><strong>结构化检验结果</strong><button type="button" :disabled="!isInspectionReportEligible(item)" @click="addInspectionResultRow(item.uuid)">添加项目</button></div>
+                                  <div v-for="(result, index) in reportResultsByInspection[item.uuid] ?? []" :key="index" class="doctor-encounter__inspection-result-row">
+                                    <input v-model="result.item_name" :disabled="!isInspectionReportEligible(item)" placeholder="项目名称" />
+                                    <input v-model="result.value" :disabled="!isInspectionReportEligible(item)" placeholder="结果" />
+                                    <input v-model="result.unit" :disabled="!isInspectionReportEligible(item)" placeholder="单位（可选）" />
+                                    <input v-model="result.reference_range" :disabled="!isInspectionReportEligible(item)" placeholder="参考范围（可选）" />
+                                    <button type="button" :disabled="(reportResultsByInspection[item.uuid] ?? []).length <= 1 || !isInspectionReportEligible(item)" @click="removeInspectionResultRow(item.uuid, index)">删除</button>
+                                  </div>
+                                </div>
+                                <p v-if="!isInspectionReportEligible(item)" class="doctor-encounter__report-note">检验完成执行后可填写并审核报告。</p>
+                                <p v-else class="doctor-encounter__report-note">{{ reportByInspection[item.uuid]?.supersedes_report_uuid ? '当前为报告更正草稿，发布后将形成新的版本记录。' : '正式检验报告同时保存医生结论与结构化结果。' }}</p>
+                                <div class="doctor-encounter__report-actions">
+                                  <button type="button" class="doctor-encounter__report-save" :disabled="!canSaveInspectionReport(item)" @click="saveInspectionReportDraft(item)">{{ reportSavingByInspection[item.uuid] ? '保存中...' : '保存草稿' }}</button>
+                                  <button type="button" class="doctor-encounter__report-publish" :disabled="!canPublishInspectionReport(item)" @click="publishInspectionReport(item)">{{ reportPublishingByInspection[item.uuid] ? '发布中...' : '审核并发布' }}</button>
                                 </div>
                               </template>
                             </div>
@@ -2054,6 +2283,90 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
 }
 
+.doctor-encounter__inspection-results {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid #dfe7ee;
+  border-radius: 11px;
+  background: #f8fbfd;
+}
+
+.doctor-encounter__inspection-results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #2b4a5b;
+  font-size: 13px;
+}
+
+.doctor-encounter__inspection-results-heading button,
+.doctor-encounter__inspection-result-row button {
+  min-height: 32px;
+  border: 1px solid #9eb5c4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #2f586c;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.doctor-encounter__inspection-results-heading button { padding: 0 10px; }
+
+.doctor-encounter__inspection-result-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(100px, 1fr) minmax(80px, .7fr) minmax(110px, 1fr) auto;
+  gap: 8px;
+}
+
+.doctor-encounter__inspection-result-row input {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid #cbd9e4;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #183746;
+  font: inherit;
+  font-size: 12px;
+}
+
+.doctor-encounter__inspection-result-row input:focus {
+  outline: none;
+  border-color: #4f9abb;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, .11);
+}
+
+.doctor-encounter__inspection-result-row button { padding: 0 9px; }
+
+.doctor-encounter__inspection-results button:disabled,
+.doctor-encounter__inspection-result-row input:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
+.doctor-encounter__inspection-result-readonly {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f5f9fb;
+}
+
+.doctor-encounter__inspection-result-readonly div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 12px;
+  align-items: baseline;
+}
+
+.doctor-encounter__inspection-result-readonly strong { color: #27495b; font-size: 13px; }
+.doctor-encounter__inspection-result-readonly span { color: #0f766e; font-size: 13px; font-weight: 700; }
+.doctor-encounter__inspection-result-readonly small { grid-column: 1 / -1; color: #64798a; font-size: 12px; }
+
 .doctor-encounter__request-state {
   display: inline-flex;
   align-items: center;
@@ -2169,6 +2482,14 @@ onBeforeUnmount(() => {
   .doctor-encounter__artifact-meta,
   .doctor-encounter__artifact-result {
     grid-template-columns: 1fr;
+  }
+
+  .doctor-encounter__inspection-result-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .doctor-encounter__inspection-result-row button {
+    grid-column: 1 / -1;
   }
 
   .doctor-encounter__artifact-submit {

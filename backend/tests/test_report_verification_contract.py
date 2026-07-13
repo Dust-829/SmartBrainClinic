@@ -48,6 +48,20 @@ def test_medical_api_exposes_check_report_draft_and_publish_routes():
     assert '@router.post("/report/{report_uuid}/correction-draft"' in source
 
 
+def test_medical_api_exposes_structured_inspection_report_routes():
+    source = Path("app/microservices/medical/api/medical.py").read_text(encoding="utf-8")
+    service_source = Path("app/microservices/medical/services/medical_service.py").read_text(encoding="utf-8")
+
+    assert 'class InspectionReportResultItem(BaseModel):' in source
+    assert '@router.get("/inspection/{uuid}/report/latest"' in source
+    assert '@router.put("/inspection/{uuid}/report"' in source
+    assert '@router.post("/inspection-report/{report_uuid}/publish"' in source
+    assert '@router.post("/inspection-report/{report_uuid}/correction-draft"' in source
+    assert 'async def save_inspection_report_draft(' in service_source
+    assert 'async def publish_inspection_report(' in service_source
+    assert 'async def create_inspection_report_correction_draft(' in service_source
+
+
 def test_published_check_report_is_not_overwritten_by_draft_save():
     source = Path("app/microservices/medical/services/medical_service.py").read_text(encoding="utf-8")
 
@@ -127,6 +141,61 @@ def test_check_report_draft_can_be_saved_then_published_after_execution():
     assert data["published_state"] == "published"
     assert data["published_flushed"] is True
     assert data["has_published_at"] is True
+
+
+def test_inspection_report_draft_can_be_saved_then_published_after_execution():
+    data = run_isolated_python(
+        """
+        import asyncio
+        import json
+        import uuid
+        from app.common.enums import InspectionState
+        from app.microservices.medical.models.medical import InspectionRequest
+        from app.microservices.medical.services import medical_service
+
+        class ScalarResult:
+            def __init__(self, row): self.row = row
+            def scalar_one_or_none(self): return self.row
+
+        class FakeSession:
+            def __init__(self, rows):
+                self.rows = list(rows)
+                self.flushed = False
+            async def execute(self, statement): return ScalarResult(self.rows.pop(0))
+            def add(self, value): pass
+            async def flush(self): self.flushed = True
+
+        async def main():
+            doctor_uuid = uuid.uuid4()
+            async def get_register(_register_uuid): return {'employee_uuid': str(doctor_uuid)}
+            medical_service.PatientClient.get_register = staticmethod(get_register)
+            inspection = InspectionRequest(
+                register_uuid=uuid.uuid4(), medical_technology_id=1,
+                inspection_state=InspectionState.EXECUTED.value,
+            )
+            draft_session = FakeSession([inspection, None])
+            report = await medical_service.save_inspection_report_draft(
+                draft_session, str(inspection.uuid), '检验结果结合临床判断。',
+                [{'item_name': '白细胞', 'value': '6.2', 'unit': '10^9/L', 'reference_range': '3.5-9.5'}],
+                doctor_uuid,
+            )
+            publish_session = FakeSession([report, inspection])
+            published = await medical_service.publish_inspection_report(publish_session, str(report.uuid), doctor_uuid)
+            print(json.dumps({
+                'state_after_publish': report.report_state,
+                'draft_result': report.structured_result,
+                'published_state': published.report_state,
+                'published_at': published.published_at is not None,
+            }))
+
+        asyncio.run(main())
+        """
+    )
+
+    assert data["state_after_publish"] == "published"
+    assert data["draft_result"][0]["item_name"] == "白细胞"
+    assert data["published_state"] == "published"
+    assert data["published_at"] is True
 
 
 def test_published_report_creates_a_linked_correction_draft_without_overwriting_source():

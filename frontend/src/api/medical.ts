@@ -175,6 +175,7 @@ export interface MedicalReport {
   report_type: string
   report_state: MedicalReportState
   conclusion?: string | null
+  structured_result?: InspectionReportResultItem[] | null
   artifact_task_uuid?: string | null
   reviewer_employee_uuid?: string | null
   reviewed_at?: string | null
@@ -188,6 +189,19 @@ export interface MedicalReport {
 export interface CheckReportDraftPayload {
   conclusion: string
   artifact_task_uuid?: string
+  author_employee_uuid: string
+}
+
+export interface InspectionReportResultItem {
+  item_name: string
+  value: string
+  unit?: string | null
+  reference_range?: string | null
+}
+
+export interface InspectionReportDraftPayload {
+  conclusion: string
+  structured_result: InspectionReportResultItem[]
   author_employee_uuid: string
 }
 
@@ -258,6 +272,22 @@ export const medicalApi = {
   },
   createCheckReportCorrectionDraft(reportUuid: string, authorEmployeeUuid: string) {
     return http.post<ApiEnvelope<MedicalReport>>(`/api/v1/medical/report/${reportUuid}/correction-draft`, {
+      author_employee_uuid: authorEmployeeUuid,
+    })
+  },
+  getLatestInspectionReport(inspectionUuid: string) {
+    return http.get<ApiEnvelope<MedicalReport>>(`/api/v1/medical/inspection/${inspectionUuid}/report/latest`)
+  },
+  saveInspectionReportDraft(inspectionUuid: string, payload: InspectionReportDraftPayload) {
+    return http.put<ApiEnvelope<MedicalReport>>(`/api/v1/medical/inspection/${inspectionUuid}/report`, payload)
+  },
+  publishInspectionReport(reportUuid: string, reviewerEmployeeUuid: string) {
+    return http.post<ApiEnvelope<MedicalReport>>(`/api/v1/medical/inspection-report/${reportUuid}/publish`, {
+      reviewer_employee_uuid: reviewerEmployeeUuid,
+    })
+  },
+  createInspectionReportCorrectionDraft(reportUuid: string, authorEmployeeUuid: string) {
+    return http.post<ApiEnvelope<MedicalReport>>(`/api/v1/medical/inspection-report/${reportUuid}/correction-draft`, {
       author_employee_uuid: authorEmployeeUuid,
     })
   },

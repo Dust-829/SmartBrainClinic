@@ -1,7 +1,7 @@
 # 检查检验报告查验与伪影掩码 UNet2D 接入计划
 
 更新时间：2026-07-13
-状态：模型契约已核验；尚未实施。
+状态：模型契约已核验；医生端检查与检验报告闭环已实现，患者端报告查验待实施。
 
 ## Goal
 
@@ -259,6 +259,19 @@ Medical 新增以下内部接口，暂不接入医生页面：
 ### 第七阶段：报告更正版本与接诊医生校验（2026-07-13）
 
 报告草稿保存、审核发布和创建更正草稿现在统一绑定到挂号记录的 `employee_uuid`：Medical 服务会通过 Patient 服务取得该挂号的实际接诊医生，再核对请求中的员工 UUID；其他医生不能直接操作报告。
+
+### 第八阶段：检验报告结构化录入与审核发布（2026-07-13）
+
+检验项目已复用 `medical_report` 的独立报告状态，不再把“检验已执行”直接等同于“报告已发布”。医生在既有接诊页的检验项目内展开“检验报告”后，可填写医生结论和多行结构化结果（项目名称、结果、单位、参考范围），保存为草稿，再主动审核并发布。
+
+检验报告与检查报告采用相同的 `draft -> published -> correction draft` 语义，并同样校验挂号实际接诊医生。已发布的报告以只读方式展示结论、结构化条目、版本和发布时间；如需修改，先创建更正草稿。新增接口为：
+
+- `GET /api/v1/medical/inspection/{inspection_uuid}/report/latest`
+- `PUT /api/v1/medical/inspection/{inspection_uuid}/report`
+- `POST /api/v1/medical/inspection-report/{report_uuid}/publish`
+- `POST /api/v1/medical/inspection-report/{report_uuid}/correction-draft`
+
+患者端暂不读取这些报告；后续报告列表和详情仅消费本人已发布版本。
 
 已发布报告保持只读。医生端可从已发布版本创建更正草稿，系统会复制原结论、关联的伪影分析任务和结构化结果，生成新的 `draft` 版本，并以 `supersedes_report_uuid` 保留与原版本的链路。若该发布版本已有未完成的更正草稿，系统将继续使用该草稿，避免重复生成版本；新草稿仍需审核发布后才成为最新报告。
 

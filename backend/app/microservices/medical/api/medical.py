@@ -86,6 +86,27 @@ class CheckReportCorrectionDraftInput(BaseModel):
     author_employee_uuid: uuid_pkg.UUID
 
 
+class InspectionReportResultItem(BaseModel):
+    item_name: str = Field(min_length=1, max_length=200)
+    value: str = Field(min_length=1, max_length=500)
+    unit: str | None = Field(default=None, max_length=100)
+    reference_range: str | None = Field(default=None, max_length=200)
+
+
+class InspectionReportDraftInput(BaseModel):
+    conclusion: str = Field(min_length=1, max_length=10000)
+    structured_result: list[InspectionReportResultItem] = Field(min_length=1, max_length=100)
+    author_employee_uuid: uuid_pkg.UUID
+
+
+class InspectionReportPublishInput(BaseModel):
+    reviewer_employee_uuid: uuid_pkg.UUID
+
+
+class InspectionReportCorrectionDraftInput(BaseModel):
+    author_employee_uuid: uuid_pkg.UUID
+
+
 class InspectionResultInput(BaseModel):
     test_results: Any = None
     input_employee_uuid: uuid_pkg.UUID
@@ -327,6 +348,59 @@ async def publish_check_report(
 ):
     try:
         report = await svc.publish_check_report(session, report_uuid, data.reviewer_employee_uuid)
+        return success(svc.serialize_medical_report(report))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/inspection/{uuid}/report/latest", summary="查询检验单最新报告")
+async def get_latest_inspection_report(uuid: str, session: AsyncSession = Depends(get_session)):
+    report = await svc.get_latest_inspection_report(session, uuid)
+    if not report:
+        raise HTTPException(status_code=404, detail="当前检验单尚无报告草稿")
+    return success(svc.serialize_medical_report(report))
+
+
+@router.put("/inspection/{uuid}/report", summary="保存检验报告草稿")
+async def save_inspection_report_draft(uuid: str, data: InspectionReportDraftInput, session: AsyncSession = Depends(get_session)):
+    try:
+        report = await svc.save_inspection_report_draft(
+            session=session,
+            inspection_uuid=uuid,
+            conclusion=data.conclusion,
+            structured_result=[item.model_dump() for item in data.structured_result],
+            author_employee_uuid=data.author_employee_uuid,
+        )
+        return success(svc.serialize_medical_report(report))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/inspection-report/{report_uuid}/correction-draft", summary="创建检验报告更正草稿")
+async def create_inspection_report_correction_draft(
+    report_uuid: str,
+    data: InspectionReportCorrectionDraftInput,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        report = await svc.create_inspection_report_correction_draft(
+            session=session,
+            report_uuid=report_uuid,
+            author_employee_uuid=data.author_employee_uuid,
+        )
+        return success(svc.serialize_medical_report(report))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/inspection-report/{report_uuid}/publish", summary="审核并发布检验报告")
+async def publish_inspection_report(
+    report_uuid: str,
+    data: InspectionReportPublishInput,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        report = await svc.publish_inspection_report(session, report_uuid, data.reviewer_employee_uuid)
         return success(svc.serialize_medical_report(report))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
