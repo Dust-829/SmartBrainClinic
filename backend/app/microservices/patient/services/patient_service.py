@@ -883,10 +883,12 @@ async def _transition_visit_state(session: AsyncSession, register_uuid: uuid_pkg
     if int(target_state) == int(VisitState.RECEPTION) and register.visit_state != int(VisitState.RECEPTION):
         active_stmt = (
             select(Register)
+            .join(SchedulingActual, Register.scheduling_actual_id == SchedulingActual.id)
             .where(
                 Register.employee_uuid == register.employee_uuid,
                 Register.visit_state == VisitState.RECEPTION,
                 Register.uuid != register.uuid,
+                SchedulingActual.schedule_date == date.today(),
             )
             .with_for_update()
             .limit(1)

@@ -229,4 +229,6 @@ def test_start_reception_blocks_parallel_active_patients_for_same_doctor():
 
     assert "Register.employee_uuid == register.employee_uuid" in source
     assert "Register.visit_state == VisitState.RECEPTION" in source
+    assert ".join(SchedulingActual, Register.scheduling_actual_id == SchedulingActual.id)" in source
+    assert "SchedulingActual.schedule_date == date.today()" in source
     assert "当前医生已有接诊中的患者，请先完成当前接诊后再开始下一位。" in source
