@@ -361,6 +361,11 @@ async def get_latest_inspection_report(uuid: str, session: AsyncSession = Depend
     return success(svc.serialize_medical_report(report))
 
 
+@router.get("/reports/register/{register_uuid}/published", summary="查询挂号已发布检查检验报告")
+async def get_published_reports_by_register(register_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    return success(await svc.list_published_reports_by_register(session, register_uuid))
+
+
 @router.put("/inspection/{uuid}/report", summary="保存检验报告草稿")
 async def save_inspection_report_draft(uuid: str, data: InspectionReportDraftInput, session: AsyncSession = Depends(get_session)):
     try:

@@ -183,6 +183,30 @@ export interface PaymentRecordsResult {
   records: PaymentRecord[]
 }
 
+export interface PatientReportResultItem {
+  item_name: string
+  value: string
+  unit?: string | null
+  reference_range?: string | null
+}
+
+export interface PatientPublishedReport {
+  uuid: string
+  register_uuid: string
+  report_type: 'check' | 'inspection'
+  report_state: 'published'
+  project_name: string
+  conclusion?: string | null
+  structured_result?: PatientReportResultItem[] | null
+  published_at?: string | null
+  version: number
+  visit_date?: string | null
+}
+
+export interface PatientPublishedReportsResult {
+  reports: PatientPublishedReport[]
+}
+
 export interface QueueStatus {
   ahead_of_you: number
   status: number
@@ -246,6 +270,9 @@ export const patientApi = {
   },
   getPaymentRecords(patientUuid: string) {
     return http.get<ApiEnvelope<PaymentRecordsResult>>(`/api/v1/patient/${patientUuid}/payment-records`)
+  },
+  getPublishedReports(patientUuid: string) {
+    return http.get<ApiEnvelope<PatientPublishedReportsResult>>(`/api/v1/patient/${patientUuid}/reports`)
   },
   payPaymentItems(payload: PayPaymentItemsPayload) {
     return http.post<ApiEnvelope<PayPaymentItemsResult>>('/api/v1/patient/payment-items/pay', payload, {

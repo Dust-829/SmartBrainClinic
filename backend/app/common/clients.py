@@ -275,6 +275,12 @@ class MedicalClient:
         return await BaseClient.get_required(url)
 
     @staticmethod
+    async def get_published_reports(register_uuid: uuid_pkg.UUID):
+        url = f"{BaseClient.get_url('medical')}/reports/register/{register_uuid}/published"
+        res = await BaseClient.get(url)
+        return res if res is not None else []
+
+    @staticmethod
     async def update_check_state(uuid: str, state: str):
         url = f"{BaseClient.get_url('medical')}/check/{uuid}/state"
         return await BaseClient.put(url, params={"state": state})

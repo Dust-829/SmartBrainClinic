@@ -908,6 +908,63 @@ async def list_requests_by_register(session: AsyncSession, register_uuid: uuid_p
         ],
     }
 
+
+async def list_published_reports_by_register(
+    session: AsyncSession,
+    register_uuid: uuid_pkg.UUID | str,
+) -> list[dict]:
+    """Return only the latest published check/inspection report for each request."""
+
+    register_uuid_obj = uuid_pkg.UUID(str(register_uuid))
+    report_stmt = (
+        select(MedicalReport)
+        .where(
+            MedicalReport.register_uuid == register_uuid_obj,
+            MedicalReport.report_state == "published",
+            MedicalReport.report_type.in_(("check", "inspection")),
+        )
+        .order_by(MedicalReport.published_at.desc(), MedicalReport.version.desc(), MedicalReport.id.desc())
+    )
+    published_reports = list((await session.execute(report_stmt)).scalars().all())
+
+    latest_reports: dict[tuple[str, uuid_pkg.UUID], MedicalReport] = {}
+    for report in published_reports:
+        latest_reports.setdefault((report.report_type, report.source_request_uuid), report)
+
+    check_ids = [source_uuid for report_type, source_uuid in latest_reports if report_type == "check"]
+    inspection_ids = [source_uuid for report_type, source_uuid in latest_reports if report_type == "inspection"]
+    checks = []
+    inspections = []
+    if check_ids:
+        checks = list((await session.execute(select(CheckRequest).where(CheckRequest.uuid.in_(check_ids)))).scalars().all())
+    if inspection_ids:
+        inspections = list((await session.execute(select(InspectionRequest).where(InspectionRequest.uuid.in_(inspection_ids)))).scalars().all())
+
+    requests_by_key: dict[tuple[str, uuid_pkg.UUID], CheckRequest | InspectionRequest] = {}
+    for item in checks:
+        requests_by_key[("check", item.uuid)] = item
+    for item in inspections:
+        requests_by_key[("inspection", item.uuid)] = item
+    tech_ids = {item.medical_technology_id for item in requests_by_key.values()}
+    tech_map = await _load_tech_map(session, tech_ids)
+
+    serialized_reports = []
+    for key, report in latest_reports.items():
+        request_obj = requests_by_key.get(key)
+        if not request_obj:
+            continue
+        item = serialize_medical_report(report)
+        tech = tech_map.get(request_obj.medical_technology_id)
+        item.update(
+            {
+                "project_name": tech.tech_name if tech else ("检查项目" if report.report_type == "check" else "检验项目"),
+                "project_type": report.report_type,
+            }
+        )
+        serialized_reports.append(item)
+
+    return serialized_reports
+
 async def update_check_state(session: AsyncSession, check_uuid: str, state: str) -> CheckRequest:
     stmt = select(CheckRequest).where(CheckRequest.uuid == uuid_pkg.UUID(check_uuid)).with_for_update()
     result = await session.execute(stmt)

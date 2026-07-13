@@ -60,7 +60,7 @@ const features = [
     subtitle: '\u68c0\u67e5\u68c0\u9a8c\u62a5\u544a',
     icon: 'report',
     tone: 'blue',
-    action: () => undefined,
+    action: () => router.push('/patient/reports'),
   },
   {
     key: 'hospital',

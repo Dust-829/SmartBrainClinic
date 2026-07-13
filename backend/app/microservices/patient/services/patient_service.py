@@ -195,6 +195,31 @@ async def list_patient_payment_records(session: AsyncSession, patient_uuid: uuid
     return {"records": records}
 
 
+async def list_patient_published_reports(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> dict:
+    """Aggregate published reports only from registers owned by the current patient."""
+
+    registers = await get_registers_by_patient_uuid(session, patient_uuid)
+    if not registers:
+        return {"reports": []}
+
+    medical_payloads = await asyncio.gather(
+        *(MedicalClient.get_published_reports(register.uuid) for register in registers)
+    )
+    reports = []
+    for register, medical_reports in zip(registers, medical_payloads):
+        for report in medical_reports:
+            reports.append(
+                {
+                    **report,
+                    "register_uuid": str(register.uuid),
+                    "visit_date": register.visit_date.isoformat() if register.visit_date else None,
+                }
+            )
+
+    reports.sort(key=lambda item: item.get("published_at") or item.get("visit_date") or "", reverse=True)
+    return {"reports": reports}
+
+
 async def pay_patient_payment_items(
     session: AsyncSession,
     patient_uuid: uuid_pkg.UUID,

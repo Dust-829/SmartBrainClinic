@@ -62,6 +62,20 @@ def test_medical_api_exposes_structured_inspection_report_routes():
     assert 'async def create_inspection_report_correction_draft(' in service_source
 
 
+def test_published_reports_have_patient_read_contracts():
+    medical_api = Path("app/microservices/medical/api/medical.py").read_text(encoding="utf-8")
+    medical_service = Path("app/microservices/medical/services/medical_service.py").read_text(encoding="utf-8")
+    patient_api = Path("app/microservices/patient/api/patient.py").read_text(encoding="utf-8")
+    patient_service = Path("app/microservices/patient/services/patient_service.py").read_text(encoding="utf-8")
+
+    assert '@router.get("/reports/register/{register_uuid}/published"' in medical_api
+    assert 'async def list_published_reports_by_register(' in medical_service
+    assert 'MedicalReport.report_state == "published"' in medical_service
+    assert "@router.get('/{patient_uuid}/reports'" in patient_api
+    assert 'async def list_patient_published_reports(' in patient_service
+    assert 'get_registers_by_patient_uuid(session, patient_uuid)' in patient_service
+
+
 def test_published_check_report_is_not_overwritten_by_draft_save():
     source = Path("app/microservices/medical/services/medical_service.py").read_text(encoding="utf-8")
 
