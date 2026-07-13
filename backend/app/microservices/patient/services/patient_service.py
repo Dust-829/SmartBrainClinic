@@ -9,6 +9,7 @@ from ..models.patient import Patient, Register, SchedulingActual, SchedulingTime
 from .internal_client import AuthClient
 from .ai_scheduling import run_ai_scheduling
 from app.common.ai_conversation import get_ai_conversation_session, update_ai_conversation_session
+from app.common.clients import BillingClient, MedicalClient
 from app.common.enums import BillState, VisitState
 from app.common.idempotency import begin_idempotency, complete_idempotency
 from app.common.state_machine import ensure_visit_transition
@@ -89,6 +90,114 @@ _STATE_MAP = {
     VisitState.FINISHED: "已结束",
     VisitState.CANCELLED: "已退号"
 }
+
+_PAYABLE_ITEM_TYPES = {
+    "check": ("checks", "检查"),
+    "inspection": ("inspections", "检验"),
+    "disposal": ("disposals", "处置"),
+}
+
+
+async def _get_owned_payment_register(
+    session: AsyncSession,
+    patient_uuid: uuid_pkg.UUID,
+    register_uuid: uuid_pkg.UUID,
+) -> Register:
+    patient = await get_patient_by_uuid(session, patient_uuid)
+    if not patient:
+        raise ValueError("患者不存在")
+
+    register = await get_register_by_uuid(session, register_uuid)
+    if not register or register.patient_id != patient.id:
+        raise ValueError("挂号记录不属于当前患者")
+    if register.visit_state in (VisitState.UNPAID, VisitState.CANCELLED):
+        raise ValueError("当前挂号状态不能支付医疗项目")
+    return register
+
+
+def _serialize_payable_medical_items(register_uuid: uuid_pkg.UUID, payload: dict) -> list[dict]:
+    items: list[dict] = []
+    for client_type, (collection_name, _) in _PAYABLE_ITEM_TYPES.items():
+        for source in payload.get(collection_name, []):
+            if source.get("state") != "未缴费":
+                continue
+            items.append(
+                {
+                    "uuid": str(source["uuid"]),
+                    "type": client_type,
+                    "title": source.get("tech_name") or "医疗项目",
+                    "amount": str(source.get("price") or "0.00"),
+                    "state": "unpaid",
+                    "register_uuid": str(register_uuid),
+                }
+            )
+    return items
+
+
+async def list_patient_payment_items(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> dict:
+    """Aggregate unpaid medical items only for registers owned by the current patient."""
+
+    registers = await get_registers_by_patient_uuid(session, patient_uuid)
+    eligible_registers = [
+        register
+        for register in registers
+        if register.visit_state not in (VisitState.UNPAID, VisitState.CANCELLED)
+    ]
+    medical_payloads = await asyncio.gather(
+        *(MedicalClient.get_register_requests(register.uuid) for register in eligible_registers)
+    )
+
+    groups = []
+    for register, medical_payload in zip(eligible_registers, medical_payloads):
+        items = _serialize_payable_medical_items(register.uuid, medical_payload)
+        if not items:
+            continue
+        groups.append(
+            {
+                "register_uuid": str(register.uuid),
+                "visit_date": register.visit_date.isoformat() if register.visit_date else None,
+                "visit_state": register.visit_state,
+                "items": items,
+            }
+        )
+
+    return {"registers": groups, "medications": []}
+
+
+async def pay_patient_payment_items(
+    session: AsyncSession,
+    patient_uuid: uuid_pkg.UUID,
+    register_uuid: uuid_pkg.UUID,
+    items: list[dict],
+    pay_method: str,
+    idempotency_key: str | None = None,
+) -> dict:
+    """Verify patient/register ownership before delegating price and state checks to Billing."""
+
+    await _get_owned_payment_register(session, patient_uuid, register_uuid)
+    if not items:
+        raise ValueError("请至少选择一个待缴项目")
+
+    billing_items = []
+    for item in items:
+        client_type = item.get("type")
+        if client_type not in _PAYABLE_ITEM_TYPES:
+            raise ValueError("缴费项目类型无效")
+        billing_items.append(
+            {
+                "type": _PAYABLE_ITEM_TYPES[client_type][1],
+                "id": str(item["uuid"]),
+            }
+        )
+
+    return await BillingClient.pay_items(
+        {
+            "register_uuid": str(register_uuid),
+            "item_ids": billing_items,
+            "pay_method": pay_method,
+            "idempotency_key": idempotency_key,
+        }
+    )
 
 
 def _ensure_schedule_matches_employee(schedule: SchedulingActual, employee_uuid: uuid_pkg.UUID) -> None:

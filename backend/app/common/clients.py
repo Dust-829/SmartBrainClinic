@@ -270,6 +270,11 @@ class MedicalClient:
         return await BaseClient.get(url)
 
     @staticmethod
+    async def get_register_requests(register_uuid: uuid_pkg.UUID):
+        url = f"{BaseClient.get_url('medical')}/requests/register/{register_uuid}"
+        return await BaseClient.get_required(url)
+
+    @staticmethod
     async def update_check_state(uuid: str, state: str):
         url = f"{BaseClient.get_url('medical')}/check/{uuid}/state"
         return await BaseClient.put(url, params={"state": state})
@@ -343,3 +348,10 @@ class BillingClient:
         url = f"{base_url}/register/{register_uuid}"
         res = await BaseClient.get_required(url)
         return res if res is not None else []
+
+    @staticmethod
+    async def pay_items(payload: dict):
+        base_url = BaseClient.get_url("billing").rstrip("/")
+        if base_url.endswith("/billing"):
+            base_url = f"{base_url.rsplit('/', 1)[0]}/bill"
+        return await BaseClient.post_required(f"{base_url}/pay", json_data=payload)

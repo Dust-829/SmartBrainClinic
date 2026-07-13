@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.common import clients as common_clients
-from app.common.clients import AuthClient, BaseClient, BillingClient
+from app.common.clients import AuthClient, BaseClient, BillingClient, MedicalClient
 from app.microservices.patient.services import patient_service
 
 
@@ -35,6 +35,140 @@ async def test_billing_client_uses_bill_route_and_required_get(monkeypatch):
         "url": f"http://billing:8005/api/v1/bill/register/{register_uuid}",
         "params": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_payment_clients_use_internal_medical_and_billing_routes(monkeypatch):
+    captured = {}
+    register_uuid = uuid.uuid4()
+
+    def fake_get_url(service_name):
+        return {
+            "medical": "http://medical:8003/api/v1/medical",
+            "billing": "http://billing:8005/api/v1/billing",
+        }[service_name]
+
+    async def fake_get_required(url, params=None):
+        captured["medical_url"] = url
+        return {"checks": [], "inspections": [], "disposals": []}
+
+    async def fake_post_required(url, json_data=None):
+        captured["billing_url"] = url
+        captured["billing_payload"] = json_data
+        return {"bill_code": "B202607130001"}
+
+    monkeypatch.setattr(BaseClient, "get_url", fake_get_url)
+    monkeypatch.setattr(BaseClient, "get_required", fake_get_required)
+    monkeypatch.setattr(BaseClient, "post_required", fake_post_required)
+
+    requests = await MedicalClient.get_register_requests(register_uuid)
+    payment = await BillingClient.pay_items({"register_uuid": str(register_uuid), "item_ids": []})
+
+    assert requests == {"checks": [], "inspections": [], "disposals": []}
+    assert payment == {"bill_code": "B202607130001"}
+    assert captured["medical_url"] == f"http://medical:8003/api/v1/medical/requests/register/{register_uuid}"
+    assert captured["billing_url"] == "http://billing:8005/api/v1/bill/pay"
+    assert captured["billing_payload"]["register_uuid"] == str(register_uuid)
+
+
+@pytest.mark.asyncio
+async def test_patient_payment_items_only_return_unpaid_medical_items(monkeypatch):
+    patient_uuid = uuid.uuid4()
+    active_register_uuid = uuid.uuid4()
+    cancelled_register_uuid = uuid.uuid4()
+    registers = [
+        SimpleNamespace(uuid=active_register_uuid, visit_state=1, visit_date=datetime(2026, 7, 13, 9, 0)),
+        SimpleNamespace(uuid=cancelled_register_uuid, visit_state=4, visit_date=datetime(2026, 7, 12, 9, 0)),
+    ]
+
+    async def fake_get_registers(_session, target_patient_uuid):
+        assert target_patient_uuid == patient_uuid
+        return registers
+
+    async def fake_get_requests(target_register_uuid):
+        assert target_register_uuid == active_register_uuid
+        return {
+            "checks": [
+                {"uuid": str(uuid.uuid4()), "state": "未缴费", "tech_name": "头颅CT", "price": "180.00"},
+                {"uuid": str(uuid.uuid4()), "state": "已缴费", "tech_name": "颅脑MRI", "price": "360.00"},
+            ],
+            "inspections": [{"uuid": str(uuid.uuid4()), "state": "未缴费", "tech_name": "血常规", "price": "25.00"}],
+            "disposals": [],
+        }
+
+    monkeypatch.setattr(patient_service, "get_registers_by_patient_uuid", fake_get_registers)
+    monkeypatch.setattr(patient_service.MedicalClient, "get_register_requests", fake_get_requests)
+
+    result = await patient_service.list_patient_payment_items(object(), patient_uuid)
+
+    assert result["medications"] == []
+    assert len(result["registers"]) == 1
+    assert result["registers"][0]["register_uuid"] == str(active_register_uuid)
+    assert [(item["type"], item["title"], item["amount"]) for item in result["registers"][0]["items"]] == [
+        ("check", "头颅CT", "180.00"),
+        ("inspection", "血常规", "25.00"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_patient_payment_proxy_checks_register_ownership_and_maps_billing_types(monkeypatch):
+    patient_uuid = uuid.uuid4()
+    register_uuid = uuid.uuid4()
+    captured = {}
+
+    async def fake_get_patient(_session, target_patient_uuid):
+        assert target_patient_uuid == patient_uuid
+        return SimpleNamespace(id=7)
+
+    async def fake_get_register(_session, target_register_uuid):
+        assert target_register_uuid == register_uuid
+        return SimpleNamespace(patient_id=7, visit_state=1)
+
+    async def fake_pay_items(payload):
+        captured.update(payload)
+        return {"bill_code": "B202607130002"}
+
+    monkeypatch.setattr(patient_service, "get_patient_by_uuid", fake_get_patient)
+    monkeypatch.setattr(patient_service, "get_register_by_uuid", fake_get_register)
+    monkeypatch.setattr(patient_service.BillingClient, "pay_items", fake_pay_items)
+
+    result = await patient_service.pay_patient_payment_items(
+        object(),
+        patient_uuid,
+        register_uuid,
+        [{"uuid": str(uuid.uuid4()), "type": "check"}, {"uuid": str(uuid.uuid4()), "type": "disposal"}],
+        "微信",
+        "payment-key-1",
+    )
+
+    assert result == {"bill_code": "B202607130002"}
+    assert captured["register_uuid"] == str(register_uuid)
+    assert [item["type"] for item in captured["item_ids"]] == ["检查", "处置"]
+    assert captured["idempotency_key"] == "payment-key-1"
+
+
+@pytest.mark.asyncio
+async def test_patient_payment_proxy_rejects_non_owned_register(monkeypatch):
+    patient_uuid = uuid.uuid4()
+    register_uuid = uuid.uuid4()
+
+    async def fake_get_patient(_session, _patient_uuid):
+        return SimpleNamespace(id=7)
+
+    async def fake_get_register(_session, _register_uuid):
+        return SimpleNamespace(patient_id=8, visit_state=1)
+
+    monkeypatch.setattr(patient_service, "get_patient_by_uuid", fake_get_patient)
+    monkeypatch.setattr(patient_service, "get_register_by_uuid", fake_get_register)
+
+    with pytest.raises(ValueError, match="挂号记录不属于当前患者"):
+        await patient_service.pay_patient_payment_items(
+            object(),
+            patient_uuid,
+            register_uuid,
+            [{"uuid": str(uuid.uuid4()), "type": "check"}],
+            "微信",
+        )
 
 
 @pytest.mark.asyncio

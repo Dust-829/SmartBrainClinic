@@ -1,6 +1,6 @@
 import uuid as uuid_pkg
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -92,6 +92,19 @@ class ConfirmPaymentRequest(BaseModel):
     register_uuid: uuid_pkg.UUID
     pay_method: str = '微信'
     amount: float = 0.01
+    idempotency_key: Optional[str] = None
+
+
+class PatientPaymentItem(BaseModel):
+    uuid: uuid_pkg.UUID
+    type: Literal['check', 'inspection', 'disposal']
+
+
+class PatientPaymentItemsRequest(BaseModel):
+    patient_uuid: uuid_pkg.UUID
+    register_uuid: uuid_pkg.UUID
+    items: list[PatientPaymentItem]
+    pay_method: str = '微信'
     idempotency_key: Optional[str] = None
 
 
@@ -418,6 +431,34 @@ async def confirm_payment(
             idempotency_key=idempotency_key or data.idempotency_key,
         )
         return success(res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get('/{patient_uuid}/payment-items', summary='查询患者待缴医疗项目')
+async def get_patient_payment_items(patient_uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
+    try:
+        return success(await svc.list_patient_payment_items(session, patient_uuid))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post('/payment-items/pay', summary='支付患者待缴医疗项目')
+async def pay_patient_payment_items(
+    data: PatientPaymentItemsRequest,
+    session: AsyncSession = Depends(get_session),
+    idempotency_key: Optional[str] = Header(default=None, alias='Idempotency-Key'),
+):
+    try:
+        result = await svc.pay_patient_payment_items(
+            session=session,
+            patient_uuid=data.patient_uuid,
+            register_uuid=data.register_uuid,
+            items=[item.model_dump() for item in data.items],
+            pay_method=data.pay_method,
+            idempotency_key=data.idempotency_key or idempotency_key,
+        )
+        return created(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
