@@ -9,6 +9,9 @@
   --patient-border: #dce8f4;
   --patient-page-bg: #f4f8fd;
   --patient-flow-page-bg: linear-gradient(180deg, #eef7ff 0%, #f8fbff 52%, var(--patient-page-bg) 100%);
+  --patient-flow-hero-height: 284px;
+  --patient-flow-hero-content-offset: -82px;
+  --patient-flow-hero-transition-bg: #eef7ff;
   --patient-surface: #ffffff;
   --patient-surface-muted: #f5f8fc;
   --patient-header-gradient: linear-gradient(135deg, #0573ff 0%, #1597ff 62%, #22b8ee 100%);
@@ -70,4 +73,22 @@ a {
 
 .patient-layout .el-dialog {
   border-radius: var(--patient-radius);
+}
+
+.patient-layout .patient-flow-hero {
+  position: relative;
+  min-height: var(--patient-flow-hero-height);
+  overflow: hidden;
+}
+
+.patient-layout .patient-flow-hero::after {
+  position: absolute;
+  left: -14%;
+  right: -14%;
+  bottom: -44px;
+  height: 105px;
+  border-radius: 50% 50% 0 0;
+  background: var(--patient-flow-hero-transition-bg);
+  content: '';
+  pointer-events: none;
 }

@@ -75,7 +75,7 @@ const features = [
 
 <template>
   <div class="patient-home-shell">
-    <section class="patient-home-hero">
+    <section class="patient-home-hero patient-flow-hero">
       <div class="patient-home-hero__title-row">
         <div>
           <h1>&#26234;&#24935;&#20113;&#33041;&#35786;&#30103;&#24179;&#21488;</h1>
@@ -147,18 +147,14 @@ const features = [
 }
 
 .patient-home-hero {
-  position: relative;
-  min-height: 284px;
   padding: 42px 20px 92px;
-  overflow: hidden;
   background:
     radial-gradient(circle at 82% 22%, rgba(255, 255, 255, 0.24), transparent 22%),
     linear-gradient(135deg, #0573ff 0%, #1597ff 54%, #4eb9ff 100%);
   color: #ffffff;
 }
 
-.patient-home-hero::before,
-.patient-home-hero::after {
+.patient-home-hero::before {
   position: absolute;
   content: '';
   pointer-events: none;
@@ -172,15 +168,6 @@ const features = [
   border: 22px solid rgba(255, 255, 255, 0.08);
   border-radius: 40px;
   transform: rotate(-22deg);
-}
-
-.patient-home-hero::after {
-  left: -14%;
-  right: -14%;
-  bottom: -44px;
-  height: 105px;
-  border-radius: 50% 50% 0 0;
-  background: #eef7ff;
 }
 
 .patient-home-hero__title-row,
@@ -287,7 +274,7 @@ const features = [
   z-index: 2;
   display: grid;
   gap: 16px;
-  margin-top: -82px;
+  margin-top: var(--patient-flow-hero-content-offset);
   padding: 0 20px;
 }
 

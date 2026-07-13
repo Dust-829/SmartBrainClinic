@@ -67,7 +67,7 @@ watch(
 
 <template>
   <div class="patient-register-history-shell">
-    <header class="patient-register-history-hero">
+    <header class="patient-register-history-hero patient-flow-hero">
       <h1>挂号记录</h1>
       <p>{{ isLoggedIn ? '查看当前患者的线上挂号与候诊信息' : '登录后查看个人挂号历史' }}</p>
     </header>
@@ -162,8 +162,7 @@ watch(
 }
 
 .patient-register-history-hero {
-  min-height: 230px;
-  padding: 42px var(--patient-page-gutter) 76px;
+  padding: 42px var(--patient-page-gutter) 92px;
   background: linear-gradient(135deg, #087df6 0%, #35a7ff 100%);
   color: #fff;
 }
@@ -186,7 +185,7 @@ watch(
 .patient-register-history-content {
   display: grid;
   gap: 14px;
-  margin-top: -50px;
+  margin-top: var(--patient-flow-hero-content-offset);
   padding: 0 var(--patient-page-gutter);
 }
 
