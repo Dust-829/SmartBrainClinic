@@ -1,4 +1,4 @@
-import { http, type ApiEnvelope } from './http'
+import { apiBaseUrl, http, type ApiEnvelope } from './http'
 
 export interface MedicalRecordDraft {
   uuid: string
@@ -257,7 +257,7 @@ export const medicalApi = {
     return http.get<ApiEnvelope<ArtifactInferenceTask>>(`/api/v1/medical/check/${checkUuid}/artifact-inference/latest`)
   },
   getArtifactInferenceOverlayUrl(taskUuid: string) {
-    return `/api/v1/medical/artifact-inference/${encodeURIComponent(taskUuid)}/overlay`
+    return `${apiBaseUrl}/api/v1/medical/artifact-inference/${encodeURIComponent(taskUuid)}/overlay`
   },
   getLatestCheckReport(checkUuid: string) {
     return http.get<ApiEnvelope<MedicalReport>>(`/api/v1/medical/check/${checkUuid}/report/latest`)

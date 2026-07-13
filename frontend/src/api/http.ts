@@ -1,6 +1,6 @@
 ﻿import axios from 'axios'
 
-const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+export const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/+$/, '')
 
 export interface ApiEnvelope<T> {
   code: number
@@ -9,7 +9,7 @@ export interface ApiEnvelope<T> {
 }
 
 export const http = axios.create({
-  baseURL,
+  baseURL: apiBaseUrl,
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
