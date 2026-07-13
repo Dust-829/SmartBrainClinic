@@ -31,12 +31,12 @@ const features = [
     action: () => router.push('/patient/visit-code'),
   },
   {
-    key: 'departments',
-    title: '\u6309\u79d1\u5ba4\u6302\u53f7',
-    subtitle: '\u9009\u62e9\u79d1\u5ba4\uff0c\u5728\u7ebf\u6392\u53f7',
-    icon: 'calendar-plus',
+    key: 'payments',
+    title: '\u7f34\u8d39\u4e2d\u5fc3',
+    subtitle: '\u68c0\u67e5\u68c0\u9a8c\u3001\u5904\u7f6e\u7f34\u8d39',
+    icon: 'payment',
     tone: 'teal',
-    action: () => router.push({ path: '/patient/departments', query: { askAi: '1' } }),
+    action: () => router.push('/patient/payments'),
   },
   {
     key: 'queue',
@@ -542,6 +542,35 @@ const features = [
 .patient-home-feature__icon.is-calendar-plus i::after {
   width: 4px;
   height: 18px;
+}
+
+.patient-home-feature__icon.is-payment i {
+  position: relative;
+  width: 24px;
+  height: 18px;
+  border: 3px solid currentColor;
+  border-radius: 5px;
+}
+
+.patient-home-feature__icon.is-payment i::before,
+.patient-home-feature__icon.is-payment i::after {
+  position: absolute;
+  height: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  content: '';
+}
+
+.patient-home-feature__icon.is-payment i::before {
+  top: 4px;
+  left: 3px;
+  right: 3px;
+}
+
+.patient-home-feature__icon.is-payment i::after {
+  right: 3px;
+  bottom: 4px;
+  width: 8px;
 }
 
 .patient-home-feature__icon.is-clock i {

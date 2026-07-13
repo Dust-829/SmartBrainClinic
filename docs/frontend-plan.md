@@ -37,7 +37,7 @@
 | `/patient/doctors` | 医生推荐，需登录 |
 | `/patient/confirm-register` | 确认挂号，需登录 |
 | `/patient/payment` | 模拟支付，需登录 |
-| `/patient/payments` | 待实施：检查、检验、处置与后续药品的缴费中心，需登录 |
+| `/patient/payments` | 缴费中心：检查、检验、处置与后续药品的缴费入口，需登录 |
 | `/patient/queue` | 候诊状态，需登录 |
 | `/patient/registers` | 历史挂号，需登录 |
 | `/patient/profile` | 个人中心，需登录 |

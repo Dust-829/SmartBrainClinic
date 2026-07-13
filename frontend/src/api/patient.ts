@@ -128,6 +128,45 @@ export interface PaymentResult {
   transaction_id: string
 }
 
+export type PayableItemType = 'check' | 'inspection' | 'disposal' | 'medication'
+
+export interface PayableItem {
+  uuid: string
+  type: PayableItemType
+  title: string
+  amount: string
+  state: 'unpaid'
+  register_uuid: string
+  quantity?: number
+}
+
+export interface PaymentRegisterGroup {
+  register_uuid: string
+  visit_date?: string | null
+  visit_state: number
+  items: PayableItem[]
+}
+
+export interface PaymentItemsResult {
+  registers: PaymentRegisterGroup[]
+  medications: PayableItem[]
+}
+
+export interface PayPaymentItemsPayload {
+  patient_uuid: string
+  register_uuid: string
+  items: Array<Pick<PayableItem, 'uuid' | 'type'>>
+  pay_method: string
+  idempotency_key?: string
+}
+
+export interface PayPaymentItemsResult {
+  uuid: string
+  bill_code: string
+  total_amount: string
+  transaction_id: string
+}
+
 export interface QueueStatus {
   ahead_of_you: number
   status: number
@@ -183,6 +222,14 @@ export const patientApi = {
   },
   payOnlineRegister(payload: PaymentPayload) {
     return http.post<ApiEnvelope<PaymentResult>>('/api/v1/patient/online-register/pay', payload, {
+      headers: payload.idempotency_key ? { 'Idempotency-Key': payload.idempotency_key } : undefined,
+    })
+  },
+  getPaymentItems(patientUuid: string) {
+    return http.get<ApiEnvelope<PaymentItemsResult>>(`/api/v1/patient/${patientUuid}/payment-items`)
+  },
+  payPaymentItems(payload: PayPaymentItemsPayload) {
+    return http.post<ApiEnvelope<PayPaymentItemsResult>>('/api/v1/patient/payment-items/pay', payload, {
       headers: payload.idempotency_key ? { 'Idempotency-Key': payload.idempotency_key } : undefined,
     })
   },
