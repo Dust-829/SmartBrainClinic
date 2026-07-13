@@ -37,6 +37,7 @@
 | `/patient/doctors` | 医生推荐，需登录 |
 | `/patient/confirm-register` | 确认挂号，需登录 |
 | `/patient/payment` | 模拟支付，需登录 |
+| `/patient/payments` | 待实施：检查、检验、处置与后续药品的缴费中心，需登录 |
 | `/patient/queue` | 候诊状态，需登录 |
 | `/patient/registers` | 历史挂号，需登录 |
 | `/patient/profile` | 个人中心，需登录 |
@@ -79,6 +80,8 @@
 ## 4. 当前页面能力
 
 ### 4.1 患者端
+
+缴费中心专项计划见 [patient-payment-center-plan.md](./patient-payment-center-plan.md)。首页“按科室挂号”将替换为“缴费中心”；既有 `/patient/departments` 挂号路由与 `/patient/payment` 挂号费支付页面继续保留。
 
 已完成真实主链：
 
