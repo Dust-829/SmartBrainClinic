@@ -303,6 +303,55 @@ Medical 新增以下内部接口，暂不接入医生页面：
 - `frontend/src/views/doctor/DoctorEncounterView.vue`：在既有“本次挂号已开项目”中增加可展开的影像分析区。
 - `docs/assets/doctor-encounter-artifact-analysis-concept-2026-07-13.png`：本次接诊页内嵌影像分析概念图。
 
+### 第十阶段：统一启动脚本托管 CT 伪影推理微服务（计划，2026-07-14）
+
+#### Goal
+
+保留 CT 伪影推理服务作为独立的本地内部微服务，但将其纳入 `backend/run_microservices.py` 的统一编排。使用者只需执行一次启动命令；Medical 服务仍通过 `http://127.0.0.1:8013` 调用模型服务，不在 Medical 进程中导入 PyTorch、加载权重或执行 GPU 推理。
+
+#### Current behavior
+
+- `backend/run_microservices.py` 当前只管理 Gateway 和业务微服务（8000 至 8005），不启动 8013 端口的 CT 推理服务。
+- CT 输入序列已位于 `backend/runtime/data/ct_artifact/input/`，Medical 服务也已配置 `CT_ARTIFACT_SERVICE_URL=http://127.0.0.1:8013`；但 8013 未监听时，前端会如实显示“本地伪影推理服务不可用”。
+- 模型服务已具备独立的 FastAPI 入口 `model_services.ct_artifact.service:app`、`/health`、`/v1/artifact-inputs` 和 `/v1/artifact-segmentation`，且需要专用 Conda 环境 `py3106` 中的 PyTorch、SimpleITK 等依赖。
+
+#### Proposed solution
+
+1. 将启动脚本中的服务定义从固定三元组调整为显式服务配置：名称、Python 解释器、ASGI 模块、监听地址、端口、日志文件和是否为核心服务。
+2. 为 `CTArtifact` 增加服务配置：默认使用 `D:\develop\Anaconda\envs\py3106\python.exe`（可由 `CT_ARTIFACT_PYTHON` 环境变量覆盖）、模块 `model_services.ct_artifact.service:app`、地址 `127.0.0.1`、端口 `8013`、日志 `backend/logs/ctartifact.log`。
+3. 将 8013 加入端口占用检查；启动时使用该专用解释器启动模型服务，其他既有服务仍沿用当前项目解释器，避免把 GPU 推理依赖混入业务服务环境。
+4. 模型进程启动后轮询 `GET http://127.0.0.1:8013/health`，为权重读取与 GPU 初始化预留最多 60 秒；健康检查成功才标记 CT 推理就绪。
+5. 将 CTArtifact 视为“可选功能服务”：启动失败、健康检查超时或运行中退出时，保留 Gateway、Patient、Medical、Billing 等核心服务继续运行，并清晰输出模型日志位置；仅 CT 影像分析不可用，不能伪造可推理状态。
+6. 保持现有核心服务的故障语义：核心服务异常退出仍按当前脚本统一停止其余受管服务。CTArtifact 的独立性不改变 Medical 的异步任务状态机，Medical 仍会将调用异常记录为失败任务。
+7. 同步更新 `backend/model_services/ct_artifact/README.md`、项目启动说明与验证脚本：说明单命令启动方式、专用环境变量、模型健康检查和手动排障入口。
+
+#### Out of scope
+
+- 不将模型代码、权重加载或 CUDA 依赖合并进 Medical 服务进程。
+- 不把 `torch`、`SimpleITK` 等模型依赖加入项目通用 `requirements.txt`。
+- 本阶段不引入 Docker Compose、GPU 容器、自动重启守护或远程模型部署；这些需要单独处理 NVIDIA/CUDA 版本、权重与数据卷挂载、日志和资源隔离。
+
+#### Risks and mitigations
+
+- `py3106` 的实际路径可能因机器而异：使用环境变量覆盖并在启动前检查解释器存在性。
+- 权重加载和 CUDA 初始化比普通 HTTP 服务慢：单独使用较长健康检查窗口，不把“进程已创建”等同于“可以推理”。
+- 8013 被其他程序占用或模型初始化失败：在启动前给出端口/日志位置，核心诊疗链路不被模型故障拖垮。
+- 启动脚本的服务数据结构改动可能影响原有服务：保留原有模块、端口、日志和退出策略，并以全部既有端口健康检查回归验证。
+
+#### Acceptance criteria
+
+1. 在 `D:\work\SmartBrainClinic\backend` 执行 `python run_microservices.py` 后，8013 由 `py3106` 启动，`GET /health` 返回成功。
+2. `GET /v1/artifact-inputs` 能读到已预留的本地 CT 序列；Medical 可创建并执行一次真实伪影推理任务。
+3. 8000 至 8005 的既有启动、日志和退出行为不回退；CTArtifact 不可用时，业务服务仍可提供非 AI 的诊疗流程。
+4. 通过 Ctrl+C 退出统一启动脚本时，CTArtifact 与其他由脚本创建的子进程均被清理。
+
+#### Validation strategy
+
+1. 对服务配置和命令生成编写轻量测试，验证 CTArtifact 使用 `CT_ARTIFACT_PYTHON` 或默认 `py3106`，而其他服务继续使用当前解释器。
+2. 运行启动脚本并检查 8000 至 8005 与 8013 的端口；调用模型 `/health` 和 `/v1/artifact-inputs`。
+3. 选择一个已缴费 CT 检查单，完成“选择序列 → 开始影像分析 → 查询任务状态”的端到端回归；只核对任务和预览产物，不将掩码自动表述为诊断结论。
+4. 人为提供错误的 `CT_ARTIFACT_PYTHON` 或占用 8013，验证核心服务仍可启动、模型状态明确为不可用，且日志可定位原因。
+
 ## Risks
 
 - 将伪影掩码误用为诊断结论，会产生错误的临床语义和安全风险。
