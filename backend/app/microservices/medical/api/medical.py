@@ -65,6 +65,12 @@ class CheckResultInput(BaseModel):
     inputcheck_employee_uuid: uuid_pkg.UUID
 
 
+class ArtifactInferenceSubmit(BaseModel):
+    source_image_ref: str = Field(min_length=1, max_length=1024)
+    source_format: Literal["dicom", "nifti"]
+    submitted_by_employee_uuid: uuid_pkg.UUID
+
+
 class InspectionResultInput(BaseModel):
     test_results: Any = None
     input_employee_uuid: uuid_pkg.UUID
@@ -211,6 +217,35 @@ async def get_check_request(uuid: str, session: AsyncSession = Depends(get_sessi
         "image_path": check.image_path,
         "ai_tumor_prob": str(check.ai_tumor_prob) if check.ai_tumor_prob is not None else None,
     })
+
+
+@router.post("/check/{uuid}/artifact-inference", summary="提交 CT 伪影分析任务", status_code=202)
+async def submit_artifact_inference_task(
+    uuid: str,
+    data: ArtifactInferenceSubmit,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        task = await svc.create_artifact_inference_task(
+            session=session,
+            check_uuid=uuid,
+            submitted_by_employee_uuid=data.submitted_by_employee_uuid,
+            source_image_ref=data.source_image_ref,
+            source_format=data.source_format,
+        )
+        background_tasks.add_task(svc.run_artifact_inference_task, str(task.uuid))
+        return {"code": 202, "message": "任务已提交", "data": svc.serialize_artifact_inference_task(task)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/artifact-inference/{task_uuid}", summary="查询 CT 伪影分析任务")
+async def get_artifact_inference_task(task_uuid: str, session: AsyncSession = Depends(get_session)):
+    task = await svc.get_artifact_inference_task(session, task_uuid)
+    if not task:
+        raise HTTPException(status_code=404, detail="伪影分析任务不存在")
+    return success(svc.serialize_artifact_inference_task(task))
 
 @router.get("/inspection/{uuid}", summary="获取检验单明细")
 async def get_inspection_request(uuid: str, session: AsyncSession = Depends(get_session)):

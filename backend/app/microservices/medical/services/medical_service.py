@@ -1,8 +1,10 @@
 import uuid as uuid_pkg
 from dataclasses import dataclass
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..models.medical import MedicalRecord, CheckRequest, InspectionRequest, DisposalRequest, MedicalTechnology
+from ..models.medical import ArtifactInferenceTask, CheckRequest, DisposalRequest, InspectionRequest, MedicalRecord, MedicalReport, MedicalTechnology
+from .artifact_inference_client import ArtifactInferenceClient
 from .ai_image_inference import analyze_brain_image
 from app.common.enums import CheckState, InspectionState, DisposalState
 from app.common.ai_client import AIClient
@@ -28,6 +30,135 @@ from app.microservices.medical.database import session_factory
 from sqlalchemy import select
 
 MIN_SIMILAR_CASE_SCORE = 35.0
+
+
+def normalize_artifact_source_ref(source_image_ref: str) -> str:
+    """Accept only a path relative to backend/runtime/data/ct_artifact/input."""
+
+    raw_ref = source_image_ref.strip()
+    if not raw_ref or raw_ref.startswith(("/", "\\")) or PureWindowsPath(raw_ref).drive:
+        raise ValueError("影像引用必须是 input 目录下的相对路径")
+
+    normalized = raw_ref.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if any(part in ("", ".", "..") for part in path.parts):
+        raise ValueError("影像引用包含不允许的路径片段")
+    return path.as_posix()
+
+
+def serialize_artifact_inference_task(task: ArtifactInferenceTask) -> dict:
+    return {
+        "uuid": str(task.uuid),
+        "check_uuid": str(task.check_uuid),
+        "register_uuid": str(task.register_uuid),
+        "source_format": task.source_format,
+        "task_state": task.task_state,
+        "model_name": task.model_name,
+        "model_version": task.model_version,
+        "model_weight_sha256": task.model_weight_sha256,
+        "threshold": str(task.threshold) if task.threshold is not None else None,
+        "mask_object_ref": task.mask_object_ref,
+        "overlay_object_ref": task.overlay_object_ref,
+        "result_metadata": task.result_metadata,
+        "error_code": task.error_code,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "started_at": task.started_at.isoformat() if task.started_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+    }
+
+
+async def create_artifact_inference_task(
+    session: AsyncSession,
+    check_uuid: str,
+    submitted_by_employee_uuid: uuid_pkg.UUID,
+    source_image_ref: str,
+    source_format: str,
+) -> ArtifactInferenceTask:
+    check_result = await session.execute(select(CheckRequest).where(CheckRequest.uuid == uuid_pkg.UUID(check_uuid)))
+    check = check_result.scalar_one_or_none()
+    if not check:
+        raise ValueError("检查单不存在")
+
+    task = ArtifactInferenceTask(
+        check_uuid=check.uuid,
+        register_uuid=check.register_uuid,
+        submitted_by_employee_uuid=submitted_by_employee_uuid,
+        source_image_ref=normalize_artifact_source_ref(source_image_ref),
+        source_format=source_format,
+    )
+    session.add(task)
+    await session.flush()
+    return task
+
+
+async def get_artifact_inference_task(session: AsyncSession, task_uuid: str) -> ArtifactInferenceTask | None:
+    result = await session.execute(select(ArtifactInferenceTask).where(ArtifactInferenceTask.uuid == uuid_pkg.UUID(task_uuid)))
+    return result.scalar_one_or_none()
+
+
+async def run_artifact_inference_task(task_uuid: str) -> None:
+    """Run the remote call outside the request transaction and persist its terminal state."""
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(ArtifactInferenceTask)
+            .where(ArtifactInferenceTask.uuid == uuid_pkg.UUID(task_uuid))
+            .with_for_update()
+        )
+        task = result.scalar_one_or_none()
+        if not task or task.task_state != "queued":
+            return
+        task.task_state = "running"
+        task.started_at = datetime.now()
+        payload = {
+            "task_id": str(task.uuid),
+            "source_ref": task.source_image_ref,
+            "source_format": task.source_format,
+        }
+        session.add(task)
+        await session.commit()
+
+    try:
+        result_payload = await ArtifactInferenceClient.segment_ct_artifact(payload)
+    except Exception as exc:
+        async with session_factory() as session:
+            result = await session.execute(
+                select(ArtifactInferenceTask)
+                .where(ArtifactInferenceTask.uuid == uuid_pkg.UUID(task_uuid))
+                .with_for_update()
+            )
+            task = result.scalar_one_or_none()
+            if task:
+                task.task_state = "failed"
+                task.error_code = "inference_service_error"
+                task.error_message = str(exc)
+                task.completed_at = datetime.now()
+                session.add(task)
+                await session.commit()
+        return
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(ArtifactInferenceTask)
+            .where(ArtifactInferenceTask.uuid == uuid_pkg.UUID(task_uuid))
+            .with_for_update()
+        )
+        task = result.scalar_one_or_none()
+        if not task:
+            return
+        task.task_state = "succeeded"
+        task.model_name = result_payload["model_name"]
+        task.model_version = result_payload["model_version"]
+        task.model_weight_sha256 = result_payload["model_weight_sha256"]
+        task.threshold = result_payload["threshold"]
+        task.mask_object_ref = result_payload["mask_object_ref"]
+        task.overlay_object_ref = result_payload["overlay_object_ref"]
+        task.result_metadata = result_payload["result_metadata"]
+        task.error_code = None
+        task.error_message = None
+        task.completed_at = datetime.now()
+        session.add(task)
+        await session.commit()
 
 
 def _normalize_visit_state_value(state: Any) -> int | None:

@@ -229,6 +229,19 @@ backend/runtime/data/ct_artifact/
 
 二者均不保存原始 DICOM 二进制，也不把本机绝对路径写入字段。原有检查单仍保留原有状态机与结果接口；实际任务提交、调度、结果查询和医生审核发布将作为下一切片实现。
 
+### 第四阶段：本地推理调度与任务接口（2026-07-13）
+
+本阶段新增了独立运行的 `model_services.ct_artifact.service`：启动时只加载一次权重，通过单并发锁执行 GPU 推理，且只允许读取 `backend/runtime/data/ct_artifact/input/` 下的相对引用。其输出写入被 Git 忽略的 `output/<task-uuid>/`，向 Medical 服务仅返回相对 mask/预览引用及不含患者标识的元数据。
+
+Medical 新增以下内部接口，暂不接入医生页面：
+
+- `POST /api/v1/medical/check/{check_uuid}/artifact-inference`：创建 `queued` 任务并立即返回 `202` 与任务 UUID；后台再调用独立推理服务。
+- `GET /api/v1/medical/artifact-inference/{task_uuid}`：查询 `queued`、`running`、`succeeded` 或 `failed` 状态及可供后续医生端消费的结果引用。
+
+启动顺序为先使用 `py3106` 启动独立推理服务，再启动 Medical 服务；配置项为 `CT_ARTIFACT_SERVICE_URL` 和 `CT_ARTIFACT_SERVICE_TIMEOUT_SECONDS`。本阶段不执行数据库 migration，也不暴露患者端接口。
+
+端到端服务验证已完成：在临时端口启动独立服务后，提交 `CQ500CT0 CQ500CT0/Unknown Study/CT 4cc sec 150cc D3D on` 的 DICOM 引用，服务健康检查通过，并写出 `output/e2e-cq500ct0-20260713/artifact_mask.nii.gz` 与 `artifact_overlay.png`。输出尺寸为 `512 × 512 × 239`，检测到 `21,362` 个 mask 像素；临时服务进程已在验证结束后关闭。
+
 ## Expected file changes
 
 - `backend/app/microservices/medical/models/medical.py`：报告、推理任务和发布版本数据模型。
