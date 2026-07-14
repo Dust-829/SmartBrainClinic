@@ -180,11 +180,6 @@ function openEntry(route: string) {
   --entry-accent: #4338ca;
 }
 
-.portal-entry__entry.is-admin .portal-entry__title {
-  font-size: clamp(3.8rem, 7.6vw, 6.65rem);
-  letter-spacing: -0.07em;
-}
-
 .portal-entry__entry:hover,
 .portal-entry__entry:focus-visible {
   border-color: rgba(23, 23, 35, 0.26);
@@ -196,6 +191,8 @@ function openEntry(route: string) {
 }
 
 .portal-entry__title {
+  justify-self: center;
+  width: max-content;
   margin: 0;
   color: #171723;
   font-size: clamp(4rem, 9.4vw, 8rem);
@@ -229,7 +226,7 @@ function openEntry(route: string) {
 
 .portal-entry__label {
   color: var(--entry-accent);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
@@ -237,8 +234,8 @@ function openEntry(route: string) {
 .portal-entry__detail p {
   margin: 0;
   color: rgba(23, 23, 35, 0.72);
-  font-size: 17px;
-  line-height: 1.65;
+  font-size: 18px;
+  line-height: 1.6;
   text-wrap: pretty;
 }
 
@@ -277,9 +274,6 @@ function openEntry(route: string) {
     font-size: clamp(3rem, 18vw, 4.8rem);
   }
 
-  .portal-entry__entry.is-admin .portal-entry__title {
-    font-size: clamp(3rem, 15vw, 4.05rem);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
