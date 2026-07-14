@@ -50,6 +50,24 @@ class FakeSession:
         self.flush_count += 1
 
 
+class CountResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar_one(self):
+        return self.value
+
+
+class CountSession:
+    def __init__(self, counts):
+        self.counts = iter(counts)
+        self.statements = []
+
+    async def execute(self, statement):
+        self.statements.append(str(statement))
+        return CountResult(next(self.counts))
+
+
 @pytest.mark.asyncio
 async def test_list_admin_patients_masks_sensitive_fields():
     patient_uuid = uuid.UUID('00000000-0000-0000-0000-000000000061')
@@ -157,3 +175,20 @@ async def test_get_admin_patient_detail_returns_full_fields_only_for_detail_flow
 
     assert result['card_number'] == '210102199303033333'
     assert result['home_address'] == 'Shenyang 3'
+
+
+@pytest.mark.asyncio
+async def test_doctor_deactivation_check_reports_all_business_blockers():
+    employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000091')
+    session = CountSession([2, 3, 1])
+
+    result = await patient_service.get_doctor_deactivation_check(session, employee_uuid)
+
+    assert result == {
+        'can_deactivate': False,
+        'blockers': [
+            {'code': 'future_schedules', 'count': 2, 'message': '仍存在未来排班'},
+            {'code': 'registered_visits', 'count': 3, 'message': '仍存在待接诊挂号'},
+            {'code': 'active_receptions', 'count': 1, 'message': '仍存在接诊中的患者'},
+        ],
+    }

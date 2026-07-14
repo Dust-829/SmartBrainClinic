@@ -200,3 +200,51 @@ async def test_reset_employee_password_persists_only_bcrypt_hash():
     assert bcrypt.checkpw(b'NewSecurePass8', employee.password.encode('utf-8'))
     assert session.added == [employee]
     assert session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_employee_active_status_rejects_blocked_deactivation():
+    employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000104')
+    employee = SimpleNamespace(uuid=employee_uuid, delmark=1)
+    session = FakeSession([employee])
+
+    original_check = auth_service.get_employee_deactivation_check
+
+    async def fake_check(_employee_uuid, _authorization):
+        return {
+            'can_deactivate': False,
+            'blockers': [{'message': '仍存在待接诊挂号', 'count': 2}],
+        }
+
+    auth_service.get_employee_deactivation_check = fake_check
+    try:
+        with pytest.raises(ValueError, match='仍存在待接诊挂号'):
+            await auth_service.update_employee_active_status(session, employee_uuid, False, 'Bearer test')
+    finally:
+        auth_service.get_employee_deactivation_check = original_check
+
+    assert employee.delmark == 1
+    assert session.commit_count == 0
+
+
+@pytest.mark.asyncio
+async def test_update_employee_active_status_deactivates_when_no_blocker():
+    employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000105')
+    employee = SimpleNamespace(uuid=employee_uuid, delmark=1)
+    session = FakeSession([employee])
+
+    original_check = auth_service.get_employee_deactivation_check
+
+    async def fake_check(_employee_uuid, _authorization):
+        return {'can_deactivate': True, 'blockers': []}
+
+    auth_service.get_employee_deactivation_check = fake_check
+    try:
+        result = await auth_service.update_employee_active_status(session, employee_uuid, False, 'Bearer test')
+    finally:
+        auth_service.get_employee_deactivation_check = original_check
+
+    assert result == {'uuid': str(employee_uuid), 'is_active': False}
+    assert employee.delmark == 0
+    assert session.added == [employee]
+    assert session.commit_count == 1

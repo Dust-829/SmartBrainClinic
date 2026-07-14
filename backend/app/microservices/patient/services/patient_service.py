@@ -882,6 +882,43 @@ async def get_admin_patient_stats(session: AsyncSession) -> dict[str, int]:
     return {"patient_total": int(patient_total or 0)}
 
 
+async def get_doctor_deactivation_check(session: AsyncSession, employee_uuid: uuid_pkg.UUID) -> dict:
+    future_schedules = (
+        await session.execute(
+            select(func.count()).select_from(SchedulingActual).where(
+                SchedulingActual.employee_uuid == employee_uuid,
+                SchedulingActual.schedule_date >= date.today(),
+            )
+        )
+    ).scalar_one()
+    registered_visits = (
+        await session.execute(
+            select(func.count()).select_from(Register).where(
+                Register.employee_uuid == employee_uuid,
+                Register.visit_state == VisitState.REGISTERED,
+            )
+        )
+    ).scalar_one()
+    active_receptions = (
+        await session.execute(
+            select(func.count()).select_from(Register).where(
+                Register.employee_uuid == employee_uuid,
+                Register.visit_state == VisitState.RECEPTION,
+            )
+        )
+    ).scalar_one()
+
+    blockers = []
+    if future_schedules:
+        blockers.append({"code": "future_schedules", "count": int(future_schedules), "message": "仍存在未来排班"})
+    if registered_visits:
+        blockers.append({"code": "registered_visits", "count": int(registered_visits), "message": "仍存在待接诊挂号"})
+    if active_receptions:
+        blockers.append({"code": "active_receptions", "count": int(active_receptions), "message": "仍存在接诊中的患者"})
+
+    return {"can_deactivate": not blockers, "blockers": blockers}
+
+
 async def update_admin_patient(session: AsyncSession, patient_uuid: uuid_pkg.UUID, data: dict) -> dict:
     patient = await get_patient_by_uuid(session, patient_uuid)
     if not patient:

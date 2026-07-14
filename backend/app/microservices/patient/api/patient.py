@@ -815,6 +815,18 @@ async def get_admin_patient_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get('/admin/doctors/{employee_uuid}/deactivation-check', summary='检查医生是否可停用')
+async def get_doctor_deactivation_check(
+    employee_uuid: uuid_pkg.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
+):
+    try:
+        return success(await svc.get_doctor_deactivation_check(session, employee_uuid))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get('/{uuid}', summary='API endpoint')
 async def get_patient_info(uuid: str, session: AsyncSession = Depends(get_session)):
     patient = await svc.get_patient_by_uuid(session, uuid_pkg.UUID(uuid))

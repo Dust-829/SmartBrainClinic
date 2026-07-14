@@ -673,6 +673,28 @@
   color: var(--admin-accent-strong);
 }
 
+.account-card__status-action {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(15, 118, 110, 0.24);
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-accent-soft);
+  color: var(--admin-accent-strong);
+  font: inherit;
+  font-weight: 700;
+}
+
+.account-card__status-action.is-danger {
+  border-color: #fecaca;
+  background: #fff7f7;
+  color: var(--admin-danger);
+}
+
+.account-card__status-action:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .credentials-dialog__notice {
   margin: 0;
   padding: 12px;

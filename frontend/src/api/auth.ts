@@ -11,6 +11,7 @@ export interface DoctorDirectoryItem {
   dept_code?: string | null
   dept_id?: number | null
   ai_eval_score?: string | number | null
+  delmark?: number | null
 }
 
 export interface DepartmentRecord {
@@ -67,6 +68,15 @@ export interface AccountPagination {
 export interface DoctorAccountPage {
   items: DoctorDirectoryItem[]
   pagination: AccountPagination
+}
+
+export interface DoctorDeactivationCheck {
+  can_deactivate: boolean
+  blockers: Array<{
+    code: 'future_schedules' | 'registered_visits' | 'active_receptions'
+    count: number
+    message: string
+  }>
 }
 
 export interface DoctorProfileUpdatePayload {
@@ -129,6 +139,17 @@ export const authApi = {
     return http.post<ApiEnvelope<{ uuid: string; credentials_reset: boolean }>>(
       `/api/v1/auth/employee/${encodeURIComponent(employeeUuid)}/credentials/reset`,
       { new_password: newPassword },
+    )
+  },
+  getEmployeeDeactivationCheck(employeeUuid: string) {
+    return http.get<ApiEnvelope<DoctorDeactivationCheck>>(
+      `/api/v1/auth/employee/${encodeURIComponent(employeeUuid)}/deactivation-check`,
+    )
+  },
+  updateEmployeeActiveStatus(employeeUuid: string, isActive: boolean) {
+    return http.put<ApiEnvelope<{ uuid: string; is_active: boolean }>>(
+      `/api/v1/auth/employee/${encodeURIComponent(employeeUuid)}/active`,
+      { is_active: isActive },
     )
   },
 }

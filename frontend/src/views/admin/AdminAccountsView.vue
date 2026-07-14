@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { adminApi, type PatientAdminDetail, type PatientAdminListItem } from '@/api/admin'
 import { authApi, type DoctorDirectoryItem } from '@/api/auth'
@@ -27,6 +27,7 @@ const editingDoctorUuid = ref('')
 const credentialDialogVisible = ref(false)
 const resettingCredentials = ref(false)
 const credentialTarget = ref<DoctorDirectoryItem | null>(null)
+const updatingDoctorStatus = ref('')
 
 const doctorForm = reactive({
   realname: '',
@@ -258,6 +259,45 @@ async function submitCredentialReset() {
   }
 }
 
+function getRequestErrorMessage(error: unknown, fallback: string) {
+  const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  return typeof detail === 'string' && detail.trim() ? detail : fallback
+}
+
+async function toggleDoctorStatus(doctor: DoctorDirectoryItem) {
+  const isActive = doctor.delmark !== 0
+  if (isActive) {
+    try {
+      const response = await authApi.getEmployeeDeactivationCheck(doctor.uuid)
+      const check = response.data.data
+      if (!check?.can_deactivate) {
+        ElMessage.warning(check?.blockers.map((item) => `${item.message} ${item.count} 条`).join('；') || '当前医生仍有关联业务，无法停用')
+        return
+      }
+      await ElMessageBox.confirm(
+        `停用后，${doctor.realname} 将不再作为可用医生展示。确认继续吗？`,
+        '确认停用医生',
+        { confirmButtonText: '确认停用', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch (error) {
+      if (error === 'cancel' || (error as { action?: string })?.action === 'cancel') return
+      ElMessage.error(getRequestErrorMessage(error, '医生停用检查失败，请稍后重试'))
+      return
+    }
+  }
+
+  updatingDoctorStatus.value = doctor.uuid
+  try {
+    await authApi.updateEmployeeActiveStatus(doctor.uuid, !isActive)
+    ElMessage.success(isActive ? '医生已停用' : '医生已启用')
+    await loadDoctors()
+  } catch (error) {
+    ElMessage.error(getRequestErrorMessage(error, isActive ? '医生停用失败，请稍后重试' : '医生启用失败，请稍后重试'))
+  } finally {
+    updatingDoctorStatus.value = ''
+  }
+}
+
 function searchPatients() {
   patientPagination.offset = 0
   loadPatients()
@@ -422,7 +462,7 @@ watch(activeTab, (tab) => {
                 <strong>{{ doctor.realname }}</strong>
                 <p>{{ formatDoctorGender(doctor.gender) }} | AI 评分 {{ doctor.ai_eval_score ?? '未记录' }}</p>
               </div>
-              <span>{{ doctor.uuid }}</span>
+              <span>{{ doctor.delmark === 0 ? '已停用' : '已启用' }}</span>
             </div>
 
             <div class="account-meta">
@@ -434,6 +474,14 @@ watch(activeTab, (tab) => {
             <div class="account-card__actions">
               <button type="button" @click="openEditDoctorDialog(doctor)">编辑资料</button>
               <button type="button" class="account-card__secondary-action" @click="openCredentialResetDialog(doctor)">重置凭据</button>
+              <button
+                type="button"
+                :class="['account-card__status-action', { 'is-danger': doctor.delmark !== 0 }]"
+                :disabled="updatingDoctorStatus === doctor.uuid"
+                @click="toggleDoctorStatus(doctor)"
+              >
+                {{ updatingDoctorStatus === doctor.uuid ? '处理中...' : doctor.delmark === 0 ? '启用医生' : '停用医生' }}
+              </button>
             </div>
           </article>
         </div>

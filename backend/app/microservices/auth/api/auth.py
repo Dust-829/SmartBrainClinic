@@ -1,7 +1,7 @@
 import uuid as uuid_pkg
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,6 +49,10 @@ class ScoreAdjustRequest(BaseModel):
 
 class EmployeePasswordResetRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
+
+
+class EmployeeActiveStatusUpdate(BaseModel):
+    is_active: bool
 
 
 class AdminLoginRequest(BaseModel):
@@ -157,6 +161,32 @@ async def reset_employee_credentials(
         return success(await svc.reset_employee_password(session, uuid, data.new_password))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/employee/{uuid}/deactivation-check", summary="检查医生是否可停用")
+async def get_employee_deactivation_check(
+    uuid: uuid_pkg.UUID,
+    authorization: Optional[str] = Header(default=None),
+    _: AdminPrincipal = Depends(require_admin),
+):
+    try:
+        return success(await svc.get_employee_deactivation_check(uuid, authorization))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/employee/{uuid}/active", summary="启用或停用医生")
+async def update_employee_active_status(
+    uuid: uuid_pkg.UUID,
+    data: EmployeeActiveStatusUpdate,
+    session: AsyncSession = Depends(get_session),
+    authorization: Optional[str] = Header(default=None),
+    _: AdminPrincipal = Depends(require_admin),
+):
+    try:
+        return success(await svc.update_employee_active_status(session, uuid, data.is_active, authorization))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/admin/doctors", summary="管理员查询医生账号")

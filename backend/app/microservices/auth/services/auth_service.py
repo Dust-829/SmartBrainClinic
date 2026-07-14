@@ -8,6 +8,7 @@ from ..models.auth import OutboxEvent
 import bcrypt
 from sqlalchemy.exc import IntegrityError
 from decimal import Decimal
+from app.common.clients import PatientClient
 
 
 def _normalize_staff_code(value: str) -> str:
@@ -150,7 +151,6 @@ async def list_doctor_accounts(
 
     conditions = [
         Employee.regist_level_id.isnot(None),
-        Employee.delmark == 1,
     ]
 
     stmt = (
@@ -386,6 +386,36 @@ async def reset_employee_password(session: AsyncSession, emp_uuid: uuid_pkg.UUID
     session.add(employee)
     await session.commit()
     return {"uuid": str(employee.uuid), "credentials_reset": True}
+
+
+async def get_employee_deactivation_check(employee_uuid: uuid_pkg.UUID, authorization: str | None) -> dict:
+    return await PatientClient.get_doctor_deactivation_check(str(employee_uuid), authorization)
+
+
+async def update_employee_active_status(
+    session: AsyncSession,
+    emp_uuid: uuid_pkg.UUID,
+    is_active: bool,
+    authorization: str | None,
+) -> dict:
+    result = await session.execute(select(Employee).where(Employee.uuid == emp_uuid))
+    employee = result.scalar_one_or_none()
+    if not employee:
+        raise ValueError("医生不存在")
+
+    if not is_active:
+        check = await get_employee_deactivation_check(emp_uuid, authorization)
+        if not check.get("can_deactivate"):
+            messages = "；".join(
+                f"{item.get('message', '存在未完成业务')}（{item.get('count', 0)}）"
+                for item in check.get("blockers", [])
+            )
+            raise ValueError(f"当前不能停用该医生：{messages}")
+
+    employee.delmark = 1 if is_active else 0
+    session.add(employee)
+    await session.commit()
+    return {"uuid": str(employee.uuid), "is_active": bool(employee.delmark == 1)}
 
 async def update_employee_expertise(session: AsyncSession, emp_uuid: uuid_pkg.UUID, expertise: str) -> dict:
     """
