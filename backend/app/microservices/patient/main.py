@@ -6,6 +6,7 @@ from .api.patient import router
 from .config import settings
 from .services.zombie_sweeper import sweep_zombie_slots
 from .services.outbox_sweeper import sweep_outbox_events
+from .services.schedule_maintainer import ensure_rolling_schedules, maintain_rolling_schedules
 from .workers.medical_consumer import start_medical_consumer
 
 @asynccontextmanager
@@ -19,14 +20,15 @@ async def lifespan(app: FastAPI):
         except Exception:
             service_host = "127.0.0.1"
     nacos_manager.register_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
-    # Startup
+    await ensure_rolling_schedules()
     task = asyncio.create_task(sweep_zombie_slots())
     outbox_task = asyncio.create_task(sweep_outbox_events())
+    schedule_maintainer_task = asyncio.create_task(maintain_rolling_schedules())
     medical_consumer_task = asyncio.create_task(start_medical_consumer())
     yield
-    # Shutdown
     task.cancel()
     outbox_task.cancel()
+    schedule_maintainer_task.cancel()
     medical_consumer_task.cancel()
     await close_shared_async_client()
     nacos_manager.deregister_service(settings.SERVICE_NAME, service_host, settings.SERVICE_PORT)
