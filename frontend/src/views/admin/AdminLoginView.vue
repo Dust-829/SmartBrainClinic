@@ -17,11 +17,6 @@ const form = reactive({
   password: '',
 })
 
-const redirectPath = computed(() => {
-  const value = route.query.redirect
-  return typeof value === 'string' && value.trim() ? value : '/admin/dashboard'
-})
-
 const expiredSessionNotice = computed(() => route.query.reason === 'expired')
 
 async function submit() {
@@ -42,7 +37,7 @@ async function submit() {
       displayName: result.staff.display_name,
       staffCode: result.staff.staff_code,
     }, result.access_token)
-    router.replace(redirectPath.value)
+    router.replace({ name: 'admin-home' })
   } catch {
     ElMessage.error('登录失败，请检查工号、密码或管理员认证配置。')
   } finally {
