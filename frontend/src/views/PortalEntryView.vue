@@ -150,9 +150,9 @@ function openEntry(route: string) {
   --entry-accent: #171723;
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 23vw);
+  grid-template-columns: minmax(0, 1fr) minmax(248px, 28vw);
   align-items: end;
-  gap: clamp(16px, 2vw, 28px);
+  gap: clamp(24px, 3vw, 42px);
   width: 100%;
   padding: clamp(16px, 2vw, 22px) 0 clamp(18px, 2.8vw, 28px);
   border: 0;
@@ -179,14 +179,6 @@ function openEntry(route: string) {
   --entry-accent: #4338ca;
 }
 
-.portal-entry__entry.is-doctor {
-  padding-left: clamp(36px, 8vw, 170px);
-}
-
-.portal-entry__entry.is-admin {
-  padding-left: clamp(12px, 3vw, 74px);
-}
-
 .portal-entry__entry:hover,
 .portal-entry__entry:focus-visible {
   border-color: rgba(23, 23, 35, 0.26);
@@ -200,7 +192,7 @@ function openEntry(route: string) {
 .portal-entry__title {
   margin: 0;
   color: #171723;
-  font-size: clamp(4rem, 10.2vw, 8.8rem);
+  font-size: clamp(4rem, 9.4vw, 8rem);
   font-weight: 800;
   line-height: 0.92;
   letter-spacing: -0.08em;
@@ -223,24 +215,24 @@ function openEntry(route: string) {
 
 .portal-entry__detail {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   align-self: center;
-  max-width: 24ch;
-  padding-bottom: 8px;
+  max-width: 28ch;
+  padding-bottom: 6px;
 }
 
 .portal-entry__label {
   color: var(--entry-accent);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
 }
 
 .portal-entry__detail p {
   margin: 0;
   color: rgba(23, 23, 35, 0.72);
-  font-size: 15px;
-  line-height: 1.75;
+  font-size: 17px;
+  line-height: 1.65;
   text-wrap: pretty;
 }
 
