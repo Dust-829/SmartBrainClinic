@@ -1,0 +1,67 @@
+﻿<h2>管理员主页大屏：这三块内容怎么排主次？</h2>
+<p class="subtitle">你已经选了「待办 / 风险 + 库存 / 账单 + 资源 / 患者」。现在只回答一个问题：哪种布局最符合你心里的管理员首页？我推荐 A，因为它最贴近你现在的医生端工作台结构，也最适合把管理员“当前要处理什么”放在第一优先级。</p>
+
+<div class="cards">
+  <div class="card" data-choice="layout-a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="label">Recommended</div>
+      <div class="mockup" style="margin-top:10px;">
+        <div class="mockup-header">A. Command-first</div>
+        <div class="mockup-body">
+          <div style="padding:10px 12px;border-radius:12px;background:linear-gradient(135deg,#0f766e,#115e59);color:#fff;font-weight:700;">Hero + 核心指标</div>
+          <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:10px;margin-top:10px;">
+            <div class="placeholder" style="min-height:140px;background:#ecfeff;border-color:#99f6e4;">主工作区：待办 / 风险</div>
+            <div class="placeholder" style="min-height:140px;">侧栏：资源 / 患者</div>
+          </div>
+          <div class="placeholder" style="min-height:96px;margin-top:10px;">第二屏起始：库存 / 账单</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 待办优先型</h3>
+      <p>首页先解决当前动作，资源做支撑，库存账单放第二层。最像“管理驾驶舱”。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="layout-b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="label">Balanced</div>
+      <div class="mockup" style="margin-top:10px;">
+        <div class="mockup-header">B. Equal-weight board</div>
+        <div class="mockup-body">
+          <div style="padding:10px 12px;border-radius:12px;background:linear-gradient(135deg,#0f766e,#115e59);color:#fff;font-weight:700;">Hero + 横向数字条</div>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px;">
+            <div class="placeholder" style="min-height:150px;background:#ecfeff;border-color:#99f6e4;">待办 / 风险</div>
+            <div class="placeholder" style="min-height:150px;">库存 / 账单</div>
+            <div class="placeholder" style="min-height:150px;">资源 / 患者</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 三块并列型</h3>
+      <p>适合展示感更强，但首要任务不够突出，容易变成普通数据墙。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="layout-c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="label">Executive</div>
+      <div class="mockup" style="margin-top:10px;">
+        <div class="mockup-header">C. Summary-first</div>
+        <div class="mockup-body">
+          <div style="padding:10px 12px;border-radius:12px;background:linear-gradient(135deg,#0f766e,#115e59);color:#fff;font-weight:700;">Hero + 总览摘要</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+            <div class="placeholder" style="min-height:120px;">资源 / 患者</div>
+            <div class="placeholder" style="min-height:120px;background:#ecfeff;border-color:#99f6e4;">待办 / 风险</div>
+          </div>
+          <div class="placeholder" style="min-height:110px;margin-top:10px;">库存 / 账单（宽模块）</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 汇总优先型</h3>
+      <p>更适合汇报屏或轮播屏，实时操作感最弱。</p>
+    </div>
+  </div>
+</div>

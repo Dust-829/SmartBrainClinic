@@ -1,48 +1,165 @@
-﻿<script setup lang="ts">
-import SectionCard from '@/components/common/SectionCard.vue'
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
 
-const adminTasks = [
-  '排班批量生成',
-  'AI 排班微调',
-  '排班审批',
-  '规则干预',
-  'AI 审计日志',
-]
+import { adminApi, type AuditLogRecord, type AuditSummary, type SchedulingApplicationRecord } from '@/api/admin'
+import SectionCard from '@/components/common/SectionCard.vue'
+import { auditModuleLabel, auditSourceLabel } from '@/constants/adminAudit'
+import { useAdminSessionStore } from '@/stores/adminSession'
+
+const session = useAdminSessionStore()
+const loading = ref(false)
+const pendingApplications = ref<SchedulingApplicationRecord[]>([])
+const auditLogs = ref<AuditLogRecord[]>([])
+const auditLoadFailed = ref(false)
+const auditSummary = ref<AuditSummary>({
+  total_count: 0,
+  validated_count: 0,
+  pending_count: 0,
+  not_queued_count: 0,
+  review_pending_count: 0,
+  review_approved_count: 0,
+  review_rejected_count: 0,
+})
+
+const metricCards = computed(() => [
+  { label: '待审批排班', value: pendingApplications.value.length, tone: 'indigo' },
+  { label: 'AI 审计记录', value: auditLoadFailed.value ? '异常' : auditSummary.value.total_count, tone: 'sky' },
+  {
+    label: '待人工复核',
+    value: auditLoadFailed.value ? '异常' : auditSummary.value.review_pending_count,
+    tone: 'amber',
+  },
+  {
+    label: '管理员身份',
+    value: session.staff?.staffCode || 'ADMIN',
+    tone: 'slate',
+  },
+])
+
+const quickLinks = computed(() => [
+  { title: '医生管理', subtitle: '查看医生、维护专长、调整 AI 评分', to: '/admin/doctors' },
+  { title: '科室资料', subtitle: '查看科室和人员资源分布', to: '/admin/departments' },
+  { title: '诊室资源', subtitle: '查询门诊诊室、CT室和检查室资源', to: '/admin/rooms' },
+  { title: '智能排班', subtitle: '生成常规排班、提交 AI 微调和人工规则干预', to: '/admin/schedules' },
+  { title: '审批中心', subtitle: '集中处理排班申请与高风险后台动作', to: '/admin/approvals' },
+  {
+    title: 'AI 审计',
+    subtitle: auditLoadFailed.value ? 'AI 审计接口当前加载失败，请检查后端服务' : '查看 AI 输出、人工确认结果和证据链',
+    to: '/admin/audit',
+  },
+  { title: '药房工作台', subtitle: '批量入库、发药、退药和库存预警', to: '/admin/pharmacy' },
+  { title: '财务账单', subtitle: '查询挂号账单、退费和异常收费处理', to: '/admin/billing' },
+])
+
+async function loadDashboard() {
+  loading.value = true
+  try {
+    const tasks = [
+      adminApi.listPendingApplications(),
+      adminApi.listAiAudits({ limit: 200 }),
+    ] as const
+
+    const [applicationsResult, auditsResult] = await Promise.allSettled(tasks)
+    pendingApplications.value = applicationsResult.status === 'fulfilled' ? applicationsResult.value.data.data ?? [] : []
+    auditLogs.value = auditsResult.status === 'fulfilled' ? auditsResult.value.data.data?.items ?? [] : []
+    auditSummary.value = auditsResult.status === 'fulfilled'
+      ? auditsResult.value.data.data?.summary ?? auditSummary.value
+      : {
+          total_count: 0,
+          validated_count: 0,
+          pending_count: 0,
+          not_queued_count: 0,
+          review_pending_count: 0,
+          review_approved_count: 0,
+          review_rejected_count: 0,
+        }
+    auditLoadFailed.value = auditsResult.status === 'rejected'
+  } catch {
+    pendingApplications.value = []
+    auditLogs.value = []
+    auditSummary.value = {
+      total_count: 0,
+      validated_count: 0,
+      pending_count: 0,
+      not_queued_count: 0,
+      review_pending_count: 0,
+      review_approved_count: 0,
+      review_rejected_count: 0,
+    }
+    auditLoadFailed.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return '暂无时间'
+  return value.replace('T', ' ').slice(0, 16)
+}
+
+function formatApplicant(item: SchedulingApplicationRecord) {
+  return [item.employee_name, item.dept_name].filter(Boolean).join(' · ') || item.employee_uuid
+}
+
+onMounted(() => {
+  loadDashboard()
+})
 </script>
 
 <template>
   <div class="admin-console">
-    <SectionCard title="管理后台骨架" subtitle="后续会按排班、审批、审计三个域展开。">
-      <div class="admin-console__grid">
-        <div v-for="task in adminTasks" :key="task" class="admin-console__tile">
-          {{ task }}
+    <section class="admin-console__hero">
+      <div>
+        <span>当前管理员</span>
+        <h2>{{ session.staff?.displayName || '值班管理员' }}</h2>
+        <p>这里承接医院资源、流程、审批、药房、账单与 AI 审计的统一控制入口。</p>
+      </div>
+      <button type="button" :disabled="loading" @click="loadDashboard">
+        {{ loading ? '刷新中...' : '刷新总览' }}
+      </button>
+    </section>
+
+    <section class="admin-console__metrics">
+      <article v-for="metric in metricCards" :key="metric.label" :class="['admin-console__metric', `is-${metric.tone}`]">
+        <span>{{ metric.label }}</span>
+        <strong>{{ metric.value }}</strong>
+      </article>
+    </section>
+
+    <div class="admin-console__grid">
+      <SectionCard title="待办与异常" subtitle="优先处理最能影响演示闭环的后台动作。">
+        <div v-if="pendingApplications.length" class="admin-list">
+          <article v-for="item in pendingApplications.slice(0, 4)" :key="item.uuid" class="admin-console__list-item">
+            <strong>{{ item.prompt_title || '排班调整申请' }}</strong>
+            <p>{{ formatApplicant(item) }}</p>
+            <span>{{ [item.time_hint, formatDateTime(item.created_at)].filter(Boolean).join(' | ') }}</span>
+          </article>
         </div>
+        <div v-else class="admin-console__empty">当前没有待审批排班申请。</div>
+      </SectionCard>
+
+      <SectionCard
+        title="AI 审计快照"
+        :subtitle="auditLoadFailed ? 'AI 审计接口加载失败，当前无法展示快照。' : '用来展示 AI 产生信息与人工确认信息的留痕证据。'"
+      >
+        <div v-if="auditLogs.length" class="admin-list">
+          <article v-for="item in auditLogs.slice(0, 4)" :key="item.uuid" class="admin-console__list-item">
+            <strong>{{ auditModuleLabel(item.module_name) }}</strong>
+            <p>{{ auditSourceLabel(item.source) }} | {{ item.model || '未记录模型' }}</p>
+            <span>{{ item.validated ? '已验证' : '待复核' }}</span>
+          </article>
+        </div>
+        <div v-else class="admin-console__empty">{{ auditLoadFailed ? 'AI 审计快照加载失败。' : '当前没有可展示的 AI 审计记录。' }}</div>
+      </SectionCard>
+    </div>
+
+    <SectionCard title="管理员工作台入口" subtitle="按最小闭环组织，避免后台只有单页骨架。">
+      <div class="admin-console__links">
+        <router-link v-for="item in quickLinks" :key="item.to" :to="item.to" class="admin-console__link-card">
+          <strong>{{ item.title }}</strong>
+          <p>{{ item.subtitle }}</p>
+        </router-link>
       </div>
     </SectionCard>
   </div>
 </template>
-
-<style scoped>
-.admin-console__grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.admin-console__tile {
-  min-height: 120px;
-  display: flex;
-  align-items: flex-end;
-  padding: 18px;
-  border-radius: 8px;
-  color: #312e81;
-  background: linear-gradient(180deg, #eef2ff 0%, #e0e7ff 100%);
-  border: 1px solid #c7d2fe;
-}
-
-@media (max-width: 1100px) {
-  .admin-console__grid {
-    grid-template-columns: 1fr;
-  }
-}
-</style>

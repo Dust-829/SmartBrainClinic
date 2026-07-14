@@ -1,0 +1,73 @@
+﻿<h2>管理员主页大屏：首屏优先展示什么？</h2>
+<p class="subtitle">先选出 2-3 个必须出现在第一屏的模块。当前选项都基于仓库里已经存在的管理员侧真实接口能力，不是空想功能。</p>
+
+<div class="section">
+  <div class="mockup">
+    <div class="mockup-header">建议方向：混合驾驶舱</div>
+    <div class="mockup-body">
+      <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:14px;">
+        <div class="placeholder" style="min-height:110px;">首屏主区：实时风险 / 待办 / 关键动作</div>
+        <div class="placeholder" style="min-height:110px;">首屏侧区：摘要数字 / 当前负责人 / 快捷状态</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:14px;">
+        <div class="placeholder">第二层模块 A</div>
+        <div class="placeholder">第二层模块 B</div>
+        <div class="placeholder">第二层模块 C</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>请选择首屏必备模块</h3>
+  <p class="subtitle">可多选。点击后会高亮记录。</p>
+  <div class="cards" data-multiselect>
+    <div class="card" data-choice="todo-risk" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="label">Realtime</div>
+        <div style="font-size:28px;font-weight:800;margin-top:10px;">待办中枢</div>
+        <div style="margin-top:8px;color:#5b6477;line-height:1.6;">待审批排班、待处理动作、当前异常入口</div>
+      </div>
+      <div class="card-body">
+        <h3>待办 / 风险</h3>
+        <p>适合值班管理员。强调现在要处理什么。</p>
+      </div>
+    </div>
+
+    <div class="card" data-choice="ai-audit" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="label">Quality</div>
+        <div style="font-size:28px;font-weight:800;margin-top:10px;">AI 审计</div>
+        <div style="margin-top:8px;color:#5b6477;line-height:1.6;">未复核建议、模块分布、质量留痕</div>
+      </div>
+      <div class="card-body">
+        <h3>AI 风险 / 质量</h3>
+        <p>适合展示平台智能能力是否可控、可追溯。</p>
+      </div>
+    </div>
+
+    <div class="card" data-choice="pharmacy-billing" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="label">Ops</div>
+        <div style="font-size:28px;font-weight:800;margin-top:10px;">药房 + 财务</div>
+        <div style="margin-top:8px;color:#5b6477;line-height:1.6;">低库存药品、最近账单、退款/结算状态</div>
+      </div>
+      <div class="card-body">
+        <h3>库存 / 账单</h3>
+        <p>适合突出经营风险与后勤保障。</p>
+      </div>
+    </div>
+
+    <div class="card" data-choice="resources-patients" onclick="toggleSelect(this)">
+      <div class="card-image">
+        <div class="label">Resource</div>
+        <div style="font-size:28px;font-weight:800;margin-top:10px;">资源概览</div>
+        <div style="margin-top:8px;color:#5b6477;line-height:1.6;">医生、门诊人员、科室、诊室、患者基础量</div>
+      </div>
+      <div class="card-body">
+        <h3>资源 / 患者</h3>
+        <p>适合做平台全局面貌展示，但实时性较弱。</p>
+      </div>
+    </div>
+  </div>
+</div>

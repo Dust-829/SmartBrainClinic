@@ -11,7 +11,9 @@ import logging
 import re
 import time
 import uuid
+from csv import writer
 from datetime import datetime
+from io import StringIO
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -19,10 +21,51 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.config import BaseMicroserviceSettings
+from app.common.text_normalization import normalize_text_value, repair_mojibake_text
 
 logger = logging.getLogger("common.ai_audit")
 
 _engine: Optional[AsyncEngine] = None
+REVIEW_PENDING = "pending"
+REVIEW_APPROVED = "approved"
+REVIEW_REJECTED = "rejected"
+REVIEW_STATUSES = {REVIEW_PENDING, REVIEW_APPROVED, REVIEW_REJECTED}
+REVIEW_STATUS_NONE = "none"
+
+RISK_WARNING_PREFIXES = (
+    "llm_triage_low_quality_fallback",
+    "llm_triage_request_failed_fallback",
+    "llm_triage_no_valid_result_fallback",
+    "llm_triage_not_configured_fallback",
+    "no_valid_draft_context",
+    "agent_execution_failed",
+)
+RISK_WARNING_CONTAINS = (
+    "_llm_second_review_rejected:",
+    "_llm_second_review_schema_invalid:",
+    "allergy_conflict",
+    "stock_insufficient",
+    "not_found_in_db",
+)
+
+AUDIT_SELECT_COLUMNS = """
+    uuid,
+    module_name,
+    source,
+    model,
+    input_summary,
+    output_summary,
+    warnings,
+    validated,
+    validator_messages,
+    latency_ms,
+    context,
+    review_status,
+    review_note,
+    reviewer,
+    reviewed_at,
+    created_at
+"""
 
 SENSITIVE_KEYS = {
     "api_key",
@@ -88,7 +131,8 @@ async def record_ai_audit(
                         validated,
                         validator_messages,
                         latency_ms,
-                        context
+                        context,
+                        review_status
                     ) VALUES (
                         :uuid,
                         :module_name,
@@ -100,7 +144,8 @@ async def record_ai_audit(
                         :validated,
                         :validator_messages,
                         :latency_ms,
-                        :context
+                        :context,
+                        :review_status
                     )
                     """
                 ),
@@ -116,10 +161,42 @@ async def record_ai_audit(
                     "validator_messages": _json_dump(result.get("validator_messages", [])),
                     "latency_ms": latency_ms,
                     "context": _json_dump(context or {}),
+                    "review_status": initial_review_status_for_audit(
+                        module_name=module_name,
+                        result=result,
+                        context=context,
+                    ),
                 },
             )
     except Exception as exc:
         logger.warning("[AI Audit] Failed to write audit log: %s", exc)
+
+
+def should_enqueue_human_review(
+    *,
+    module_name: str,
+    result: dict[str, Any],
+    context: Optional[dict[str, Any]] = None,
+) -> bool:
+    del module_name, context
+    if not bool(result.get("validated", False)):
+        return True
+
+    validator_messages = _normalize_string_list(result.get("validator_messages"))
+    if validator_messages:
+        return True
+
+    warnings = _normalize_string_list(result.get("warnings"))
+    return any(_is_risk_warning(warning) for warning in warnings)
+
+
+def initial_review_status_for_audit(
+    *,
+    module_name: str,
+    result: dict[str, Any],
+    context: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    return REVIEW_PENDING if should_enqueue_human_review(module_name=module_name, result=result, context=context) else None
 
 
 async def query_ai_audit_logs(
@@ -128,15 +205,218 @@ async def query_ai_audit_logs(
     module_name: Optional[str] = None,
     source: Optional[str] = None,
     validated: Optional[bool] = None,
+    review_status: Optional[str] = None,
     created_from: Optional[datetime] = None,
     created_to: Optional[datetime] = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
+    where_sql, params = _build_audit_filters(
+        module_name=module_name,
+        source=source,
+        validated=validated,
+        review_status=review_status,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    item_params = {**params, "limit": limit, "offset": offset}
+
+    item_result = await session.execute(
+        text(
+            f"""
+            SELECT
+                {AUDIT_SELECT_COLUMNS}
+            FROM ai_audit_log
+            WHERE {' AND '.join(where_sql)}
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        item_params,
+    )
+    item_rows = item_result.mappings().all()
+    items = [_serialize_audit_row(row) for row in item_rows]
+
+    summary_result = await session.execute(
+        text(
+            f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COALESCE(SUM(CASE WHEN validated THEN 1 ELSE 0 END), 0) AS validated_count,
+                COALESCE(SUM(CASE WHEN validated THEN 0 ELSE 1 END), 0) AS pending_count,
+                COALESCE(SUM(CASE WHEN review_status IS NULL THEN 1 ELSE 0 END), 0) AS not_queued_count,
+                COALESCE(SUM(CASE WHEN review_status = 'pending' THEN 1 ELSE 0 END), 0) AS review_pending_count,
+                COALESCE(SUM(CASE WHEN review_status = 'approved' THEN 1 ELSE 0 END), 0) AS review_approved_count,
+                COALESCE(SUM(CASE WHEN review_status = 'rejected' THEN 1 ELSE 0 END), 0) AS review_rejected_count
+            FROM ai_audit_log
+            WHERE {' AND '.join(where_sql)}
+            """
+        ),
+        params,
+    )
+    summary_row = summary_result.mappings().all()
+    summary = _build_audit_summary(summary_row[0] if summary_row else None, items)
+    return {
+        "items": items,
+        "pagination": {
+            "total": summary["total_count"],
+            "limit": limit,
+            "offset": offset,
+        },
+        "summary": summary,
+    }
+
+
+async def get_ai_audit_log(session: AsyncSession, audit_uuid: str) -> Optional[dict[str, Any]]:
+    result = await session.execute(
+        text(
+            f"""
+            SELECT
+                {AUDIT_SELECT_COLUMNS}
+            FROM ai_audit_log
+            WHERE uuid = :audit_uuid
+            LIMIT 1
+            """
+        ),
+        {"audit_uuid": audit_uuid},
+    )
+    rows = result.mappings().all()
+    if not rows:
+        return None
+    return _serialize_audit_row(rows[0])
+
+
+async def review_ai_audit_log(
+    session: AsyncSession,
+    audit_uuid: str,
+    *,
+    review_status: str,
+    review_note: Optional[str] = None,
+    reviewer: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    normalized_status = str(review_status or "").strip().lower()
+    if normalized_status not in REVIEW_STATUSES - {REVIEW_PENDING}:
+        raise ValueError("无效的人工复核状态")
+
+    result = await session.execute(
+        text(
+            f"""
+            UPDATE ai_audit_log
+            SET
+                review_status = :review_status,
+                review_note = :review_note,
+                reviewer = :reviewer,
+                reviewed_at = CURRENT_TIMESTAMP
+            WHERE uuid = :audit_uuid
+            RETURNING
+                {AUDIT_SELECT_COLUMNS}
+            """
+        ),
+        {
+            "audit_uuid": audit_uuid,
+            "review_status": normalized_status,
+            "review_note": review_note.strip() if isinstance(review_note, str) else review_note,
+            "reviewer": reviewer.strip() if isinstance(reviewer, str) else reviewer,
+        },
+    )
+    rows = result.mappings().all()
+    if not rows:
+        return None
+    await session.commit()
+    return _serialize_audit_row(rows[0])
+
+
+async def export_ai_audit_logs_csv(
+    session: AsyncSession,
+    *,
+    module_name: Optional[str] = None,
+    source: Optional[str] = None,
+    validated: Optional[bool] = None,
+    review_status: Optional[str] = None,
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
+) -> str:
+    where_sql, params = _build_audit_filters(
+        module_name=module_name,
+        source=source,
+        validated=validated,
+        review_status=review_status,
+        created_from=created_from,
+        created_to=created_to,
+    )
+    result = await session.execute(
+        text(
+            f"""
+            SELECT
+                {AUDIT_SELECT_COLUMNS}
+            FROM ai_audit_log
+            WHERE {' AND '.join(where_sql)}
+            ORDER BY created_at DESC
+            """
+        ),
+        params,
+    )
+    rows = [_serialize_audit_row(row) for row in result.mappings().all()]
+
+    buffer = StringIO()
+    csv_writer = writer(buffer)
+    csv_writer.writerow(
+        [
+            "uuid",
+            "module_name",
+            "source",
+            "model",
+            "created_at",
+            "validated",
+            "warnings",
+            "validator_messages",
+            "review_status",
+            "reviewer",
+            "reviewed_at",
+            "review_note",
+            "latency_ms",
+            "input_summary",
+            "output_summary",
+            "context",
+        ]
+    )
+    for row in rows:
+        csv_writer.writerow(
+            [
+                row.get("uuid"),
+                row.get("module_name"),
+                row.get("source"),
+                row.get("model"),
+                row.get("created_at"),
+                row.get("validated"),
+                _csv_value(row.get("warnings")),
+                _csv_value(row.get("validator_messages")),
+                row.get("review_status"),
+                row.get("reviewer"),
+                row.get("reviewed_at"),
+                row.get("review_note"),
+                row.get("latency_ms"),
+                row.get("input_summary"),
+                row.get("output_summary"),
+                _csv_value(row.get("context")),
+            ]
+        )
+    return buffer.getvalue()
+
+
+def _build_audit_filters(
+    *,
+    module_name: Optional[str] = None,
+    source: Optional[str] = None,
+    validated: Optional[bool] = None,
+    review_status: Optional[str] = None,
+    created_from: Optional[datetime] = None,
+    created_to: Optional[datetime] = None,
+) -> tuple[list[str], dict[str, Any]]:
     where_sql = ["1 = 1"]
-    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    params: dict[str, Any] = {}
 
     if module_name:
         where_sql.append("module_name = :module_name")
@@ -147,38 +427,55 @@ async def query_ai_audit_logs(
     if validated is not None:
         where_sql.append("validated = :validated")
         params["validated"] = validated
+    if review_status:
+        if review_status == REVIEW_STATUS_NONE:
+            where_sql.append("review_status IS NULL")
+        else:
+            where_sql.append("review_status = :review_status")
+            params["review_status"] = review_status
     if created_from:
         where_sql.append("created_at >= :created_from")
         params["created_from"] = created_from
     if created_to:
         where_sql.append("created_at <= :created_to")
         params["created_to"] = created_to
+    return where_sql, params
 
-    result = await session.execute(
-        text(
-            f"""
-            SELECT
-                uuid,
-                module_name,
-                source,
-                model,
-                input_summary,
-                output_summary,
-                warnings,
-                validated,
-                validator_messages,
-                latency_ms,
-                context,
-                created_at
-            FROM ai_audit_log
-            WHERE {' AND '.join(where_sql)}
-            ORDER BY created_at DESC
-            LIMIT :limit OFFSET :offset
-            """
-        ),
-        params,
-    )
-    return [_serialize_audit_row(row) for row in result.mappings().all()]
+
+def _build_audit_summary(row: Optional[dict[str, Any]], items: list[dict[str, Any]]) -> dict[str, int]:
+    total_count = _safe_int((row or {}).get("total_count"))
+    validated_count = _safe_int((row or {}).get("validated_count"))
+    pending_count = _safe_int((row or {}).get("pending_count"))
+    not_queued_count = _safe_int((row or {}).get("not_queued_count"))
+    review_pending_count = _safe_int((row or {}).get("review_pending_count"))
+    review_approved_count = _safe_int((row or {}).get("review_approved_count"))
+    review_rejected_count = _safe_int((row or {}).get("review_rejected_count"))
+
+    # Test doubles and degraded queries may not return aggregate aliases.
+    if total_count is None:
+        total_count = len(items)
+    if validated_count is None:
+        validated_count = sum(1 for item in items if item.get("validated"))
+    if pending_count is None:
+        pending_count = max(total_count - validated_count, 0)
+    if not_queued_count is None:
+        not_queued_count = sum(1 for item in items if item.get("review_status") is None)
+    if review_pending_count is None:
+        review_pending_count = sum(1 for item in items if item.get("review_status") == REVIEW_PENDING)
+    if review_approved_count is None:
+        review_approved_count = sum(1 for item in items if item.get("review_status") == REVIEW_APPROVED)
+    if review_rejected_count is None:
+        review_rejected_count = sum(1 for item in items if item.get("review_status") == REVIEW_REJECTED)
+
+    return {
+        "total_count": total_count,
+        "validated_count": validated_count,
+        "pending_count": pending_count,
+        "not_queued_count": not_queued_count,
+        "review_pending_count": review_pending_count,
+        "review_approved_count": review_approved_count,
+        "review_rejected_count": review_rejected_count,
+    }
 
 
 def _get_engine() -> AsyncEngine:
@@ -190,7 +487,7 @@ def _get_engine() -> AsyncEngine:
 
 
 def _summarize(value: Any, max_len: int = 1000) -> str:
-    value = redact_sensitive_data(value)
+    value = normalize_text_value(redact_sensitive_data(value))
     if isinstance(value, str):
         text_value = value
     else:
@@ -231,18 +528,23 @@ def _redact_text(value: str) -> str:
 
 def _serialize_audit_row(row: dict[str, Any]) -> dict[str, Any]:
     created_at = row.get("created_at")
+    reviewed_at = row.get("reviewed_at")
     return {
         "uuid": str(row.get("uuid")),
         "module_name": row.get("module_name"),
         "source": row.get("source"),
         "model": row.get("model"),
-        "input_summary": row.get("input_summary"),
-        "output_summary": row.get("output_summary"),
+        "input_summary": repair_mojibake_text(row.get("input_summary") or ""),
+        "output_summary": repair_mojibake_text(row.get("output_summary") or ""),
         "warnings": _json_load(row.get("warnings")),
         "validated": bool(row.get("validated")),
         "validator_messages": _json_load(row.get("validator_messages")),
         "latency_ms": row.get("latency_ms"),
         "context": _json_load(row.get("context")),
+        "review_status": row.get("review_status"),
+        "review_note": repair_mojibake_text(row.get("review_note") or "") or None,
+        "reviewer": repair_mojibake_text(row.get("reviewer") or "") or None,
+        "reviewed_at": reviewed_at.isoformat() if reviewed_at else None,
         "created_at": created_at.isoformat() if created_at else None,
     }
 
@@ -258,8 +560,45 @@ def _json_load(value: Any) -> Any:
     if value in (None, ""):
         return []
     if not isinstance(value, str):
-        return value
+        return normalize_text_value(value)
     try:
-        return json.loads(value)
+        return normalize_text_value(json.loads(value))
     except json.JSONDecodeError:
-        return value
+        return repair_mojibake_text(value)
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _csv_value(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, str):
+        return repair_mojibake_text(value)
+    return _json_dump(normalize_text_value(value))
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        parsed = _json_load(value)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [str(parsed).strip()] if str(parsed).strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _is_risk_warning(value: str) -> bool:
+    warning = str(value or "").strip().lower()
+    if not warning:
+        return False
+    if any(warning.startswith(prefix) for prefix in RISK_WARNING_PREFIXES):
+        return True
+    return any(token in warning for token in RISK_WARNING_CONTAINS)

@@ -92,3 +92,14 @@ a {
   content: '';
   pointer-events: none;
 }
+
+.admin-layout .el-button,
+.admin-layout button {
+  font-weight: 700;
+}
+
+.admin-layout .el-input__wrapper,
+.admin-layout .el-textarea__inner,
+.admin-layout .el-select__wrapper {
+  min-height: 42px;
+}

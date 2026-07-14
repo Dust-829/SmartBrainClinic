@@ -25,7 +25,7 @@ const rolePaths: Record<AppRole, { loginPath: string; homePath: string }> = {
   },
   admin: {
     loginPath: '/admin/login',
-    homePath: '/admin/console',
+    homePath: '/admin/dashboard',
   },
 }
 

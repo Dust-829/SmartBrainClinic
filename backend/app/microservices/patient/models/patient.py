@@ -26,6 +26,7 @@ class SchedulingActual(SQLModel, table=True):
     noon: str = Field(max_length=10, nullable=False)
     regist_quota: int = Field(default=30, nullable=False)
     registered_count: int = Field(default=0, nullable=False)
+    slot_duration_minutes: int = Field(default=10, nullable=False)
     clinic_room_uuid: Optional[uuid_pkg.UUID] = Field(default=None, index=True)
 
 class SchedulingTimeSlot(SQLModel, table=True):
@@ -45,6 +46,7 @@ class SchedulingRule(SQLModel, table=True):
     week_rule: str = Field(max_length=14, nullable=False) # e.g. "1,2,3,4,5" bitmap or list
     llm_text_rule: Optional[str] = Field(default=None, sa_column=Column(Text))
     regist_quota: int = Field(default=30, nullable=False)
+    slot_duration_minutes: int = Field(default=10, nullable=False)
     clinic_room_uuid: Optional[uuid_pkg.UUID] = Field(default=None, index=True)
     delmark: Optional[int] = Field(
         default=1, sa_column=Column(SmallInteger, default=1)
@@ -98,7 +100,9 @@ class SchedulingApplication(SQLModel, table=True):
     employee_uuid: uuid_pkg.UUID = Field(nullable=False, index=True, description="提交申请的医生UUID")
     prompt: str = Field(sa_column=Column(Text, nullable=False), description="医生的排班诉求")
     status: str = Field(default="pending", max_length=20, index=True, description="状态: pending/approved/rejected")
+    reject_reason: Optional[str] = Field(default=None, sa_column=Column(Text))
     created_at: Optional[datetime] = Field(default_factory=datetime.now)
+    processed_at: Optional[datetime] = Field(default=None)
 
 class ScheduleDisruption(SQLModel, table=True):
     __tablename__ = "schedule_disruption"

@@ -1,29 +1,42 @@
+import asyncio
+import json
+import re
 import uuid as uuid_pkg
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Optional, List
-from sqlalchemy import and_, case, or_, select, update, func
+from typing import List, Optional
+
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..models.patient import Patient, Register, SchedulingActual, SchedulingTimeSlot, SchedulingRule, PatientFeedback, OutboxEvent, SchedulingApplication, ScheduleDisruption
-from .internal_client import AuthClient
-from .ai_scheduling import run_ai_scheduling
+
+from app.common.ai_embedding import get_embedding
+from app.common.ai_schema import unwrap_ai_data
+from app.common.ai_validator import AIResultValidator
 from app.common.ai_conversation import get_ai_conversation_session, update_ai_conversation_session
 from app.common.clients import BillingClient, MedicalClient
 from app.common.enums import BillState, VisitState
 from app.common.idempotency import begin_idempotency, complete_idempotency
 from app.common.state_machine import ensure_visit_transition
+from app.common.text_normalization import repair_mojibake_text
 from app.microservices.patient.ws_manager import manager as ws_manager
 
-from app.common.ai_embedding import get_embedding
-from app.common.ai_schema import unwrap_ai_data
-import asyncio
-import json
-from ..models.patient import OutboxEvent
-from ..models.patient import SchedulingApplication
+from ..models.patient import (
+    OutboxEvent,
+    Patient,
+    PatientFeedback,
+    Register,
+    ScheduleDisruption,
+    SchedulingActual,
+    SchedulingApplication,
+    SchedulingRule,
+    SchedulingTimeSlot,
+)
+from .ai_scheduling import run_ai_scheduling
+from .internal_client import AuthClient
 
 async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_new: bool = False):
-    interval = 10  # 强制固定每号 10 分钟
+    interval = _get_effective_slot_duration_minutes(actual)
     start_time_str = "08:00" if actual.noon == "上午" else "13:00"
     dt_start = datetime.strptime(start_time_str, "%H:%M")
 
@@ -40,18 +53,30 @@ async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_n
             )
             session.add(ts)
     else:
-        # 当非新建时（如管理员直接修改额度）
         stmt = select(SchedulingTimeSlot).where(
             SchedulingTimeSlot.scheduling_actual_id == actual.id
         ).order_by(SchedulingTimeSlot.time_range)
         res = await session.execute(stmt)
         existing_slots = res.scalars().all()
-        
+
+        if actual.registered_count == 0:
+            for ts in existing_slots:
+                await session.delete(ts)
+            for i in range(actual.regist_quota):
+                slot_start = dt_start + timedelta(minutes=i * interval)
+                slot_end = dt_start + timedelta(minutes=(i + 1) * interval)
+                ts = SchedulingTimeSlot(
+                    scheduling_actual_id=actual.id,
+                    time_range=f"{slot_start.strftime('%H:%M')}-{slot_end.strftime('%H:%M')}",
+                    is_booked=False
+                )
+                session.add(ts)
+            return
+
         current_total = len(existing_slots)
         target_total = actual.regist_quota
         
         if target_total > current_total:
-            # 追加 slots
             if existing_slots:
                 last_time_str = existing_slots[-1].time_range.split("-")[1]
                 dt_append_start = datetime.strptime(last_time_str, "%H:%M")
@@ -68,7 +93,6 @@ async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_n
                 )
                 session.add(ts)
         elif target_total < current_total:
-            # 从末尾裁剪未被预约的 slots
             to_remove = current_total - target_total
             removed_count = 0
             for ts in reversed(existing_slots):
@@ -78,7 +102,6 @@ async def _sync_time_slots(session: AsyncSession, actual: SchedulingActual, is_n
                     if removed_count == to_remove:
                         break
             
-            # 如果末尾可删的空槽不够，强制让 quota 匹配真实剩余
             if removed_count < to_remove:
                 actual.regist_quota = current_total - removed_count
                 session.add(actual)
@@ -300,6 +323,481 @@ def _gen_case_number() -> str:
     seq = random.randint(1000, 9999)
     return f"BLH{now.strftime('%Y%m%d%H%M%S')}{seq}"
 
+
+def _serialize_patient(patient: Patient) -> dict:
+    return {
+        "uuid": str(patient.uuid),
+        "case_number": patient.case_number,
+        "real_name": patient.real_name,
+        "gender": patient.gender,
+        "card_number": patient.card_number,
+        "birthdate": patient.birthdate.isoformat() if patient.birthdate else None,
+        "home_address": patient.home_address,
+        "created_at": patient.created_at.isoformat() if patient.created_at else None,
+    }
+
+
+_VALID_NOON_VALUES = {"上午", "下午"}
+_VALID_WEEK_RULE_VALUES = {str(i) for i in range(1, 8)}
+_VALID_APPLICATION_STATUSES = {"pending", "approved", "rejected", "duplicate"}
+_DEFAULT_SLOT_DURATION_MINUTES = 10
+_MIN_SLOT_DURATION_MINUTES = 5
+_MAX_SLOT_DURATION_MINUTES = 60
+
+
+def _normalize_noon_value(noon: str) -> str:
+    normalized = str(noon or "").strip()
+    if normalized not in _VALID_NOON_VALUES:
+        raise ValueError("午别仅支持 上午 或 下午")
+    return normalized
+
+
+def _normalize_week_rule(week_rule: str) -> str:
+    parts = [item.strip() for item in str(week_rule or "").replace("，", ",").split(",") if item.strip()]
+    if not parts:
+        raise ValueError("week_rule 不能为空")
+    if any(item not in _VALID_WEEK_RULE_VALUES for item in parts):
+        raise ValueError("week_rule 仅支持 1-7 的逗号分隔格式")
+    deduped: list[str] = []
+    for item in parts:
+        if item not in deduped:
+            deduped.append(item)
+    return ",".join(deduped)
+
+
+def _normalize_slot_duration_minutes(value: Optional[int], *, default: int = _DEFAULT_SLOT_DURATION_MINUTES) -> int:
+    normalized = int(default if value is None else value)
+    if normalized < _MIN_SLOT_DURATION_MINUTES or normalized > _MAX_SLOT_DURATION_MINUTES:
+        raise ValueError(
+            f"slot_duration_minutes 仅支持 {_MIN_SLOT_DURATION_MINUTES}-{_MAX_SLOT_DURATION_MINUTES} 分钟"
+        )
+    return normalized
+
+
+def _get_effective_slot_duration_minutes(actual: SchedulingActual) -> int:
+    return _normalize_slot_duration_minutes(
+        getattr(actual, "slot_duration_minutes", None),
+        default=_DEFAULT_SLOT_DURATION_MINUTES,
+    )
+
+
+def _serialize_scheduling_application(app: SchedulingApplication) -> dict:
+    return {
+        "uuid": str(app.uuid),
+        "employee_uuid": str(app.employee_uuid),
+        "prompt": repair_mojibake_text(app.prompt),
+        "status": app.status,
+        "reject_reason": repair_mojibake_text(app.reject_reason) if app.reject_reason else app.reject_reason,
+        "created_at": app.created_at.isoformat() if app.created_at else None,
+        "processed_at": app.processed_at.isoformat() if app.processed_at else None,
+    }
+
+
+def _humanize_scheduling_prompt(prompt: str) -> str:
+    text = repair_mojibake_text(" ".join(str(prompt or "").split()))
+    if not text:
+        return ""
+
+    replacements = [
+        (r"\bnext week\b", "下周"),
+        (r"\btomorrow\b", "明天"),
+        (r"\bthis week\b", "本周"),
+        (r"\bmorning\b", "上午"),
+        (r"\bafternoon\b", "下午"),
+        (r"\bpost[\s-]*op(?:erative)? review\b", "术后复诊"),
+        (r"\breview block\b", "复诊时段"),
+        (r"\bextra\b", "增加"),
+        (r"\badd one extra\b", "增加一个"),
+        (r"\badd\b", "增加"),
+        (r"\bclinic\b", "门诊"),
+        (r"\bblock\b", "时段"),
+        (r"\bquota\b", "号源数量"),
+        (r"\bcancel\b", "停诊"),
+    ]
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return " ".join(text.split())
+
+
+def _build_scheduling_prompt_title(prompt: str) -> str:
+    normalized = _humanize_scheduling_prompt(prompt)
+    lowered = normalized.lower()
+    if any(keyword in normalized for keyword in ("停诊", "请假", "取消", "不接诊")):
+        return "停诊申请"
+    if any(keyword in normalized for keyword in ("诊室",)) or "clinic room" in lowered:
+        return "诊室调整申请"
+    if any(keyword in normalized for keyword in ("增加", "加号", "新增")) or "extra" in lowered:
+        return "加号/加班申请"
+    if any(keyword in normalized for keyword in ("限额", "号源")) or "quota" in lowered:
+        return "号源调整申请"
+    return "排班调整申请"
+
+
+def _build_scheduling_prompt_excerpt(prompt: str, limit: int = 84) -> str:
+    normalized = _humanize_scheduling_prompt(prompt)
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 1].rstrip() + "…"
+
+
+def _build_scheduling_time_hint(prompt: str) -> str | None:
+    normalized = _humanize_scheduling_prompt(prompt)
+    hints: list[str] = []
+    date_match = re.search(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", normalized)
+    if date_match:
+        hints.append(date_match.group(0))
+    else:
+        for token in ("今天", "明天", "后天", "下周", "本周"):
+            if token in normalized:
+                hints.append(token)
+                break
+    for token in ("上午", "下午"):
+        if token in normalized:
+            hints.append(token)
+            break
+    if hints:
+        return " / ".join(hints)
+    return None
+
+
+def _serialize_scheduling_application_status(status: str) -> str:
+    return {
+        "pending": "待审批",
+        "approved": "已通过",
+        "rejected": "已驳回",
+        "duplicate": "已复用",
+    }.get(status, status)
+
+
+async def _build_scheduling_application_payload(
+    app: SchedulingApplication,
+    *,
+    get_employee_cached,
+    get_department_cached,
+) -> dict:
+    payload = _serialize_scheduling_application(app)
+    payload["status_text"] = _serialize_scheduling_application_status(app.status)
+    payload["prompt_display"] = _humanize_scheduling_prompt(app.prompt)
+    payload["prompt_title"] = _build_scheduling_prompt_title(app.prompt)
+    payload["prompt_excerpt"] = _build_scheduling_prompt_excerpt(app.prompt)
+    payload["time_hint"] = _build_scheduling_time_hint(app.prompt)
+
+    employee = await get_employee_cached(app.employee_uuid)
+    if employee:
+        payload["employee_name"] = employee.get("realname")
+        dept_uuid = employee.get("dept_uuid")
+        if dept_uuid:
+            department = await get_department_cached(str(dept_uuid))
+            if department:
+                payload["dept_name"] = department.get("dept_name")
+    else:
+        payload["employee_name"] = None
+        payload["dept_name"] = None
+    return payload
+
+
+async def _find_scheduling_actual(
+    session: AsyncSession,
+    employee_uuid: uuid_pkg.UUID,
+    schedule_date: date,
+    noon: str,
+) -> Optional[SchedulingActual]:
+    stmt = select(SchedulingActual).where(
+        SchedulingActual.employee_uuid == employee_uuid,
+        SchedulingActual.schedule_date == schedule_date,
+        SchedulingActual.noon == noon,
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _get_rule_slot_duration_minutes(
+    session: AsyncSession,
+    employee_uuid: uuid_pkg.UUID,
+) -> int:
+    stmt = (
+        select(SchedulingRule.slot_duration_minutes)
+        .where(SchedulingRule.employee_uuid == employee_uuid)
+        .order_by(SchedulingRule.id.desc())
+        .limit(1)
+    )
+    value = (await session.execute(stmt)).scalar_one_or_none()
+    return _normalize_slot_duration_minutes(value, default=_DEFAULT_SLOT_DURATION_MINUTES)
+
+
+async def _list_scheduling_time_slots(session: AsyncSession, scheduling_actual_id: int) -> list[SchedulingTimeSlot]:
+    stmt = (
+        select(SchedulingTimeSlot)
+        .where(SchedulingTimeSlot.scheduling_actual_id == scheduling_actual_id)
+        .order_by(SchedulingTimeSlot.time_range.asc())
+    )
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def _find_active_register_for_slot(session: AsyncSession, time_slot_id: int) -> Optional[Register]:
+    stmt = (
+        select(Register)
+        .where(
+            Register.scheduling_time_slot_id == time_slot_id,
+            Register.visit_state != VisitState.CANCELLED,
+        )
+        .order_by(Register.id.desc())
+    )
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def _upsert_schedule_disruption(
+    session: AsyncSession,
+    register: Register,
+    actual: SchedulingActual,
+    time_slot: SchedulingTimeSlot,
+    message: str,
+) -> bool:
+    stmt = select(ScheduleDisruption).where(
+        ScheduleDisruption.register_id == register.id,
+        ScheduleDisruption.status == "unread",
+    )
+    disruption = (await session.execute(stmt)).scalars().first()
+    created = disruption is None
+    if disruption is None:
+        disruption = ScheduleDisruption(
+            patient_id=register.patient_id,
+            register_id=register.id,
+            original_employee_uuid=actual.employee_uuid,
+            original_time_range=time_slot.time_range,
+            original_schedule_date=actual.schedule_date,
+            original_noon=actual.noon,
+            message=message,
+        )
+    else:
+        disruption.original_employee_uuid = actual.employee_uuid
+        disruption.original_time_range = time_slot.time_range
+        disruption.original_schedule_date = actual.schedule_date
+        disruption.original_noon = actual.noon
+        disruption.message = message
+    session.add(disruption)
+    return created
+
+
+async def _cancel_scheduling_actual(
+    session: AsyncSession,
+    actual: SchedulingActual,
+) -> dict:
+    slots = await _list_scheduling_time_slots(session, actual.id)
+    disruptions_created = 0
+    booked_slots = 0
+
+    for time_slot in slots:
+        if time_slot.is_booked:
+            booked_slots += 1
+            register = await _find_active_register_for_slot(session, time_slot.id)
+            if register:
+                created = await _upsert_schedule_disruption(
+                    session,
+                    register,
+                    actual,
+                    time_slot,
+                    f"您预约的 {actual.schedule_date} {actual.noon} 门诊因故取消，请尽快退号或改签",
+                )
+                disruptions_created += int(created)
+        else:
+            await session.delete(time_slot)
+
+    if booked_slots == 0:
+        await session.execute(delete(SchedulingTimeSlot).where(SchedulingTimeSlot.scheduling_actual_id == actual.id))
+        await session.delete(actual)
+        return {
+            "status": "cancelled",
+            "changed": True,
+            "disruptions_created": disruptions_created,
+            "final_regist_quota": 0,
+            "registered_count": 0,
+        }
+
+    actual.regist_quota = booked_slots
+    if actual.registered_count > booked_slots:
+        actual.registered_count = booked_slots
+    session.add(actual)
+    await session.flush()
+    await _sync_time_slots(session, actual, is_new=False)
+    return {
+        "status": "cancelled_with_existing_registrations",
+        "changed": True,
+        "disruptions_created": disruptions_created,
+        "final_regist_quota": actual.regist_quota,
+        "registered_count": actual.registered_count,
+    }
+
+
+async def _cancel_scheduling_after_time(
+    session: AsyncSession,
+    actual: SchedulingActual,
+    time_threshold: str,
+) -> dict:
+    normalized_threshold = str(time_threshold or "").strip()
+    if not re.fullmatch(r"\d{2}:\d{2}", normalized_threshold):
+        raise ValueError("cancel_after_time 必须提供 HH:MM 格式的 time_threshold")
+
+    slots = await _list_scheduling_time_slots(session, actual.id)
+    disruptions_created = 0
+    deleted_unbooked = 0
+    affected_slots = 0
+
+    for time_slot in slots:
+        slot_start = time_slot.time_range.split("-")[0]
+        if slot_start < normalized_threshold:
+            continue
+        affected_slots += 1
+        if time_slot.is_booked:
+            register = await _find_active_register_for_slot(session, time_slot.id)
+            if register:
+                created = await _upsert_schedule_disruption(
+                    session,
+                    register,
+                    actual,
+                    time_slot,
+                    f"您预约的 {actual.schedule_date} {time_slot.time_range} 时段因故停诊，请尽快退号或改签",
+                )
+                disruptions_created += int(created)
+        else:
+            await session.delete(time_slot)
+            deleted_unbooked += 1
+
+    if affected_slots == 0:
+        return {
+            "status": "no_slots_after_threshold",
+            "changed": False,
+            "disruptions_created": 0,
+            "final_regist_quota": actual.regist_quota,
+            "registered_count": actual.registered_count,
+        }
+
+    remaining_slots = len(slots) - deleted_unbooked
+    if remaining_slots <= 0:
+        await session.execute(delete(SchedulingTimeSlot).where(SchedulingTimeSlot.scheduling_actual_id == actual.id))
+        await session.delete(actual)
+        return {
+            "status": "cancelled",
+            "changed": True,
+            "disruptions_created": disruptions_created,
+            "final_regist_quota": 0,
+            "registered_count": 0,
+        }
+
+    actual.regist_quota = remaining_slots
+    if actual.registered_count > remaining_slots:
+        actual.registered_count = remaining_slots
+    session.add(actual)
+    await session.flush()
+    await _sync_time_slots(session, actual, is_new=False)
+    return {
+        "status": "trimmed",
+        "changed": True,
+        "disruptions_created": disruptions_created,
+        "final_regist_quota": actual.regist_quota,
+        "registered_count": actual.registered_count,
+    }
+
+
+async def _apply_scheduling_actual_change(
+    session: AsyncSession,
+    *,
+    employee_uuid: uuid_pkg.UUID,
+    schedule_date: date,
+    noon: str,
+    regist_quota: int,
+    slot_duration_minutes: Optional[int] = None,
+    clinic_room_uuid: Optional[uuid_pkg.UUID] = None,
+    action_type: str = "modify",
+    time_threshold: Optional[str] = None,
+) -> dict:
+    normalized_noon = _normalize_noon_value(noon)
+    target_quota = int(regist_quota)
+    if target_quota < 0:
+        raise ValueError("regist_quota 不能小于 0")
+
+    actual = await _find_scheduling_actual(session, employee_uuid, schedule_date, normalized_noon)
+
+    if action_type in {"cancel", "cancel_after_time"} and actual is None:
+        return {
+            "action_type": action_type,
+            "target_date": schedule_date.isoformat(),
+            "noon": normalized_noon,
+            "status": "missing_schedule",
+            "changed": False,
+            "disruptions_created": 0,
+            "final_regist_quota": 0,
+            "registered_count": 0,
+            "clinic_room_uuid": str(clinic_room_uuid) if clinic_room_uuid else None,
+        }
+
+    if action_type == "cancel":
+        result = await _cancel_scheduling_actual(session, actual)
+    elif action_type == "cancel_after_time":
+        result = await _cancel_scheduling_after_time(session, actual, time_threshold or "")
+    elif action_type in {"modify", "add"}:
+        if actual is None:
+            if target_quota <= 0:
+                result = {
+                    "status": "skipped_zero_quota",
+                    "changed": False,
+                    "disruptions_created": 0,
+                    "final_regist_quota": 0,
+                    "registered_count": 0,
+                }
+            else:
+                effective_slot_duration = _normalize_slot_duration_minutes(
+                    slot_duration_minutes,
+                    default=await _get_rule_slot_duration_minutes(session, employee_uuid),
+                )
+                actual = SchedulingActual(
+                    employee_uuid=employee_uuid,
+                    schedule_date=schedule_date,
+                    noon=normalized_noon,
+                    regist_quota=target_quota,
+                    registered_count=0,
+                    slot_duration_minutes=effective_slot_duration,
+                    clinic_room_uuid=clinic_room_uuid,
+                )
+                session.add(actual)
+                await session.flush()
+                await _sync_time_slots(session, actual, is_new=True)
+                result = {
+                    "status": "created",
+                    "changed": True,
+                    "disruptions_created": 0,
+                    "final_regist_quota": actual.regist_quota,
+                    "registered_count": actual.registered_count,
+                }
+        else:
+            clamped = target_quota < actual.registered_count
+            actual.regist_quota = max(target_quota, actual.registered_count)
+            if slot_duration_minutes is not None:
+                actual.slot_duration_minutes = _normalize_slot_duration_minutes(slot_duration_minutes)
+            if clinic_room_uuid is not None:
+                actual.clinic_room_uuid = clinic_room_uuid
+            session.add(actual)
+            await session.flush()
+            await _sync_time_slots(session, actual, is_new=False)
+            result = {
+                "status": "updated",
+                "changed": True,
+                "disruptions_created": 0,
+                "final_regist_quota": actual.regist_quota,
+                "registered_count": actual.registered_count,
+                "clamped_to_registered_count": clamped,
+            }
+    else:
+        raise ValueError(f"不支持的排班动作: {action_type}")
+
+    return {
+        "action_type": action_type,
+        "target_date": schedule_date.isoformat(),
+        "noon": normalized_noon,
+        "slot_duration_minutes": _get_effective_slot_duration_minutes(actual) if actual else _normalize_slot_duration_minutes(slot_duration_minutes),
+        "clinic_room_uuid": str(actual.clinic_room_uuid) if actual and actual.clinic_room_uuid else (str(clinic_room_uuid) if clinic_room_uuid else None),
+        **result,
+    }
+
 async def create_patient(session: AsyncSession, data: dict) -> Patient:
     existing = await session.execute(select(Patient).where(Patient.card_number == data["card_number"]))
     if existing.scalar_one_or_none():
@@ -315,6 +813,46 @@ async def create_patient(session: AsyncSession, data: dict) -> Patient:
     session.add(patient)
     await session.flush()
     return patient
+
+
+async def list_admin_patients(session: AsyncSession, keyword: str = "", limit: int = 20) -> list[dict]:
+    normalized_keyword = str(keyword or "").strip()
+    safe_limit = max(1, min(int(limit or 20), 100))
+    stmt = select(Patient)
+
+    if normalized_keyword:
+        fuzzy_keyword = f"%{normalized_keyword}%"
+        stmt = stmt.where(
+            or_(
+                Patient.real_name.ilike(fuzzy_keyword),
+                Patient.card_number.ilike(fuzzy_keyword),
+            )
+        )
+
+    stmt = stmt.order_by(Patient.created_at.desc()).limit(safe_limit)
+    result = await session.execute(stmt)
+    return [_serialize_patient(patient) for patient in result.scalars().all()]
+
+
+async def get_admin_patient_stats(session: AsyncSession) -> dict[str, int]:
+    patient_total = (
+        await session.execute(select(func.count()).select_from(Patient))
+    ).scalar_one()
+    return {"patient_total": int(patient_total or 0)}
+
+
+async def update_admin_patient(session: AsyncSession, patient_uuid: uuid_pkg.UUID, data: dict) -> dict:
+    patient = await get_patient_by_uuid(session, patient_uuid)
+    if not patient:
+        raise ValueError("鎮ｈ€呬笉瀛樺湪")
+
+    patient.real_name = data["real_name"]
+    patient.gender = data["gender"]
+    patient.birthdate = data["birthdate"]
+    patient.home_address = data.get("home_address")
+    session.add(patient)
+    await session.flush()
+    return _serialize_patient(patient)
 
 async def get_patient_by_uuid(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> Optional[Patient]:
     result = await session.execute(select(Patient).where(Patient.uuid == patient_uuid))
@@ -1247,134 +1785,66 @@ async def ai_schedule(session: AsyncSession, employee_uuid: uuid_pkg.UUID, promp
     """
     通过自然语言智能微调排班
     """
-    employee = await AuthClient.get_employee(employee_uuid)
+    normalized_prompt = repair_mojibake_text(" ".join(str(prompt or "").split()))
+    if not normalized_prompt:
+        raise ValueError("AI 排班指令不能为空")
+
+    employee = await AuthClient.get_employee(str(employee_uuid))
     if not employee:
         raise ValueError("医生不存在")
-    
-    # 解析排班微调意图
-    ai_res = await run_ai_scheduling(prompt, str(employee_uuid))
+
+    ai_res = await run_ai_scheduling(normalized_prompt, str(employee_uuid))
     res = unwrap_ai_data(ai_res)
+    if not isinstance(res, dict):
+        raise ValueError("AI 排班结果格式异常")
+
+    validation = AIResultValidator.validate_scheduling(res, base_date=date.today())
+    if not validation.is_valid:
+        raise ValueError(f"AI 排班建议无效: {'; '.join(validation.messages)}")
+
     actions = res.get("actions", [])
-    llm_text_rule = res.get("llm_text_rule", "")
-    
+    llm_text_rule = str(res.get("llm_text_rule", "") or "").strip()
+
     applied_count = 0
+    disruptions_created = 0
+    action_summaries = []
     for act in actions:
-        action_type = act.get("action_type")
-        target_date_str = act.get("target_date")
+        action_type = str(act.get("action_type") or "").strip()
+        target_date_str = str(act.get("target_date") or "").strip()
+        if not target_date_str:
+            raise ValueError("AI 排班动作缺少 target_date")
         target_date = date.fromisoformat(target_date_str)
-        noon = act.get("noon")
-        quota = act.get("regist_quota", 0)
-        
-        # 检索当天此医生的特定班次实际排班
-        stmt = select(SchedulingActual).where(
-            SchedulingActual.employee_uuid == employee_uuid,
-            SchedulingActual.schedule_date == target_date,
-            SchedulingActual.noon == noon
+        if target_date < date.today():
+            raise ValueError(f"AI 排班动作日期不能早于今天: {target_date_str}")
+
+        noon = _normalize_noon_value(str(act.get("noon") or "").strip())
+        quota = int(act.get("regist_quota", 0))
+        if quota < 0:
+            raise ValueError("AI 排班动作的 regist_quota 不能为负数")
+
+        clinic_room_uuid = None
+        clinic_room_name = str(act.get("clinic_room_name") or "").strip()
+        if clinic_room_name:
+            room_info = await AuthClient.get_clinic_room_by_name(clinic_room_name)
+            if not room_info or not room_info.get("uuid"):
+                raise ValueError(f"未找到诊室: {clinic_room_name}")
+            clinic_room_uuid = uuid_pkg.UUID(str(room_info["uuid"]))
+
+        summary = await _apply_scheduling_actual_change(
+            session,
+            employee_uuid=employee_uuid,
+            schedule_date=target_date,
+            noon=noon,
+            regist_quota=quota,
+            clinic_room_uuid=clinic_room_uuid,
+            action_type=action_type,
+            time_threshold=act.get("time_threshold"),
         )
-        existing_res = await session.execute(stmt)
-        existing_sched = existing_res.scalar_one_or_none()
-        
-        if action_type == "cancel":
-            if existing_sched:
-                import sqlalchemy
-                stmt_booked = select(SchedulingTimeSlot).where(
-                    SchedulingTimeSlot.scheduling_actual_id == existing_sched.id,
-                    SchedulingTimeSlot.is_booked == True
-                )
-                res_booked = await session.execute(stmt_booked)
-                for ts in res_booked.scalars().all():
-                    stmt_reg = select(Register).where(Register.scheduling_time_slot_id == ts.id, Register.visit_state != VisitState.CANCELLED)
-                    res_reg = await session.execute(stmt_reg)
-                    reg = res_reg.scalar_one_or_none()
-                    if reg:
-                        dis = ScheduleDisruption(
-                            patient_id=reg.patient_id,
-                            register_id=reg.id,
-                            original_employee_uuid=existing_sched.employee_uuid,
-                            original_time_range=ts.time_range,
-                            original_schedule_date=existing_sched.schedule_date,
-                            original_noon=existing_sched.noon,
-                            message=f"您预约的 {existing_sched.schedule_date} {existing_sched.noon} 门诊因故取消，请尽快退号或改签"
-                        )
-                        session.add(dis)
-
-                if existing_sched.registered_count > 0:
-                    existing_sched.regist_quota = existing_sched.registered_count
-                    session.add(existing_sched)
-                    await _sync_time_slots(session, existing_sched, is_new=False)
-                else:
-                    stmt = sqlalchemy.delete(SchedulingTimeSlot).where(SchedulingTimeSlot.scheduling_actual_id == existing_sched.id)
-                    await session.execute(stmt)
-                    await session.delete(existing_sched)
-                applied_count += 1
-        elif action_type == "cancel_after_time":
-            if existing_sched:
-                time_threshold = act.get("time_threshold")
-                if time_threshold:
-                    stmt_ts = select(SchedulingTimeSlot).where(
-                        SchedulingTimeSlot.scheduling_actual_id == existing_sched.id
-                    )
-                    res_ts = await session.execute(stmt_ts)
-                    slots = res_ts.scalars().all()
-                    
-                    deleted_count = 0
-                    for ts in slots:
-                        ts_start = ts.time_range.split("-")[0]
-                        if ts_start >= time_threshold:
-                            if not ts.is_booked:
-                                await session.delete(ts)
-                                deleted_count += 1
-                            else:
-                                stmt_reg = select(Register).where(Register.scheduling_time_slot_id == ts.id, Register.visit_state != VisitState.CANCELLED)
-                                res_reg = await session.execute(stmt_reg)
-                                reg = res_reg.scalar_one_or_none()
-                                if reg:
-                                    dis = ScheduleDisruption(
-                                        patient_id=reg.patient_id,
-                                        register_id=reg.id,
-                                        original_employee_uuid=existing_sched.employee_uuid,
-                                        original_time_range=ts.time_range,
-                                        original_schedule_date=existing_sched.schedule_date,
-                                        original_noon=existing_sched.noon,
-                                        message=f"您预约的 {existing_sched.schedule_date} {ts.time_range} 时段因故停诊，请尽快退号或改签"
-                                    )
-                                    session.add(dis)
-                            
-                    if deleted_count > 0:
-                        existing_sched.regist_quota = existing_sched.regist_quota - deleted_count
-                        session.add(existing_sched)
-                applied_count += 1
-        elif action_type in ["modify", "add"]:
-            clinic_room_uuid = None
-            clinic_room_name = act.get("clinic_room_name")
-            if clinic_room_name:
-                room_info = await AuthClient.get_clinic_room_by_name(clinic_room_name)
-                if room_info and room_info.get("uuid"):
-                    clinic_room_uuid = uuid_pkg.UUID(str(room_info["uuid"]))
-
-            if existing_sched:
-                existing_sched.regist_quota = quota
-                existing_sched.employee_uuid = employee_uuid
-                if clinic_room_uuid:
-                    existing_sched.clinic_room_uuid = clinic_room_uuid
-                session.add(existing_sched)
-                await session.flush()
-                await _sync_time_slots(session, existing_sched, is_new=False)
-            else:
-                new_sched = SchedulingActual(
-                    employee_uuid=employee_uuid,
-                    schedule_date=target_date,
-                    noon=noon,
-                    regist_quota=quota,
-                    registered_count=0,
-                    clinic_room_uuid=clinic_room_uuid
-                )
-                session.add(new_sched)
-                await session.flush()
-                await _sync_time_slots(session, new_sched, is_new=True)
+        if summary.get("changed"):
             applied_count += 1
-            
-    # 更新 SchedulingRule 中的 llm_text_rule
+        disruptions_created += int(summary.get("disruptions_created", 0) or 0)
+        action_summaries.append(summary)
+
     stmt_rule = select(SchedulingRule).where(
         SchedulingRule.employee_uuid == employee_uuid
     )
@@ -1402,6 +1872,8 @@ async def ai_schedule(session: AsyncSession, employee_uuid: uuid_pkg.UUID, promp
         "employee_name": employee.get("realname"),
         "llm_text_rule": llm_text_rule,
         "actions_applied": applied_count,
+        "disruptions_created": disruptions_created,
+        "action_summaries": action_summaries,
         "success": True
     }
 
@@ -1419,64 +1891,45 @@ async def generate_scheduling_actuals(session: AsyncSession, start_date_str: str
     if (end_date - start_date).days > 180:
         raise ValueError("单次排班生成跨度不能超过 180 天")
     
-    # 查询所有启用状态的的排班规律
     stmt = select(SchedulingRule).where(SchedulingRule.delmark == 1)
     rule_res = await session.execute(stmt)
     rules = rule_res.scalars().all()
     
     generated_count = 0
+    skipped_count = 0
     current_date = start_date
     delta = timedelta(days=1)
     
     while current_date <= end_date:
         wday = str(current_date.weekday() + 1)
         for rule in rules:
-            active_days = [d.strip() for d in rule.week_rule.split(",")]
+            active_days = _normalize_week_rule(rule.week_rule).split(",")
             if wday in active_days:
-                # 匹配成功，为该医生生成 "上午" 和 "下午" 的实际排班
                 for noon in ["上午", "下午"]:
-                    # 检查是否已有同医生、同日期、同班次的排班
-                    chk_stmt = select(SchedulingActual).where(
-                        SchedulingActual.employee_uuid == rule.employee_uuid,
-                        SchedulingActual.schedule_date == current_date,
-                        SchedulingActual.noon == noon
+                    existing = await _find_scheduling_actual(session, rule.employee_uuid, current_date, noon)
+                    if existing:
+                        skipped_count += 1
+                        continue
+                    if rule.regist_quota <= 0:
+                        skipped_count += 1
+                        continue
+
+                    new_actual = SchedulingActual(
+                        employee_uuid=rule.employee_uuid,
+                        schedule_date=current_date,
+                        noon=noon,
+                        regist_quota=rule.regist_quota,
+                        registered_count=0,
+                        slot_duration_minutes=_normalize_slot_duration_minutes(
+                            getattr(rule, "slot_duration_minutes", None),
+                            default=_DEFAULT_SLOT_DURATION_MINUTES,
+                        ),
+                        clinic_room_uuid=rule.clinic_room_uuid
                     )
-                    chk_res = await session.execute(chk_stmt)
-                    existing = chk_res.scalar_one_or_none()
-                    
-                    if not existing:
-                        new_actual = SchedulingActual(
-                            employee_uuid=rule.employee_uuid,
-                            schedule_date=current_date,
-                            noon=noon,
-                            regist_quota=rule.regist_quota,
-                            registered_count=0,
-                            clinic_room_uuid=rule.clinic_room_uuid
-                        )
-                        session.add(new_actual)
-                        await session.flush()
-                        
-                        # 自动拆分生成具体的 SchedulingTimeSlot (1人1Slot)
-                        if rule.regist_quota > 0:
-                            total_mins = 240 # 半天 4 小时
-                            interval = total_mins / rule.regist_quota
-                            
-                            start_time_str = "08:00" if noon == "上午" else "13:00"
-                            dt_start = datetime.strptime(start_time_str, "%H:%M")
-                            
-                            for i in range(rule.regist_quota):
-                                slot_start = dt_start + timedelta(minutes=i * interval)
-                                slot_end = dt_start + timedelta(minutes=(i + 1) * interval)
-                                time_range_str = f"{slot_start.strftime('%H:%M')}-{slot_end.strftime('%H:%M')}"
-                                
-                                ts = SchedulingTimeSlot(
-                                    scheduling_actual_id=new_actual.id,
-                                    time_range=time_range_str,
-                                    is_booked=False
-                                )
-                                session.add(ts)
-                                
-                        generated_count += 1
+                    session.add(new_actual)
+                    await session.flush()
+                    await _sync_time_slots(session, new_actual, is_new=True)
+                    generated_count += 1
         current_date += delta
         
     await session.flush()
@@ -1484,6 +1937,7 @@ async def generate_scheduling_actuals(session: AsyncSession, start_date_str: str
         "start_date": start_date_str,
         "end_date": end_date_str,
         "generated_count": generated_count,
+        "skipped_count": skipped_count,
         "success": True
     }
 
@@ -1546,9 +2000,13 @@ async def create_patient_feedback(session: AsyncSession, data: dict) -> dict:
 
 
 async def create_scheduling_application(session: AsyncSession, employee_uuid: uuid_pkg.UUID, prompt: str) -> dict:
-    normalized_prompt = " ".join(str(prompt or "").split())
+    normalized_prompt = repair_mojibake_text(" ".join(str(prompt or "").split()))
     if not normalized_prompt:
         raise ValueError("排班申请内容不能为空")
+
+    employee = await AuthClient.get_employee(str(employee_uuid))
+    if not employee:
+        raise ValueError("医生不存在")
 
     existing_stmt = (
         select(SchedulingApplication)
@@ -1577,22 +2035,47 @@ async def create_scheduling_application(session: AsyncSession, employee_uuid: uu
         if existing:
             return {"uuid": str(existing.uuid), "status": existing.status, "deduplicated": True}
         raise
-    return {"uuid": str(app.uuid), "status": "pending", "deduplicated": False}
+    return {
+        "uuid": str(app.uuid),
+        "status": "pending",
+        "deduplicated": False,
+        "reject_reason": None,
+        "processed_at": None,
+    }
 
-async def get_pending_scheduling_applications(session: AsyncSession) -> list:
-    stmt = select(SchedulingApplication).where(SchedulingApplication.status == "pending").order_by(SchedulingApplication.created_at.desc())
+async def get_pending_scheduling_applications(session: AsyncSession, status: Optional[str] = "pending") -> list:
+    normalized_status = str(status or "pending").strip().lower()
+    stmt = select(SchedulingApplication)
+    if normalized_status not in {"all", "*"}:
+        if normalized_status not in _VALID_APPLICATION_STATUSES:
+            raise ValueError("status 仅支持 pending/approved/rejected/duplicate/all")
+        stmt = stmt.where(SchedulingApplication.status == normalized_status)
+    stmt = stmt.order_by(SchedulingApplication.created_at.desc())
     res = await session.execute(stmt)
     apps = res.scalars().all()
-    results = []
-    for a in apps:
-        results.append({
-            "uuid": str(a.uuid),
-            "employee_uuid": str(a.employee_uuid),
-            "prompt": a.prompt,
-            "status": a.status,
-            "created_at": a.created_at.isoformat() if a.created_at else None
-        })
-    return results
+
+    employee_cache: dict[str, Optional[dict]] = {}
+    department_cache: dict[str, Optional[dict]] = {}
+
+    async def get_employee_cached(employee_uuid) -> Optional[dict]:
+        key = str(employee_uuid)
+        if key not in employee_cache:
+            employee_cache[key] = await AuthClient.get_employee(key)
+        return employee_cache[key]
+
+    async def get_department_cached(dept_uuid: str) -> Optional[dict]:
+        if dept_uuid not in department_cache:
+            department_cache[dept_uuid] = await AuthClient.get_department(dept_uuid)
+        return department_cache[dept_uuid]
+
+    return [
+        await _build_scheduling_application_payload(
+            app,
+            get_employee_cached=get_employee_cached,
+            get_department_cached=get_department_cached,
+        )
+        for app in apps
+    ]
 
 async def approve_scheduling_application(session: AsyncSession, app_uuid: uuid_pkg.UUID) -> dict:
     stmt = select(SchedulingApplication).where(SchedulingApplication.uuid == app_uuid)
@@ -1602,19 +2085,20 @@ async def approve_scheduling_application(session: AsyncSession, app_uuid: uuid_p
         raise ValueError("申请不存在")
     if app.status != "pending":
         raise ValueError("该申请已处理，请勿重复操作")
-        
-    # 自动执行 AI 真实排班微调
+
     ai_result = await ai_schedule(session, app.employee_uuid, app.prompt)
-    
-    # 修改状态
     app.status = "approved"
+    app.reject_reason = None
+    app.processed_at = datetime.now()
     session.add(app)
     await session.flush()
     
     return {
         "uuid": str(app.uuid),
         "status": "approved",
-        "ai_result": ai_result
+        "reject_reason": app.reject_reason,
+        "processed_at": app.processed_at.isoformat() if app.processed_at else None,
+        "ai_result": ai_result,
     }
 
 async def reject_scheduling_application(session: AsyncSession, app_uuid: uuid_pkg.UUID, reason: str = "") -> dict:
@@ -1625,121 +2109,119 @@ async def reject_scheduling_application(session: AsyncSession, app_uuid: uuid_pk
         raise ValueError("申请不存在")
     if app.status != "pending":
         raise ValueError("该申请已处理，请勿重复操作")
-        
+
     app.status = "rejected"
-    # 如果后续数据库表结构加上了 reject_reason 字段，可以在这里保存 reason
+    app.reject_reason = str(reason or "").strip() or None
+    app.processed_at = datetime.now()
     session.add(app)
     await session.flush()
     
     return {
         "uuid": str(app.uuid),
         "status": "rejected",
-        "reason": reason
+        "reason": app.reject_reason,
+        "reject_reason": app.reject_reason,
+        "processed_at": app.processed_at.isoformat() if app.processed_at else None,
     }
 
 async def admin_update_scheduling_rule(session: AsyncSession, data: dict) -> dict:
     employee_uuid = uuid_pkg.UUID(str(data["employee_uuid"]))
+    employee = await AuthClient.get_employee(str(employee_uuid))
+    if not employee:
+        raise ValueError("医生不存在")
+
+    week_rule = _normalize_week_rule(data.get("week_rule", "1,2,3,4,5"))
+    regist_quota = data.get("regist_quota", 30)
+    if regist_quota is not None and int(regist_quota) < 0:
+        raise ValueError("regist_quota 不能小于 0")
+    slot_duration_minutes = _normalize_slot_duration_minutes(data.get("slot_duration_minutes"))
+
     stmt = select(SchedulingRule).where(SchedulingRule.employee_uuid == employee_uuid)
     res = await session.execute(stmt)
     rule = res.scalar_one_or_none()
     
     if rule:
         if "week_rule" in data:
-            rule.week_rule = data["week_rule"]
+            rule.week_rule = week_rule
         if "regist_quota" in data:
-            rule.regist_quota = data["regist_quota"]
+            rule.regist_quota = int(regist_quota)
+        if "slot_duration_minutes" in data:
+            rule.slot_duration_minutes = slot_duration_minutes
         if "llm_text_rule" in data:
             rule.llm_text_rule = data["llm_text_rule"]
-        if "clinic_room_uuid" in data and data["clinic_room_uuid"]:
-            rule.clinic_room_uuid = uuid_pkg.UUID(str(data["clinic_room_uuid"]))
+        if "rule_name" in data and data["rule_name"]:
+            rule.rule_name = str(data["rule_name"]).strip()
+        if "clinic_room_uuid" in data:
+            rule.clinic_room_uuid = uuid_pkg.UUID(str(data["clinic_room_uuid"])) if data["clinic_room_uuid"] else None
         session.add(rule)
     else:
         rule = SchedulingRule(
             employee_uuid=employee_uuid,
             rule_name=data.get("rule_name", "管理员强制新增规则"),
-            week_rule=data.get("week_rule", "1,2,3,4,5"),
+            week_rule=week_rule,
             llm_text_rule=data.get("llm_text_rule", "管理员后台人工介入"),
-            regist_quota=data.get("regist_quota", 30),
+            regist_quota=int(regist_quota),
+            slot_duration_minutes=slot_duration_minutes,
             clinic_room_uuid=uuid_pkg.UUID(str(data["clinic_room_uuid"])) if data.get("clinic_room_uuid") else None,
             delmark=1
         )
         session.add(rule)
         
     await session.flush()
-    return {"employee_uuid": str(employee_uuid), "success": True}
+    return {
+        "employee_uuid": str(employee_uuid),
+        "week_rule": rule.week_rule,
+        "regist_quota": rule.regist_quota,
+        "slot_duration_minutes": rule.slot_duration_minutes,
+        "clinic_room_uuid": str(rule.clinic_room_uuid) if rule.clinic_room_uuid else None,
+        "success": True,
+    }
 
 async def admin_update_scheduling_actual(session: AsyncSession, data: dict) -> dict:
     employee_uuid = uuid_pkg.UUID(str(data["employee_uuid"]))
+    employee = await AuthClient.get_employee(str(employee_uuid))
+    if not employee:
+        raise ValueError("医生不存在")
     target_date = date.fromisoformat(data["schedule_date"])
-    noon = data["noon"]
-    regist_quota = data.get("regist_quota")
+    noon = _normalize_noon_value(data["noon"])
+    regist_quota = int(data.get("regist_quota", 0))
+    slot_duration_minutes = data.get("slot_duration_minutes")
     clinic_room_uuid = uuid_pkg.UUID(str(data["clinic_room_uuid"])) if data.get("clinic_room_uuid") else None
-    
-    stmt = select(SchedulingActual).where(
-        SchedulingActual.employee_uuid == employee_uuid,
-        SchedulingActual.schedule_date == target_date,
-        SchedulingActual.noon == noon
-    )
-    res = await session.execute(stmt)
-    actual = res.scalar_one_or_none()
-    
-    if actual:
-        if regist_quota == 0:
-            import sqlalchemy
-            stmt_booked = select(SchedulingTimeSlot).where(
-                SchedulingTimeSlot.scheduling_actual_id == actual.id,
-                SchedulingTimeSlot.is_booked == True
-            )
-            res_booked = await session.execute(stmt_booked)
-            for ts in res_booked.scalars().all():
-                stmt_reg = select(Register).where(Register.scheduling_time_slot_id == ts.id, Register.visit_state != VisitState.CANCELLED)
-                res_reg = await session.execute(stmt_reg)
-                reg = res_reg.scalar_one_or_none()
-                if reg:
-                    dis = ScheduleDisruption(
-                        patient_id=reg.patient_id,
-                        register_id=reg.id,
-                        original_employee_uuid=actual.employee_uuid,
-                        original_time_range=ts.time_range,
-                        original_schedule_date=actual.schedule_date,
-                        original_noon=actual.noon,
-                        message=f"您预约的 {actual.schedule_date} {actual.noon} 门诊因故取消，请尽快退号或改签"
-                    )
-                    session.add(dis)
+    actual = await _find_scheduling_actual(session, employee_uuid, target_date, noon)
 
-            if actual.registered_count > 0:
-                actual.regist_quota = actual.registered_count
-                session.add(actual)
-                await session.flush()
-                await _sync_time_slots(session, actual, is_new=False)
-            else:
-                stmt = sqlalchemy.delete(SchedulingTimeSlot).where(SchedulingTimeSlot.scheduling_actual_id == actual.id)
-                await session.execute(stmt)
-                await session.delete(actual)
-        else:
-            if regist_quota is not None:
-                actual.regist_quota = regist_quota
-            if clinic_room_uuid is not None:
-                actual.clinic_room_uuid = clinic_room_uuid
-            session.add(actual)
-            await session.flush()
-            await _sync_time_slots(session, actual, is_new=False)
-    else:
-        if regist_quota > 0:
-            new_actual = SchedulingActual(
-                employee_uuid=employee_uuid,
-                schedule_date=target_date,
-                noon=noon,
-                regist_quota=regist_quota,
-                registered_count=0,
-                clinic_room_uuid=clinic_room_uuid
-            )
-            session.add(new_actual)
-            await session.flush()
-            await _sync_time_slots(session, new_actual, is_new=True)
-            
+    if actual and slot_duration_minutes is not None:
+        requested_slot_duration_minutes = _normalize_slot_duration_minutes(slot_duration_minutes)
+        current_slot_duration_minutes = _get_effective_slot_duration_minutes(actual)
+        if (
+            requested_slot_duration_minutes != current_slot_duration_minutes
+            and actual.registered_count > 0
+        ):
+            raise ValueError("该班次已有挂号，不能直接调整每号时长，请先处理已挂号患者")
+
+    summary = await _apply_scheduling_actual_change(
+        session,
+        employee_uuid=employee_uuid,
+        schedule_date=target_date,
+        noon=noon,
+        regist_quota=regist_quota,
+        slot_duration_minutes=slot_duration_minutes,
+        clinic_room_uuid=clinic_room_uuid,
+        action_type="cancel" if regist_quota == 0 else "modify",
+    )
+
     await session.flush()
-    return {"employee_uuid": str(employee_uuid), "schedule_date": str(target_date), "noon": noon, "success": True}
+    return {
+        "employee_uuid": str(employee_uuid),
+        "schedule_date": str(target_date),
+        "noon": noon,
+        "regist_quota": summary.get("final_regist_quota", regist_quota),
+        "slot_duration_minutes": summary.get("slot_duration_minutes"),
+        "registered_count": summary.get("registered_count", 0),
+        "disruptions_created": summary.get("disruptions_created", 0),
+        "status": summary.get("status"),
+        "clinic_room_uuid": summary.get("clinic_room_uuid"),
+        "success": True,
+    }
 
 async def get_patient_disruptions(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> list[dict]:
     stmt_p = select(Patient).where(Patient.uuid == patient_uuid)

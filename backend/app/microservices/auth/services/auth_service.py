@@ -1,6 +1,6 @@
 import uuid as uuid_pkg
 from typing import Optional
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.auth import Employee, Department, RegistLevel, SettleCategory, ClinicRoom
 import json
@@ -32,6 +32,11 @@ async def get_department_by_uuid(session: AsyncSession, uuid: str) -> Optional[D
 
 async def get_regist_level_by_uuid(session: AsyncSession, uuid: str) -> Optional[RegistLevel]:
     result = await session.execute(select(RegistLevel).where(RegistLevel.uuid == uuid_pkg.UUID(uuid)))
+    return result.scalar_one_or_none()
+
+
+async def get_regist_level_by_code(session: AsyncSession, regist_code: str) -> Optional[RegistLevel]:
+    result = await session.execute(select(RegistLevel).where(RegistLevel.regist_code == regist_code))
     return result.scalar_one_or_none()
 
 
@@ -74,6 +79,55 @@ async def get_doctors_by_dept(session: AsyncSession, dept_id: int) -> list:
         docs.append(doc_dict)
     return docs
 
+
+def _serialize_doctor_account(emp: Employee, dept_uuid=None, dept_code=None, regist_level_uuid=None, regist_level_code=None) -> dict:
+    doc_dict = emp.model_dump(exclude={"password", "expertise_vector"}, mode="json")
+    doc_dict["dept_uuid"] = str(dept_uuid) if dept_uuid else None
+    doc_dict["dept_code"] = dept_code
+    doc_dict["regist_level_uuid"] = str(regist_level_uuid) if regist_level_uuid else None
+    doc_dict["regist_level_code"] = regist_level_code
+    return doc_dict
+
+
+async def list_doctor_accounts(session: AsyncSession, keyword: str = "", limit: int = 20) -> list[dict]:
+    normalized_keyword = str(keyword or "").strip()
+    safe_limit = max(1, min(int(limit or 20), 100))
+
+    stmt = (
+        select(Employee, Department.uuid, Department.dept_code, RegistLevel.uuid, RegistLevel.regist_code)
+        .outerjoin(Department, Employee.dept_id == Department.id)
+        .outerjoin(RegistLevel, Employee.regist_level_id == RegistLevel.id)
+        .where(
+            Employee.regist_level_id.isnot(None),
+            Employee.delmark == 1,
+        )
+    )
+
+    if normalized_keyword:
+        fuzzy_keyword = f"%{normalized_keyword}%"
+        stmt = stmt.where(
+            or_(
+                Employee.realname.ilike(fuzzy_keyword),
+                Department.dept_code.ilike(fuzzy_keyword),
+            )
+        )
+
+    stmt = stmt.order_by(Employee.id.desc()).limit(safe_limit)
+    result = await session.execute(stmt)
+
+    doctors = []
+    for emp, dept_uuid, dept_code, regist_level_uuid, regist_level_code in result.all():
+        doctors.append(
+            _serialize_doctor_account(
+                emp,
+                dept_uuid=dept_uuid,
+                dept_code=dept_code,
+                regist_level_uuid=regist_level_uuid,
+                regist_level_code=regist_level_code,
+            )
+        )
+    return doctors
+
 async def get_employees_by_dept_type(session: AsyncSession, dept_type: str) -> list:
     stmt = (
         select(Employee)
@@ -89,6 +143,49 @@ async def get_employees_by_dept_type(session: AsyncSession, dept_type: str) -> l
         emp_dict = emp.model_dump(exclude={"password", "expertise_vector"}, mode="json")
         emps.append(emp_dict)
     return emps
+
+
+async def get_admin_resource_stats(session: AsyncSession) -> dict[str, int]:
+    doctor_total = (
+        await session.execute(
+            select(func.count()).select_from(Employee).where(
+                Employee.delmark == 1,
+                Employee.regist_level_id.isnot(None),
+            )
+        )
+    ).scalar_one()
+
+    outpatient_employee_total = (
+        await session.execute(
+            select(func.count())
+            .select_from(Employee)
+            .join(Department, Employee.dept_id == Department.id)
+            .where(
+                Employee.delmark == 1,
+                Department.delmark == 1,
+                Department.dept_type == "outpatient",
+            )
+        )
+    ).scalar_one()
+
+    department_total = (
+        await session.execute(
+            select(func.count()).select_from(Department).where(Department.delmark == 1)
+        )
+    ).scalar_one()
+
+    clinic_room_total = (
+        await session.execute(
+            select(func.count()).select_from(ClinicRoom).where(ClinicRoom.delmark == 1)
+        )
+    ).scalar_one()
+
+    return {
+        "doctor_total": int(doctor_total or 0),
+        "outpatient_employee_total": int(outpatient_employee_total or 0),
+        "department_total": int(department_total or 0),
+        "clinic_room_total": int(clinic_room_total or 0),
+    }
 
 async def search_similar_doctors(session: AsyncSession, dept_id: int, gender_preference: str, query_vector: list[float], limit: int = 5) -> list:
 
@@ -237,6 +334,52 @@ async def update_employee_expertise(session: AsyncSession, emp_uuid: uuid_pkg.UU
     await session.commit()
     
     return emp.model_dump(exclude={"password", "expertise_vector"}, mode="json")
+
+
+async def update_employee_profile(session: AsyncSession, emp_uuid: uuid_pkg.UUID, data: dict) -> dict:
+    stmt = select(Employee, Department.uuid, RegistLevel.uuid).outerjoin(
+        Department, Employee.dept_id == Department.id
+    ).outerjoin(
+        RegistLevel, Employee.regist_level_id == RegistLevel.id
+    ).where(
+        Employee.uuid == emp_uuid
+    )
+    res = await session.execute(stmt)
+    row = res.first()
+
+    if not row:
+        raise ValueError("医生不存在")
+
+    emp, _dept_uuid, _regist_level_uuid = row
+
+    if data.get("dept_code"):
+        dept = await get_department_by_code(session, data["dept_code"])
+        if not dept:
+            raise ValueError(f"科室编码 {data['dept_code']} 不存在")
+        emp.dept_id = dept.id
+
+    if data.get("regist_level_code"):
+        level = await get_regist_level_by_code(session, data["regist_level_code"])
+        if not level:
+            raise ValueError(f"挂号等级编码 {data['regist_level_code']} 不存在")
+        emp.regist_level_id = level.id
+
+    emp.realname = data["realname"]
+    emp.gender = data.get("gender")
+    emp.expertise = data.get("expertise")
+    session.add(emp)
+    await session.commit()
+
+    dept = await get_department_by_code(session, data["dept_code"]) if data.get("dept_code") else None
+    level = await get_regist_level_by_code(session, data["regist_level_code"]) if data.get("regist_level_code") else None
+
+    return _serialize_doctor_account(
+        emp,
+        dept_uuid=dept.uuid if dept else None,
+        dept_code=dept.dept_code if dept else None,
+        regist_level_uuid=level.uuid if level else None,
+        regist_level_code=level.regist_code if level else None,
+    )
 
 async def adjust_employee_score(session: AsyncSession, employee_uuid: uuid_pkg.UUID, adjustment: float) -> dict:
     # 使用 with_for_update() 增加行级排他锁，防止并发请求导致的评分“丢失更新”漏洞

@@ -851,6 +851,7 @@ CREATE TABLE public.scheduling_actual (
     noon character varying(10) NOT NULL,
     regist_quota integer NOT NULL,
     registered_count integer NOT NULL,
+    slot_duration_minutes integer NOT NULL,
     clinic_room_uuid uuid
 );
 
@@ -885,7 +886,9 @@ CREATE TABLE public.scheduling_application (
     employee_uuid uuid NOT NULL,
     prompt text NOT NULL,
     status character varying(20) NOT NULL,
-    created_at timestamp without time zone
+    reject_reason text,
+    created_at timestamp without time zone,
+    processed_at timestamp without time zone
 );
 
 
@@ -921,6 +924,7 @@ CREATE TABLE public.scheduling_rule (
     week_rule character varying(14) NOT NULL,
     llm_text_rule text,
     regist_quota integer NOT NULL,
+    slot_duration_minutes integer NOT NULL,
     delmark smallint,
     clinic_room_uuid uuid
 );

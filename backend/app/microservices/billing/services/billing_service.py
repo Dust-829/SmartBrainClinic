@@ -2,40 +2,183 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from decimal import Decimal
 import asyncio
-import random
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from ..models.bill import (
-    BillingItemChargeLock,
-    BillingRefundSagaStep,
-    OutpatientBill,
-    OutpatientBillDetail,
-)
-from .internal_client import PatientClient, MedicalClient, PharmacyClient
-import uuid as uuid_pkg
-from app.common.clients import AuthClient
 import json
-from ..models.bill import OutboxEvent
-from sqlalchemy import select
-from app.common.enums import (
-    BillState,
-    VisitState,
-)
+import random
+import uuid as uuid_pkg
+
+from sqlalchemy import String, case, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.common.clients import AuthClient
+from app.common.enums import BillState, VisitState
 from app.common.idempotency import (
     begin_idempotency,
     complete_idempotency,
     fail_idempotency,
     has_active_processing_request,
 )
-from app.common.state_machine import (
-    ensure_bill_transition,
+from app.common.state_machine import ensure_bill_transition
+
+from ..models.bill import OutboxEvent
+from ..models.bill import (
+    BillingItemChargeLock,
+    BillingRefundSagaStep,
+    OutpatientBill,
+    OutpatientBillDetail,
 )
+from ..models.read_models import BillingPatientReadModel, BillingRegisterReadModel
+from .internal_client import PatientClient, MedicalClient, PharmacyClient
+
+_VISIT_STATE_LABELS = {
+    VisitState.UNPAID: "待支付",
+    VisitState.REGISTERED: "已挂号",
+    VisitState.RECEPTION: "接诊中",
+    VisitState.FINISHED: "已结束",
+    VisitState.CANCELLED: "已退号",
+}
 
 def _gen_bill_code() -> str:
     now = datetime.now()
-    import random
     seq = random.randint(1000, 9999)
     return f"FP{now.strftime('%Y%m%d%H%M%S')}{seq}"
+
+
+def _format_decimal(value: Decimal | int | None) -> str:
+    if value is None:
+        return "0.00"
+    if not isinstance(value, Decimal):
+        value = Decimal(str(value))
+    return f"{value:.2f}"
+
+
+def _mask_card_number(value: str | None) -> str | None:
+    if not value:
+        return None
+    if len(value) <= 8:
+        return value
+    return f"{value[:4]}{'*' * (len(value) - 8)}{value[-4:]}"
+
+
+def _visit_state_label(value: int | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return _VISIT_STATE_LABELS[VisitState(value)]
+    except (ValueError, KeyError):
+        return "未知状态"
+
+
+def _serialize_bill_core(bill: OutpatientBill) -> dict:
+    return {
+        "uuid": str(bill.uuid),
+        "register_uuid": str(bill.register_uuid),
+        "bill_code": bill.bill_code,
+        "total_amount": _format_decimal(bill.total_amount),
+        "bill_state": bill.bill_state,
+        "pay_method": bill.pay_method,
+        "transaction_id": bill.transaction_id,
+        "pay_time": bill.pay_time.isoformat() if bill.pay_time else None,
+        "fee_status": 0 if bill.bill_state in ["未缴费", "待支付"] else 1,
+    }
+
+
+def _build_admin_bill_conditions(keyword: str | None, state: str | None) -> list:
+    conditions = []
+    if state:
+        conditions.append(OutpatientBill.bill_state == state)
+
+    normalized_keyword = (keyword or "").strip()
+    if normalized_keyword:
+        pattern = f"%{normalized_keyword}%"
+        conditions.append(
+            or_(
+                OutpatientBill.bill_code.ilike(pattern),
+                cast(OutpatientBill.register_uuid, String).ilike(pattern),
+                BillingPatientReadModel.real_name.ilike(pattern),
+                BillingPatientReadModel.case_number.ilike(pattern),
+                BillingPatientReadModel.card_number.ilike(pattern),
+            )
+        )
+    return conditions
+
+
+def _admin_bill_items_stmt(keyword: str | None, state: str | None):
+    detail_count_subquery = (
+        select(
+            OutpatientBillDetail.bill_id.label("bill_id"),
+            func.count(OutpatientBillDetail.id).label("detail_count"),
+        )
+        .group_by(OutpatientBillDetail.bill_id)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            OutpatientBill,
+            BillingPatientReadModel.real_name.label("patient_name"),
+            BillingPatientReadModel.case_number.label("case_number"),
+            BillingPatientReadModel.card_number.label("card_number"),
+            BillingRegisterReadModel.visit_date.label("visit_date"),
+            func.coalesce(detail_count_subquery.c.detail_count, 0).label("detail_count"),
+        )
+        .select_from(OutpatientBill)
+        .outerjoin(BillingRegisterReadModel, BillingRegisterReadModel.uuid == OutpatientBill.register_uuid)
+        .outerjoin(BillingPatientReadModel, BillingPatientReadModel.id == BillingRegisterReadModel.patient_id)
+        .outerjoin(detail_count_subquery, detail_count_subquery.c.bill_id == OutpatientBill.id)
+        .where(*_build_admin_bill_conditions(keyword, state))
+    )
+    return stmt
+
+
+def _serialize_admin_bill_row(row) -> dict:
+    if hasattr(row, "_mapping"):
+        mapping = row._mapping
+        bill = mapping[OutpatientBill]
+        patient_name = mapping["patient_name"]
+        case_number = mapping["case_number"]
+        card_number = mapping["card_number"]
+        visit_date = mapping["visit_date"]
+        detail_count = mapping["detail_count"]
+    else:
+        bill = row.bill
+        patient_name = row.patient_name
+        case_number = row.case_number
+        card_number = row.card_number
+        visit_date = row.visit_date
+        detail_count = row.detail_count
+
+    payload = _serialize_bill_core(bill)
+    payload.update(
+        {
+            "patient_name": patient_name,
+            "case_number": case_number,
+            "card_number_masked": _mask_card_number(card_number),
+            "visit_date": visit_date.isoformat() if visit_date else None,
+            "detail_count": int(detail_count or 0),
+        }
+    )
+    return payload
+
+
+def _serialize_refund_step(step: BillingRefundSagaStep) -> dict:
+    return {
+        "step_name": step.step_name,
+        "status": step.status,
+        "error_message": step.error_message,
+        "request_payload": _json_load(step.request_payload),
+        "response_payload": _json_load(step.response_payload),
+        "updated_at": step.updated_at.isoformat() if step.updated_at else None,
+    }
+
+
+def _json_load(value: str | None):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
 
 
 def _item_key(detail: dict) -> tuple[str, str]:
@@ -534,16 +677,155 @@ async def get_bills_by_register(session: AsyncSession, register_uuid: uuid_pkg.U
     stmt = select(OutpatientBill).where(OutpatientBill.register_uuid == register_uuid)
     result = await session.execute(stmt)
     bills = result.scalars().all()
-    return [
+    return [_serialize_bill_core(bill) for bill in bills]
+
+
+async def list_bills(
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    stmt = select(OutpatientBill).order_by(OutpatientBill.pay_time.desc(), OutpatientBill.id.desc())
+    if state:
+        stmt = stmt.where(OutpatientBill.bill_state == state)
+    stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    bills = result.scalars().all()
+    return [_serialize_bill_core(bill) for bill in bills]
+
+
+async def get_admin_bills_page(
+    session: AsyncSession,
+    *,
+    keyword: str | None = None,
+    state: str | None = None,
+    limit: int = 10,
+    offset: int = 0,
+) -> dict:
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    item_stmt = (
+        _admin_bill_items_stmt(keyword, state)
+        .order_by(OutpatientBill.pay_time.desc(), OutpatientBill.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    item_rows = (await session.execute(item_stmt)).all()
+    items = [_serialize_admin_bill_row(row) for row in item_rows]
+
+    base_stmt = (
+        select(OutpatientBill.bill_state, OutpatientBill.total_amount)
+        .select_from(OutpatientBill)
+        .outerjoin(BillingRegisterReadModel, BillingRegisterReadModel.uuid == OutpatientBill.register_uuid)
+        .outerjoin(BillingPatientReadModel, BillingPatientReadModel.id == BillingRegisterReadModel.patient_id)
+        .where(*_build_admin_bill_conditions(keyword, state))
+    )
+    base_rows = (await session.execute(base_stmt)).all()
+
+    total_amount = Decimal("0.00")
+    refunded_amount = Decimal("0.00")
+    state_counts: dict[str, int] = {}
+    for row in base_rows:
+        if hasattr(row, "_mapping"):
+            bill_state = row._mapping["bill_state"]
+            amount = row._mapping["total_amount"]
+        else:
+            bill_state = row.bill_state
+            amount = row.total_amount
+        amount_decimal = amount if isinstance(amount, Decimal) else Decimal(str(amount or "0.00"))
+        total_amount += amount_decimal
+        state_counts[bill_state] = state_counts.get(bill_state, 0) + 1
+        if bill_state == BillState.REFUNDED.value:
+            refunded_amount += amount_decimal
+
+    total_count = len(base_rows)
+    summary = {
+        "total_count": total_count,
+        "paid_count": state_counts.get(BillState.PAID.value, 0),
+        "refunding_count": state_counts.get(BillState.REFUNDING.value, 0),
+        "refunded_count": state_counts.get(BillState.REFUNDED.value, 0),
+        "refund_failed_count": state_counts.get(BillState.REFUND_FAILED.value, 0),
+        "state_counts": state_counts,
+        "total_amount": _format_decimal(total_amount),
+        "refunded_amount": _format_decimal(refunded_amount),
+    }
+    return {
+        "items": items,
+        "pagination": {
+            "total": total_count,
+            "limit": limit,
+            "offset": offset,
+        },
+        "summary": summary,
+    }
+
+
+async def get_admin_bill_detail(session: AsyncSession, bill_code: str) -> dict:
+    stmt = (
+        select(
+            OutpatientBill,
+            BillingPatientReadModel.uuid.label("patient_uuid"),
+            BillingPatientReadModel.real_name.label("patient_name"),
+            BillingPatientReadModel.case_number.label("case_number"),
+            BillingPatientReadModel.card_number.label("card_number"),
+            BillingRegisterReadModel.visit_date.label("visit_date"),
+            BillingRegisterReadModel.visit_state.label("visit_state"),
+        )
+        .select_from(OutpatientBill)
+        .outerjoin(BillingRegisterReadModel, BillingRegisterReadModel.uuid == OutpatientBill.register_uuid)
+        .outerjoin(BillingPatientReadModel, BillingPatientReadModel.id == BillingRegisterReadModel.patient_id)
+        .where(OutpatientBill.bill_code == bill_code)
+    )
+    row = (await session.execute(stmt)).first()
+    if not row:
+        raise ValueError("收费单不存在")
+
+    mapping = row._mapping if hasattr(row, "_mapping") else None
+    bill = mapping[OutpatientBill] if mapping else row.bill
+    patient_uuid = mapping["patient_uuid"] if mapping else row.patient_uuid
+    patient_name = mapping["patient_name"] if mapping else row.patient_name
+    case_number = mapping["case_number"] if mapping else row.case_number
+    card_number = mapping["card_number"] if mapping else row.card_number
+    visit_date = mapping["visit_date"] if mapping else row.visit_date
+    visit_state = mapping["visit_state"] if mapping else row.visit_state
+
+    detail_stmt = (
+        select(OutpatientBillDetail)
+        .where(OutpatientBillDetail.bill_id == bill.id)
+        .order_by(OutpatientBillDetail.id.asc())
+    )
+    detail_rows = (await session.execute(detail_stmt)).scalars().all()
+
+    step_stmt = (
+        select(BillingRefundSagaStep)
+        .where(BillingRefundSagaStep.bill_code == bill.bill_code)
+        .order_by(BillingRefundSagaStep.updated_at.desc(), BillingRefundSagaStep.id.desc())
+    )
+    step_rows = (await session.execute(step_stmt)).scalars().all()
+
+    payload = _serialize_bill_core(bill)
+    payload.update(
         {
-            "uuid": str(b.uuid),
-            "bill_code": b.bill_code,
-            "total_amount": str(b.total_amount),
-            "bill_state": b.bill_state,
-            "pay_method": b.pay_method,
-            "pay_time": b.pay_time.isoformat() if b.pay_time else None,
-            "transaction_id": b.transaction_id,
-            "fee_status": 0 if b.bill_state in ["未缴费", "待支付"] else 1
+            "patient_uuid": str(patient_uuid) if patient_uuid else None,
+            "patient_name": patient_name,
+            "case_number": case_number,
+            "card_number_masked": _mask_card_number(card_number),
+            "visit_date": visit_date.isoformat() if visit_date else None,
+            "visit_state": visit_state,
+            "visit_state_label": _visit_state_label(visit_state),
+            "details": [
+                {
+                    "uuid": str(detail.uuid),
+                    "item_type": detail.item_type,
+                    "item_source_id": detail.item_source_id,
+                    "amount": _format_decimal(detail.amount),
+                }
+                for detail in detail_rows
+            ],
+            "refund_steps": [_serialize_refund_step(step) for step in step_rows],
         }
-        for b in bills
-    ]
+    )
+    return payload

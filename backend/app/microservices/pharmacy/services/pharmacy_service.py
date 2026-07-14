@@ -1,7 +1,7 @@
 import uuid as uuid_pkg
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.drug import DrugInfo, Prescription, PrescriptionItem
 from .internal_client import PatientClient, MedicalClient
@@ -16,6 +16,314 @@ def _gen_prescription_code() -> str:
     import random
     seq = random.randint(1000, 9999)
     return f"CF{now.strftime('%Y%m%d%H%M%S')}{seq}"
+
+
+def _serialize_drug_list_item(drug: DrugInfo) -> dict:
+    return {
+        "uuid": str(drug.uuid),
+        "drug_code": drug.drug_code,
+        "drug_name": drug.drug_name,
+        "specification": drug.specification,
+        "unit": drug.unit,
+        "price": str(drug.price),
+        "stock": drug.stock,
+        "min_stock_limit": drug.min_stock_limit,
+        "is_low_stock": drug.stock <= (drug.min_stock_limit or 10),
+    }
+
+
+def _prescription_action_flags(drug_state: str) -> tuple[bool, bool, str | None]:
+    current_state = normalize_drug_state(drug_state)
+    can_dispense = current_state == DrugState.PAID
+    can_return = current_state == DrugState.DISPENSED
+    primary_action = "dispense" if can_dispense else "return" if can_return else None
+    return can_dispense, can_return, primary_action
+
+
+def _normalize_workbench_state(state: str | None) -> str | None:
+    normalized = str(state or "").strip().lower()
+    if normalized in {"", "all"}:
+        return None
+    if normalized == "actionable":
+        return "actionable"
+    if normalized in {"paid", DrugState.PAID.value.lower()}:
+        return DrugState.PAID.value
+    if normalized in {"dispensed", DrugState.DISPENSED.value.lower()}:
+        return DrugState.DISPENSED.value
+    if normalized in {"prescribed", DrugState.PRESCRIBED.value.lower()}:
+        return DrugState.PRESCRIBED.value
+    if normalized in {"refunded", DrugState.REFUNDED.value.lower()}:
+        return DrugState.REFUNDED.value
+    raise ValueError("unsupported prescription state filter")
+
+
+async def _load_prescription_item_counts(session: AsyncSession, prescription_ids: list[int]) -> dict[int, int]:
+    if not prescription_ids:
+        return {}
+
+    stmt = (
+        select(PrescriptionItem.prescription_id, func.count(PrescriptionItem.id))
+        .where(PrescriptionItem.prescription_id.in_(prescription_ids))
+        .group_by(PrescriptionItem.prescription_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {int(prescription_id): int(items_count) for prescription_id, items_count in rows}
+
+
+async def get_admin_workbench_overview(session: AsyncSession) -> dict:
+    paid_prescription_count = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(Prescription).where(Prescription.drug_state == DrugState.PAID.value)
+            )
+        ).scalar()
+        or 0
+    )
+    dispensed_prescription_count = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(Prescription).where(Prescription.drug_state == DrugState.DISPENSED.value)
+            )
+        ).scalar()
+        or 0
+    )
+    low_stock_drug_count = int(
+        (
+            await session.execute(
+                select(func.count()).select_from(DrugInfo).where(
+                    DrugInfo.delmark == 1,
+                    DrugInfo.stock <= func.coalesce(DrugInfo.min_stock_limit, 10),
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    total_drug_count = int(
+        (
+            await session.execute(select(func.count()).select_from(DrugInfo).where(DrugInfo.delmark == 1))
+        ).scalar()
+        or 0
+    )
+
+    low_stock_drugs_page = await list_admin_workbench_drugs(session, low_stock_only=True, limit=6, offset=0)
+    actionable_prescriptions_page = await list_admin_workbench_prescriptions(
+        session,
+        state="actionable",
+        limit=6,
+        offset=0,
+    )
+
+    return {
+        "paid_prescription_count": paid_prescription_count,
+        "dispensed_prescription_count": dispensed_prescription_count,
+        "low_stock_drug_count": low_stock_drug_count,
+        "total_drug_count": total_drug_count,
+        "low_stock_drugs": low_stock_drugs_page["items"],
+        "actionable_prescriptions": actionable_prescriptions_page["items"],
+    }
+
+
+async def list_admin_workbench_prescriptions(
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    prescription_code: str | None = None,
+) -> dict:
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    normalized_state = _normalize_workbench_state(state)
+    normalized_code = " ".join((prescription_code or "").split())
+
+    count_stmt = select(func.count()).select_from(Prescription)
+    stmt = select(Prescription)
+
+    if normalized_state == "actionable":
+        state_filter = Prescription.drug_state.in_([DrugState.PAID.value, DrugState.DISPENSED.value])
+        count_stmt = count_stmt.where(state_filter)
+        stmt = stmt.where(state_filter)
+    elif normalized_state:
+        count_stmt = count_stmt.where(Prescription.drug_state == normalized_state)
+        stmt = stmt.where(Prescription.drug_state == normalized_state)
+
+    if normalized_code:
+        pattern = f"%{normalized_code}%"
+        count_stmt = count_stmt.where(Prescription.prescription_code.ilike(pattern))
+        stmt = stmt.where(Prescription.prescription_code.ilike(pattern))
+
+    total = int((await session.execute(count_stmt)).scalar() or 0)
+    stmt = stmt.order_by(Prescription.creation_time.desc(), Prescription.id.desc()).offset(offset).limit(limit)
+    prescriptions = (await session.execute(stmt)).scalars().all()
+    item_counts = await _load_prescription_item_counts(session, [prescription.id for prescription in prescriptions])
+
+    items = []
+    for prescription in prescriptions:
+        register_context = await PatientClient.get_register(prescription.register_uuid) or {}
+        can_dispense, can_return, _ = _prescription_action_flags(prescription.drug_state)
+        items.append(
+            {
+                "uuid": str(prescription.uuid),
+                "register_uuid": str(prescription.register_uuid),
+                "prescription_code": prescription.prescription_code,
+                "creation_time": prescription.creation_time.isoformat() if prescription.creation_time else None,
+                "is_ai_recommended": bool(prescription.is_ai_recommended),
+                "drug_state": prescription.drug_state,
+                "patient_name": register_context.get("patient_name"),
+                "patient_case_number": register_context.get("patient_case_number"),
+                "employee_name": register_context.get("employee_name"),
+                "dept_name": register_context.get("dept_name"),
+                "actual_time_range": register_context.get("actual_time_range"),
+                "clinic_room_name": register_context.get("clinic_room_name"),
+                "items_count": int(item_counts.get(prescription.id, 0)),
+                "can_dispense": can_dispense,
+                "can_return": can_return,
+            }
+        )
+
+    return {
+        "items": items,
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        },
+    }
+
+
+async def get_admin_workbench_prescription_detail(session: AsyncSession, prescription_uuid: str) -> dict:
+    stmt = select(Prescription).where(Prescription.uuid == uuid_pkg.UUID(str(prescription_uuid)))
+    prescription = (await session.execute(stmt)).scalar_one_or_none()
+    if not prescription:
+        raise ValueError("prescription not found")
+
+    items_stmt = (
+        select(PrescriptionItem)
+        .where(PrescriptionItem.prescription_id == prescription.id)
+        .order_by(PrescriptionItem.id.asc())
+    )
+    prescription_items = (await session.execute(items_stmt)).scalars().all()
+    register_context = await PatientClient.get_register(prescription.register_uuid) or {}
+
+    items = []
+    for item in prescription_items:
+        drug = await session.get(DrugInfo, item.drug_id)
+        items.append(
+            {
+                "uuid": str(item.uuid),
+                "drug_uuid": str(drug.uuid) if drug else None,
+                "drug_code": drug.drug_code if drug else None,
+                "drug_name": drug.drug_name if drug else None,
+                "specification": drug.specification if drug else None,
+                "unit": drug.unit if drug else None,
+                "price": str(drug.price) if drug else "0.00",
+                "stock": drug.stock if drug else None,
+                "min_stock_limit": drug.min_stock_limit if drug else None,
+                "drug_usage": item.drug_usage,
+                "drug_number": item.drug_number,
+            }
+        )
+
+    can_dispense, can_return, primary_action = _prescription_action_flags(prescription.drug_state)
+    return {
+        "header": {
+            "uuid": str(prescription.uuid),
+            "register_uuid": str(prescription.register_uuid),
+            "prescription_code": prescription.prescription_code,
+            "creation_time": prescription.creation_time.isoformat() if prescription.creation_time else None,
+            "is_ai_recommended": bool(prescription.is_ai_recommended),
+            "drug_state": prescription.drug_state,
+        },
+        "register_context": {
+            "patient_name": register_context.get("patient_name"),
+            "patient_case_number": register_context.get("patient_case_number"),
+            "employee_name": register_context.get("employee_name"),
+            "dept_name": register_context.get("dept_name"),
+            "actual_time_range": register_context.get("actual_time_range"),
+            "clinic_room_name": register_context.get("clinic_room_name"),
+            "visit_state_text": register_context.get("visit_state_text"),
+        },
+        "items": items,
+        "actions": {
+            "can_dispense": can_dispense,
+            "can_return": can_return,
+            "primary_action": primary_action,
+        },
+    }
+
+
+async def list_admin_workbench_drugs(
+    session: AsyncSession,
+    *,
+    keyword: str | None = None,
+    low_stock_only: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    normalized_keyword = " ".join((keyword or "").split())
+
+    count_stmt = select(func.count()).select_from(DrugInfo).where(DrugInfo.delmark == 1)
+    stmt = select(DrugInfo).where(DrugInfo.delmark == 1)
+
+    if normalized_keyword:
+        pattern = f"%{normalized_keyword}%"
+        keyword_filter = or_(DrugInfo.drug_code.ilike(pattern), DrugInfo.drug_name.ilike(pattern))
+        count_stmt = count_stmt.where(keyword_filter)
+        stmt = stmt.where(keyword_filter)
+
+    if low_stock_only:
+        low_stock_filter = DrugInfo.stock <= func.coalesce(DrugInfo.min_stock_limit, 10)
+        count_stmt = count_stmt.where(low_stock_filter)
+        stmt = stmt.where(low_stock_filter)
+
+    total = int((await session.execute(count_stmt)).scalar() or 0)
+    stmt = stmt.order_by(DrugInfo.stock.asc(), DrugInfo.id.desc()).offset(offset).limit(limit)
+    drugs = (await session.execute(stmt)).scalars().all()
+    return {
+        "items": [_serialize_drug_list_item(drug) for drug in drugs],
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        },
+    }
+
+
+async def adjust_drug_stock(session: AsyncSession, drug_uuid: str, data: dict) -> dict:
+    mode = str(data.get("mode") or "").strip().lower()
+    if mode not in {"increase", "set"}:
+        raise ValueError("unsupported stock adjustment mode")
+
+    try:
+        quantity = int(data.get("quantity"))
+    except (TypeError, ValueError):
+        raise ValueError("quantity must be a positive integer")
+
+    if quantity <= 0:
+        raise ValueError("quantity must be a positive integer")
+
+    stmt = select(DrugInfo).where(DrugInfo.uuid == uuid_pkg.UUID(str(drug_uuid))).with_for_update()
+    drug = (await session.execute(stmt)).scalar_one_or_none()
+    if not drug:
+        raise ValueError("药品不存在")
+
+    previous_stock = int(drug.stock or 0)
+    if mode == "increase":
+        drug.stock = previous_stock + quantity
+    else:
+        drug.stock = quantity
+
+    session.add(drug)
+    await session.flush()
+    return {
+        "drug_uuid": str(drug.uuid),
+        "previous_stock": previous_stock,
+        "current_stock": int(drug.stock),
+        "mode": mode,
+        "quantity": quantity,
+    }
 
 async def create_prescription(session: AsyncSession, data: dict) -> dict:
     reg = await PatientClient.get_register(data["register_uuid"])
@@ -67,6 +375,62 @@ async def get_drug_by_uuid(session: AsyncSession, drug_uuid: str) -> DrugInfo:
     stmt = select(DrugInfo).where(DrugInfo.uuid == uuid_pkg.UUID(drug_uuid))
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def list_drugs(
+    session: AsyncSession,
+    *,
+    keyword: str | None = None,
+    low_stock_only: bool = False,
+    limit: int = 20,
+) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    stmt = select(DrugInfo).where(DrugInfo.delmark == 1)
+
+    normalized_keyword = " ".join((keyword or "").split())
+    if normalized_keyword:
+        pattern = f"%{normalized_keyword}%"
+        stmt = stmt.where(
+            or_(
+                DrugInfo.drug_code.ilike(pattern),
+                DrugInfo.drug_name.ilike(pattern),
+            )
+        )
+
+    if low_stock_only:
+        stmt = stmt.where(DrugInfo.stock <= func.coalesce(DrugInfo.min_stock_limit, 10))
+
+    stmt = stmt.order_by(DrugInfo.stock.asc(), DrugInfo.id.desc()).limit(limit)
+    result = await session.execute(stmt)
+    drugs = result.scalars().all()
+    return [_serialize_drug_list_item(drug) for drug in drugs]
+
+
+async def list_prescriptions(
+    session: AsyncSession,
+    *,
+    state: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    limit = max(1, min(limit, 100))
+    stmt = select(Prescription).order_by(Prescription.creation_time.desc(), Prescription.id.desc())
+    if state:
+        stmt = stmt.where(Prescription.drug_state == state)
+    stmt = stmt.limit(limit)
+
+    result = await session.execute(stmt)
+    prescriptions = result.scalars().all()
+    return [
+        {
+            "uuid": str(prescription.uuid),
+            "register_uuid": str(prescription.register_uuid),
+            "prescription_code": prescription.prescription_code,
+            "creation_time": prescription.creation_time.isoformat() if prescription.creation_time else None,
+            "is_ai_recommended": bool(prescription.is_ai_recommended),
+            "drug_state": prescription.drug_state,
+        }
+        for prescription in prescriptions
+    ]
 
 async def update_prescription_state_by_item(session: AsyncSession, item_uuid: str, state: str) -> Prescription:
     result = await session.execute(select(PrescriptionItem).where(PrescriptionItem.uuid == uuid_pkg.UUID(item_uuid)))
@@ -296,37 +660,63 @@ async def recommend_prescription(session: AsyncSession, register_uuid: uuid_pkg.
         "ai_result": recommendations_result
     }
 
-async def batch_import_drugs(session: AsyncSession, drugs_input: list[dict]) -> list[dict]:
+async def batch_import_drugs(session: AsyncSession, drugs_input: list[dict]) -> dict:
     """
     批量入库药品，并在入库时自动生成向量以便 RAG 检索
     """
     from app.common.ai_embedding import get_embedding
     
     new_drugs = []
-    for d in drugs_input:
+    failures = []
+    seen_codes = set()
+    existing_codes = set()
+    if drugs_input:
+        stmt_existing = select(DrugInfo).where(
+            DrugInfo.delmark == 1,
+            DrugInfo.drug_code.in_([str(item["drug_code"]).strip() for item in drugs_input]),
+        )
+        existing_rows = (await session.execute(stmt_existing)).scalars().all()
+        existing_codes = {row.drug_code for row in existing_rows}
+    for item in drugs_input:
+        drug_code = str(item["drug_code"]).strip()
+        if not drug_code:
+            raise ValueError("drug_code is required")
+        if drug_code in seen_codes:
+            raise ValueError("duplicate drug_code found in request")
+        seen_codes.add(drug_code)
+        if drug_code in existing_codes:
+            failures.append({"drug_code": drug_code, "reason": "drug_code already exists"})
+            continue
+        d = item
         text_to_embed = f"药品名称: {d['drug_name']}, 规格/适应症: {d['specification']}"
         vector = await get_embedding(text_to_embed)
         
         drug = DrugInfo(
             uuid=uuid_pkg.uuid4(),
-            drug_code=d["drug_code"],
-            drug_name=d["drug_name"],
-            specification=d["specification"],
-            unit=d["unit"],
-            price=Decimal(str(d["price"])),
-            stock=d["stock"],
-            min_stock_limit=d.get("min_stock_limit", 10),
+            drug_code=drug_code,
+            drug_name=str(item["drug_name"]).strip(),
+            specification=str(item["specification"]).strip(),
+            unit=str(item["unit"]).strip(),
+            price=Decimal(str(item["price"])),
+            stock=int(item["stock"]),
+            min_stock_limit=int(item.get("min_stock_limit", 10)),
             vector=vector
         )
         new_drugs.append(drug)
         
-    session.add_all(new_drugs)
+    if new_drugs:
+        for drug in new_drugs:
+            session.add(drug)
+        await session.flush()
     await session.commit()
     
-    return [
-        {"uuid": str(d.uuid), "drug_name": d.drug_name, "drug_code": d.drug_code}
-        for d in new_drugs
-    ]
+    return {
+        "successes": [
+            {"uuid": str(d.uuid), "drug_name": d.drug_name, "drug_code": d.drug_code}
+            for d in new_drugs
+        ],
+        "failures": failures,
+    }
 
 async def get_prescription_items_batch(session: AsyncSession, item_uuids: list[str]) -> list[dict]:
     if not item_uuids:
