@@ -153,7 +153,8 @@ function openEntry(route: string) {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
   align-items: end;
-  gap: clamp(24px, 3vw, 42px);
+  row-gap: clamp(10px, 2vw, 20px);
+  column-gap: clamp(48px, 5vw, 84px);
   width: 100%;
   padding: clamp(16px, 2vw, 22px) 0 clamp(18px, 2.8vw, 28px);
   border: 0;
