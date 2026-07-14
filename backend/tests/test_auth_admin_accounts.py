@@ -2,6 +2,7 @@ from types import SimpleNamespace
 import uuid
 
 import pytest
+import bcrypt
 from sqlmodel import SQLModel
 
 SQLModel.metadata.clear()
@@ -181,3 +182,21 @@ async def test_update_employee_profile_updates_editable_fields():
     assert session.added == [employee]
     assert session.commit_count == 1
     assert result['realname'] == '李沐川(更新)'
+
+
+@pytest.mark.asyncio
+async def test_reset_employee_password_persists_only_bcrypt_hash():
+    employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000103')
+    employee = SimpleNamespace(
+        uuid=employee_uuid,
+        password='old-password-hash',
+    )
+    session = FakeSession([employee])
+
+    result = await auth_service.reset_employee_password(session, employee_uuid, 'NewSecurePass8')
+
+    assert result == {'uuid': str(employee_uuid), 'credentials_reset': True}
+    assert employee.password != 'NewSecurePass8'
+    assert bcrypt.checkpw(b'NewSecurePass8', employee.password.encode('utf-8'))
+    assert session.added == [employee]
+    assert session.commit_count == 1

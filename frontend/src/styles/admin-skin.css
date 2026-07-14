@@ -157,7 +157,8 @@
 
 .dialog-actions__secondary,
 .drug-import-form button.is-secondary,
-.accounts-page__tab {
+.accounts-page__tab,
+.account-card__secondary-action {
   min-height: 42px;
   padding: 0 16px;
   border: 1px solid var(--admin-border);
@@ -666,6 +667,19 @@
 .accounts-feedback button {
   flex: 0 0 auto;
   background: var(--admin-danger);
+}
+
+.account-card__secondary-action {
+  color: var(--admin-accent-strong);
+}
+
+.credentials-dialog__notice {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--admin-radius-sm);
+  background: var(--admin-info-soft);
+  color: #1e3a5f;
+  line-height: 1.6;
 }
 
 .accounts-skeleton {

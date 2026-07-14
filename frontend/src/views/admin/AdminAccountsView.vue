@@ -24,6 +24,9 @@ const doctorDialogVisible = ref(false)
 const doctorDialogMode = ref<DoctorDialogMode>('create')
 const savingDoctor = ref(false)
 const editingDoctorUuid = ref('')
+const credentialDialogVisible = ref(false)
+const resettingCredentials = ref(false)
+const credentialTarget = ref<DoctorDirectoryItem | null>(null)
 
 const doctorForm = reactive({
   realname: '',
@@ -33,6 +36,11 @@ const doctorForm = reactive({
   expertise: '',
   ai_eval_score: 5,
   score_adjustment: 0,
+  initial_password: '',
+})
+
+const credentialForm = reactive({
+  new_password: '',
 })
 
 const loadingPatients = ref(false)
@@ -135,6 +143,7 @@ function resetDoctorForm() {
   doctorForm.expertise = ''
   doctorForm.ai_eval_score = 5
   doctorForm.score_adjustment = 0
+  doctorForm.initial_password = ''
   editingDoctorUuid.value = ''
 }
 
@@ -162,20 +171,24 @@ async function submitDoctorForm() {
     ElMessage.warning('请补全医生基础资料')
     return
   }
+  if (doctorDialogMode.value === 'create' && doctorForm.initial_password.length < 8) {
+    ElMessage.warning('请设置至少 8 位的初始密码，并通过受控渠道交付给医生')
+    return
+  }
 
   savingDoctor.value = true
   try {
     if (doctorDialogMode.value === 'create') {
       await authApi.createEmployee({
         realname: doctorForm.realname.trim(),
-        password: '123456',
+        password: doctorForm.initial_password,
         dept_code: doctorForm.dept_code.trim(),
         regist_level_code: doctorForm.regist_level_code.trim() || undefined,
         gender: doctorForm.gender,
         expertise: doctorForm.expertise.trim() || undefined,
         ai_eval_score: doctorForm.ai_eval_score,
       })
-      ElMessage.success('医生资料已创建')
+      ElMessage.success('医生资料已创建，请通过受控渠道交付初始密码')
     } else {
       await authApi.updateEmployeeProfile(editingDoctorUuid.value, {
         realname: doctorForm.realname.trim(),
@@ -218,6 +231,30 @@ async function loadPatients() {
     patientError.value = '患者档案列表加载失败，请检查服务后重试。'
   } finally {
     loadingPatients.value = false
+  }
+}
+
+function openCredentialResetDialog(doctor: DoctorDirectoryItem) {
+  credentialTarget.value = doctor
+  credentialForm.new_password = ''
+  credentialDialogVisible.value = true
+}
+
+async function submitCredentialReset() {
+  if (!credentialTarget.value) return
+  if (credentialForm.new_password.length < 8) {
+    ElMessage.warning('新密码至少需要 8 位')
+    return
+  }
+
+  resettingCredentials.value = true
+  try {
+    await authApi.resetEmployeeCredentials(credentialTarget.value.uuid, credentialForm.new_password)
+    credentialDialogVisible.value = false
+    credentialForm.new_password = ''
+    ElMessage.success('登录凭据已重置，请通过受控渠道告知医生')
+  } finally {
+    resettingCredentials.value = false
   }
 }
 
@@ -355,7 +392,7 @@ watch(activeTab, (tab) => {
         </div>
       </SectionCard>
 
-      <SectionCard title="医生账号列表" subtitle="支持新增、编辑基础资料与调整 AI 评分。">
+      <SectionCard title="医生账号列表" subtitle="支持基础资料维护、AI 评分调整和受控凭据重置。">
         <div class="accounts-list-status" aria-live="polite">
           <span v-if="doctorLoaded">显示 {{ doctorPageStart }}–{{ doctorPageEnd }} / 共 {{ doctorPagination.total }} 条</span>
           <span v-else>正在准备医生账号列表</span>
@@ -396,6 +433,7 @@ watch(activeTab, (tab) => {
 
             <div class="account-card__actions">
               <button type="button" @click="openEditDoctorDialog(doctor)">编辑资料</button>
+              <button type="button" class="account-card__secondary-action" @click="openCredentialResetDialog(doctor)">重置凭据</button>
             </div>
           </article>
         </div>
@@ -504,6 +542,10 @@ watch(activeTab, (tab) => {
           <textarea v-model="doctorForm.expertise" rows="3" placeholder="请输入医生专长" />
         </label>
         <label v-if="doctorDialogMode === 'create'">
+          <span>初始密码</span>
+          <input v-model="doctorForm.initial_password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位，仅通过受控渠道交付" />
+        </label>
+        <label v-if="doctorDialogMode === 'create'">
           <span>AI 评分</span>
           <input v-model.number="doctorForm.ai_eval_score" type="number" min="0" max="5" step="0.1" />
         </label>
@@ -518,6 +560,27 @@ watch(activeTab, (tab) => {
           <button type="button" class="dialog-actions__secondary" @click="doctorDialogVisible = false">取消</button>
           <button type="button" class="dialog-actions__primary" :disabled="savingDoctor" @click="submitDoctorForm">
             {{ savingDoctor ? '保存中...' : '保存' }}
+          </button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="credentialDialogVisible" title="重置医生登录凭据" width="480px">
+      <form class="dialog-form" @submit.prevent="submitCredentialReset">
+        <p class="credentials-dialog__notice">
+          正在为 {{ credentialTarget?.realname || '该医生' }} 设置新密码。密码不会显示在列表、接口响应或日志中，请通过受控渠道单独交付。
+        </p>
+        <label>
+          <span>新密码</span>
+          <input v-model="credentialForm.new_password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位" />
+        </label>
+      </form>
+
+      <template #footer>
+        <div class="dialog-actions">
+          <button type="button" class="dialog-actions__secondary" @click="credentialDialogVisible = false">取消</button>
+          <button type="button" class="dialog-actions__primary" :disabled="resettingCredentials" @click="submitCredentialReset">
+            {{ resettingCredentials ? '重置中...' : '确认重置' }}
           </button>
         </div>
       </template>

@@ -2,7 +2,7 @@ import uuid as uuid_pkg
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.response import success
@@ -23,7 +23,7 @@ class SearchSimilarDoctorRequest(BaseModel):
 
 class EmployeeCreate(BaseModel):
     realname: str
-    password: Optional[str] = "123456"
+    password: str = Field(min_length=8, max_length=128)
     dept_code: Optional[str] = None
     regist_level_code: Optional[str] = None
     gender: Optional[str] = None
@@ -45,6 +45,10 @@ class ExpertiseUpdate(BaseModel):
 
 class ScoreAdjustRequest(BaseModel):
     adjustment: float
+
+
+class EmployeePasswordResetRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class AdminLoginRequest(BaseModel):
@@ -140,6 +144,19 @@ async def adjust_employee_score(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/employee/{uuid}/credentials/reset", summary="重置医生登录凭据")
+async def reset_employee_credentials(
+    uuid: uuid_pkg.UUID,
+    data: EmployeePasswordResetRequest,
+    session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
+):
+    try:
+        return success(await svc.reset_employee_password(session, uuid, data.new_password))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/admin/doctors", summary="管理员查询医生账号")

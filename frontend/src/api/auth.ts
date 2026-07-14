@@ -104,7 +104,7 @@ export const authApi = {
   },
   createEmployee(payload: {
     realname: string
-    password?: string
+    password: string
     dept_code?: string
     regist_level_code?: string
     gender?: string
@@ -123,6 +123,12 @@ export const authApi = {
     return http.put<ApiEnvelope<{ uuid: string; new_score: string }>>(
       `/api/v1/auth/employee/${employeeUuid}/score/adjust`,
       { adjustment },
+    )
+  },
+  resetEmployeeCredentials(employeeUuid: string, newPassword: string) {
+    return http.post<ApiEnvelope<{ uuid: string; credentials_reset: boolean }>>(
+      `/api/v1/auth/employee/${encodeURIComponent(employeeUuid)}/credentials/reset`,
+      { new_password: newPassword },
     )
   },
 }

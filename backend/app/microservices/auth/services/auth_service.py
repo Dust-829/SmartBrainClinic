@@ -318,8 +318,9 @@ async def create_employee(session: AsyncSession, data: dict) -> Employee:
     """
 
     
-    # 默认密码加密
-    raw_password = data.get("password", "123456")
+    raw_password = str(data.get("password") or "")
+    if len(raw_password) < 8:
+        raise ValueError("医生初始密码至少需要 8 位")
     hashed_password = bcrypt.hashpw(raw_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     
     dept_id = None
@@ -369,6 +370,22 @@ async def create_employee(session: AsyncSession, data: dict) -> Employee:
         raise ValueError("数据库完整性错误，可能存在冲突记录")
         
     return emp
+
+
+async def reset_employee_password(session: AsyncSession, emp_uuid: uuid_pkg.UUID, new_password: str) -> dict:
+    normalized_password = str(new_password or "")
+    if len(normalized_password) < 8:
+        raise ValueError("新密码至少需要 8 位")
+
+    result = await session.execute(select(Employee).where(Employee.uuid == emp_uuid))
+    employee = result.scalar_one_or_none()
+    if not employee:
+        raise ValueError("医生不存在")
+
+    employee.password = bcrypt.hashpw(normalized_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    session.add(employee)
+    await session.commit()
+    return {"uuid": str(employee.uuid), "credentials_reset": True}
 
 async def update_employee_expertise(session: AsyncSession, emp_uuid: uuid_pkg.UUID, expertise: str) -> dict:
     """

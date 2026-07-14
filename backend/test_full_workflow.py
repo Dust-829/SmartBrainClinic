@@ -478,7 +478,7 @@ def create_ai_guided_registration(api: E2EClient, seed: SeedData, *, run_prefix:
         expected=(200, 201),
         json={
             "realname": f"E2E {run_prefix} Doctor {run_id}",
-            "password": "123456",
+            "password": "E2Epass123",
             "dept_code": dept_code,
             "regist_level_code": "E2E_LEVEL",
             "gender": "男",
@@ -609,7 +609,7 @@ def create_base_visit(api: E2EClient, seed: SeedData) -> dict[str, Any]:
         expected=(200, 201),
         json={
             "realname": f"E2E Doctor {run_id}",
-            "password": "123456",
+            "password": "E2Epass123",
             "dept_code": "E2E_DEPT",
             "regist_level_code": "E2E_LEVEL",
             "gender": "男",

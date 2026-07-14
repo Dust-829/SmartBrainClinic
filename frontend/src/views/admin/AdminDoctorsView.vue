@@ -20,6 +20,7 @@ const createForm = reactive({
   gender: '男',
   expertise: '',
   ai_eval_score: 5,
+  initial_password: '',
 })
 
 const expertiseDrafts = ref<Record<string, string>>({})
@@ -40,19 +41,24 @@ async function loadDoctors() {
 }
 
 async function createDoctor() {
+  if (createForm.initial_password.length < 8) {
+    ElMessage.warning('请设置至少 8 位的初始密码，并通过受控渠道交付给医生')
+    return
+  }
   creatingDoctor.value = true
   try {
     await authApi.createEmployee({
       ...createForm,
-      password: '123456',
+      password: createForm.initial_password,
       regist_level_code: createForm.regist_level_code || undefined,
       expertise: createForm.expertise || undefined,
     })
-    ElMessage.success('医生已创建')
+    ElMessage.success('医生已创建，请通过受控渠道交付初始密码')
     createForm.realname = ''
     createForm.regist_level_code = ''
     createForm.expertise = ''
     createForm.ai_eval_score = 5
+    createForm.initial_password = ''
     await loadDoctors()
   } finally {
     creatingDoctor.value = false
@@ -132,6 +138,10 @@ loadDoctors()
           <label>
             <span>专长</span>
             <textarea v-model="createForm.expertise" rows="3" placeholder="如：脑部肿瘤、头痛、神经影像判读" />
+          </label>
+          <label>
+            <span>初始密码</span>
+            <input v-model="createForm.initial_password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位，仅通过受控渠道交付" />
           </label>
           <label>
             <span>AI 评分</span>
