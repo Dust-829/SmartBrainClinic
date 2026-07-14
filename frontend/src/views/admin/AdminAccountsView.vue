@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import { adminApi, type PatientAdminListItem } from '@/api/admin'
@@ -10,11 +10,16 @@ type AccountTab = 'doctor' | 'patient'
 type PatientGender = 'male' | 'female'
 type DoctorDialogMode = 'create' | 'edit'
 
+const DEFAULT_PAGE_LIMIT = 20
+
 const activeTab = ref<AccountTab>('doctor')
 
 const loadingDoctors = ref(false)
+const doctorError = ref('')
 const doctorKeyword = ref('')
 const doctors = ref<DoctorDirectoryItem[]>([])
+const doctorPagination = reactive({ total: 0, limit: DEFAULT_PAGE_LIMIT, offset: 0 })
+const doctorLoaded = ref(false)
 const doctorDialogVisible = ref(false)
 const doctorDialogMode = ref<DoctorDialogMode>('create')
 const savingDoctor = ref(false)
@@ -31,8 +36,11 @@ const doctorForm = reactive({
 })
 
 const loadingPatients = ref(false)
+const patientError = ref('')
 const patientKeyword = ref('')
 const patients = ref<PatientAdminListItem[]>([])
+const patientPagination = reactive({ total: 0, limit: DEFAULT_PAGE_LIMIT, offset: 0 })
+const patientLoaded = ref(false)
 const patientDialogVisible = ref(false)
 const patientDialogMode = ref<'create' | 'edit'>('create')
 const savingPatient = ref(false)
@@ -48,6 +56,14 @@ const patientForm = reactive({
 
 const doctorDialogTitle = computed(() => (doctorDialogMode.value === 'create' ? '新增医生资料' : '编辑医生资料'))
 const patientDialogTitle = computed(() => (patientDialogMode.value === 'create' ? '新增患者资料' : '编辑患者资料'))
+const doctorPageStart = computed(() => (doctorPagination.total ? doctorPagination.offset + 1 : 0))
+const doctorPageEnd = computed(() => Math.min(doctorPagination.offset + doctors.value.length, doctorPagination.total))
+const patientPageStart = computed(() => (patientPagination.total ? patientPagination.offset + 1 : 0))
+const patientPageEnd = computed(() => Math.min(patientPagination.offset + patients.value.length, patientPagination.total))
+const canGoPreviousDoctorPage = computed(() => doctorPagination.offset > 0)
+const canGoNextDoctorPage = computed(() => doctorPagination.offset + doctors.value.length < doctorPagination.total)
+const canGoPreviousPatientPage = computed(() => patientPagination.offset > 0)
+const canGoNextPatientPage = computed(() => patientPagination.offset + patients.value.length < patientPagination.total)
 
 function normalizePatientGender(value?: string | null): PatientGender {
   if (!value) return 'male'
@@ -70,17 +86,44 @@ function formatDoctorGender(value?: string | null) {
 
 async function loadDoctors() {
   loadingDoctors.value = true
+  doctorError.value = ''
   try {
     const response = await authApi.listDoctorAccounts({
       keyword: doctorKeyword.value.trim() || undefined,
-      limit: 20,
+      limit: doctorPagination.limit,
+      offset: doctorPagination.offset,
     })
-    doctors.value = response.data.data?.items ?? []
+    const page = response.data.data
+    doctors.value = page?.items ?? []
+    doctorPagination.total = page?.pagination?.total ?? doctors.value.length
+    doctorPagination.limit = page?.pagination?.limit ?? doctorPagination.limit
+    doctorPagination.offset = page?.pagination?.offset ?? doctorPagination.offset
+    doctorLoaded.value = true
   } catch {
-    doctors.value = []
+    doctorError.value = '医生账号列表加载失败，请检查服务后重试。'
   } finally {
     loadingDoctors.value = false
   }
+}
+
+function searchDoctors() {
+  doctorPagination.offset = 0
+  loadDoctors()
+}
+
+function changeDoctorPage(direction: 'previous' | 'next') {
+  const nextOffset = direction === 'previous'
+    ? Math.max(0, doctorPagination.offset - doctorPagination.limit)
+    : doctorPagination.offset + doctorPagination.limit
+  if (nextOffset === doctorPagination.offset) return
+  doctorPagination.offset = nextOffset
+  loadDoctors()
+}
+
+function updateDoctorLimit(event: Event) {
+  doctorPagination.limit = Number((event.target as HTMLSelectElement).value) || DEFAULT_PAGE_LIMIT
+  doctorPagination.offset = 0
+  loadDoctors()
 }
 
 function resetDoctorForm() {
@@ -157,17 +200,44 @@ async function submitDoctorForm() {
 
 async function loadPatients() {
   loadingPatients.value = true
+  patientError.value = ''
   try {
     const response = await adminApi.listPatients({
       keyword: patientKeyword.value.trim() || undefined,
-      limit: 20,
+      limit: patientPagination.limit,
+      offset: patientPagination.offset,
     })
-    patients.value = response.data.data?.items ?? []
+    const page = response.data.data
+    patients.value = page?.items ?? []
+    patientPagination.total = page?.pagination?.total ?? patients.value.length
+    patientPagination.limit = page?.pagination?.limit ?? patientPagination.limit
+    patientPagination.offset = page?.pagination?.offset ?? patientPagination.offset
+    patientLoaded.value = true
   } catch {
-    patients.value = []
+    patientError.value = '患者档案列表加载失败，请检查服务后重试。'
   } finally {
     loadingPatients.value = false
   }
+}
+
+function searchPatients() {
+  patientPagination.offset = 0
+  loadPatients()
+}
+
+function changePatientPage(direction: 'previous' | 'next') {
+  const nextOffset = direction === 'previous'
+    ? Math.max(0, patientPagination.offset - patientPagination.limit)
+    : patientPagination.offset + patientPagination.limit
+  if (nextOffset === patientPagination.offset) return
+  patientPagination.offset = nextOffset
+  loadPatients()
+}
+
+function updatePatientLimit(event: Event) {
+  patientPagination.limit = Number((event.target as HTMLSelectElement).value) || DEFAULT_PAGE_LIMIT
+  patientPagination.offset = 0
+  loadPatients()
 }
 
 function resetPatientForm() {
@@ -233,7 +303,12 @@ async function submitPatientForm() {
 
 onMounted(() => {
   loadDoctors()
-  loadPatients()
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'patient' && !patientLoaded.value && !loadingPatients.value) {
+    loadPatients()
+  }
 })
 </script>
 
@@ -259,7 +334,7 @@ onMounted(() => {
     <template v-if="activeTab === 'doctor'">
       <SectionCard title="医生账号检索" subtitle="支持按姓名或科室编码搜索 doctor 账号。">
         <div class="toolbar">
-          <form class="toolbar__search" @submit.prevent="loadDoctors">
+          <form class="toolbar__search" @submit.prevent="searchDoctors">
             <input v-model="doctorKeyword" type="text" placeholder="输入医生姓名或科室编码" />
             <button type="submit" :disabled="loadingDoctors">
               {{ loadingDoctors ? '查询中...' : '查询医生' }}
@@ -270,7 +345,29 @@ onMounted(() => {
       </SectionCard>
 
       <SectionCard title="医生账号列表" subtitle="支持新增、编辑基础资料与调整 AI 评分。">
-        <div v-if="doctors.length" class="account-list">
+        <div class="accounts-list-status" aria-live="polite">
+          <span v-if="doctorLoaded">显示 {{ doctorPageStart }}–{{ doctorPageEnd }} / 共 {{ doctorPagination.total }} 条</span>
+          <span v-else>正在准备医生账号列表</span>
+          <label>
+            <span>每页</span>
+            <select :value="doctorPagination.limit" :disabled="loadingDoctors" @change="updateDoctorLimit">
+              <option :value="20">20 条</option>
+              <option :value="50">50 条</option>
+              <option :value="100">100 条</option>
+            </select>
+          </label>
+        </div>
+
+        <div v-if="doctorError" class="accounts-feedback accounts-feedback--error" role="alert">
+          <p>{{ doctorError }}</p>
+          <button type="button" @click="loadDoctors">重新加载</button>
+        </div>
+        <template v-if="loadingDoctors && !doctors.length">
+          <div class="accounts-skeleton" aria-label="医生账号列表加载中">
+            <span v-for="index in 3" :key="index"></span>
+          </div>
+        </template>
+        <div v-else-if="doctors.length" class="account-list">
           <article v-for="doctor in doctors" :key="doctor.uuid" class="account-card">
             <div class="account-card__head">
               <div>
@@ -291,14 +388,20 @@ onMounted(() => {
             </div>
           </article>
         </div>
-        <div v-else class="accounts-empty">当前没有符合条件的 doctor 账号。</div>
+        <div v-else-if="!doctorError" class="accounts-empty">{{ doctorKeyword ? '没有匹配当前检索条件的医生账号。' : '当前尚无医生账号。' }}</div>
+
+        <div v-if="doctorLoaded" class="accounts-pagination">
+          <button type="button" :disabled="loadingDoctors || !canGoPreviousDoctorPage" @click="changeDoctorPage('previous')">上一页</button>
+          <span>第 {{ Math.floor(doctorPagination.offset / doctorPagination.limit) + 1 }} 页</span>
+          <button type="button" :disabled="loadingDoctors || !canGoNextDoctorPage" @click="changeDoctorPage('next')">下一页</button>
+        </div>
       </SectionCard>
     </template>
 
     <template v-else>
       <SectionCard title="患者账号检索" subtitle="支持按姓名或身份证号搜索 patient 账号。">
         <div class="toolbar">
-          <form class="toolbar__search" @submit.prevent="loadPatients">
+          <form class="toolbar__search" @submit.prevent="searchPatients">
             <input v-model="patientKeyword" type="text" placeholder="输入姓名或身份证号" />
             <button type="submit" :disabled="loadingPatients">
               {{ loadingPatients ? '查询中...' : '查询患者' }}
@@ -309,7 +412,29 @@ onMounted(() => {
       </SectionCard>
 
       <SectionCard title="患者账号列表" subtitle="编辑时证件号只读，避免破坏建档唯一性。">
-        <div v-if="patients.length" class="account-list">
+        <div class="accounts-list-status" aria-live="polite">
+          <span v-if="patientLoaded">显示 {{ patientPageStart }}–{{ patientPageEnd }} / 共 {{ patientPagination.total }} 条</span>
+          <span v-else>正在准备患者档案列表</span>
+          <label>
+            <span>每页</span>
+            <select :value="patientPagination.limit" :disabled="loadingPatients" @change="updatePatientLimit">
+              <option :value="20">20 条</option>
+              <option :value="50">50 条</option>
+              <option :value="100">100 条</option>
+            </select>
+          </label>
+        </div>
+
+        <div v-if="patientError" class="accounts-feedback accounts-feedback--error" role="alert">
+          <p>{{ patientError }}</p>
+          <button type="button" @click="loadPatients">重新加载</button>
+        </div>
+        <template v-if="loadingPatients && !patients.length">
+          <div class="accounts-skeleton" aria-label="患者档案列表加载中">
+            <span v-for="index in 3" :key="index"></span>
+          </div>
+        </template>
+        <div v-else-if="patients.length" class="account-list">
           <article v-for="patient in patients" :key="patient.uuid" class="account-card">
             <div class="account-card__head">
               <div>
@@ -330,7 +455,13 @@ onMounted(() => {
             </div>
           </article>
         </div>
-        <div v-else class="accounts-empty">当前没有符合条件的 patient 账号。</div>
+        <div v-else-if="!patientError" class="accounts-empty">{{ patientKeyword ? '没有匹配当前检索条件的患者档案。' : '当前尚无患者档案。' }}</div>
+
+        <div v-if="patientLoaded" class="accounts-pagination">
+          <button type="button" :disabled="loadingPatients || !canGoPreviousPatientPage" @click="changePatientPage('previous')">上一页</button>
+          <span>第 {{ Math.floor(patientPagination.offset / patientPagination.limit) + 1 }} 页</span>
+          <button type="button" :disabled="loadingPatients || !canGoNextPatientPage" @click="changePatientPage('next')">下一页</button>
+        </div>
       </SectionCard>
     </template>
 

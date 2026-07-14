@@ -136,7 +136,9 @@
 .bill-card__actions button,
 .admin-form button,
 .drug-import-form button,
-.doctor-card button {
+.doctor-card button,
+.accounts-pagination button,
+.accounts-feedback button {
   min-height: 42px;
   padding: 0 16px;
   border: 0;
@@ -185,7 +187,9 @@
 .admin-form button:disabled,
 .drug-import-form button:disabled,
 .doctor-card button:disabled,
-.admin-inline-button:disabled {
+.admin-inline-button:disabled,
+.accounts-pagination button:disabled,
+.accounts-feedback button:disabled {
   opacity: 0.65;
   cursor: not-allowed;
 }
@@ -602,6 +606,94 @@
   gap: 12px;
 }
 
+.accounts-list-status,
+.accounts-list-status label,
+.accounts-pagination,
+.accounts-feedback {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.accounts-list-status {
+  justify-content: space-between;
+  margin-bottom: 14px;
+  color: var(--admin-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.accounts-list-status label {
+  color: var(--admin-text-muted);
+}
+
+.accounts-list-status select {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+}
+
+.accounts-pagination {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.accounts-pagination span {
+  min-width: 74px;
+  color: var(--admin-text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.accounts-feedback {
+  justify-content: space-between;
+  padding: 14px;
+  border: 1px solid #fecaca;
+  border-radius: var(--admin-radius-md);
+  background: #fff7f7;
+  color: var(--admin-danger);
+}
+
+.accounts-feedback p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.accounts-feedback button {
+  flex: 0 0 auto;
+  background: var(--admin-danger);
+}
+
+.accounts-skeleton {
+  display: grid;
+  gap: 12px;
+}
+
+.accounts-skeleton span {
+  display: block;
+  height: 142px;
+  border-radius: var(--admin-radius-lg);
+  background: linear-gradient(90deg, #f1f5f9 25%, #f8fafc 45%, #f1f5f9 65%);
+  background-size: 220% 100%;
+  animation: accounts-skeleton-loading 1.2s ease-in-out infinite;
+}
+
+.accounts-page button:focus-visible,
+.accounts-page input:focus-visible,
+.accounts-page select:focus-visible,
+.accounts-page textarea:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.32);
+  outline-offset: 2px;
+}
+
+@keyframes accounts-skeleton-loading {
+  to { background-position: -120% 0; }
+}
+
 .dialog-actions {
   justify-content: flex-end;
 }
@@ -744,8 +836,21 @@
 
   .approval-card__actions,
   .bill-card__actions,
-  .dialog-actions {
+  .dialog-actions,
+  .accounts-pagination,
+  .accounts-feedback {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .accounts-list-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accounts-skeleton span {
+    animation: none;
   }
 }
