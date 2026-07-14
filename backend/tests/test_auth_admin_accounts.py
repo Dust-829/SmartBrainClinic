@@ -203,6 +203,25 @@ async def test_reset_employee_password_persists_only_bcrypt_hash():
 
 
 @pytest.mark.asyncio
+async def test_deactivation_check_delegates_to_patient_client():
+    employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000108')
+    original_check = auth_service.PatientClient.get_doctor_deactivation_check
+
+    async def fake_check(received_employee_uuid, received_authorization):
+        assert received_employee_uuid == str(employee_uuid)
+        assert received_authorization == 'Bearer test'
+        return {'can_deactivate': True, 'blockers': []}
+
+    auth_service.PatientClient.get_doctor_deactivation_check = fake_check
+    try:
+        result = await auth_service.get_employee_deactivation_check(employee_uuid, 'Bearer test')
+    finally:
+        auth_service.PatientClient.get_doctor_deactivation_check = original_check
+
+    assert result == {'can_deactivate': True, 'blockers': []}
+
+
+@pytest.mark.asyncio
 async def test_reset_employee_password_records_a_safe_account_audit():
     employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000106')
     admin_uuid = uuid.UUID('00000000-0000-0000-0000-000000000901')

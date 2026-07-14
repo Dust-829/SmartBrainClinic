@@ -227,6 +227,12 @@ class PatientClient:
         }
         return await BaseClient.post_required(url, json_data=payload)
 
+    @staticmethod
+    async def get_doctor_deactivation_check(employee_uuid: str, authorization: str | None):
+        url = f"{BaseClient.get_url('patient')}/admin/doctors/{employee_uuid}/deactivation-check"
+        headers = {"Authorization": authorization} if authorization else None
+        return await BaseClient.get_required(url, headers=headers)
+
 
 class MedicalClient:
     @staticmethod
@@ -279,12 +285,6 @@ class MedicalClient:
         url = f"{BaseClient.get_url('medical')}/reports/register/{register_uuid}/published"
         res = await BaseClient.get(url)
         return res if res is not None else []
-
-    @staticmethod
-    async def get_doctor_deactivation_check(employee_uuid: str, authorization: str | None):
-        url = f"{BaseClient.get_url('patient')}/admin/doctors/{employee_uuid}/deactivation-check"
-        headers = {"Authorization": authorization} if authorization else None
-        return await BaseClient.get_required(url, headers=headers)
 
     @staticmethod
     async def update_check_state(uuid: str, state: str):
