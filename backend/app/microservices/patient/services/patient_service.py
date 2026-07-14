@@ -337,6 +337,27 @@ def _serialize_patient(patient: Patient) -> dict:
     }
 
 
+def _mask_card_number(card_number: str | None) -> str | None:
+    if not card_number:
+        return card_number
+    normalized = str(card_number)
+    if len(normalized) <= 8:
+        return "*" * len(normalized)
+    return f"{normalized[:4]}{'*' * (len(normalized) - 8)}{normalized[-4:]}"
+
+
+def _serialize_admin_patient_list_item(patient: Patient) -> dict:
+    return {
+        "uuid": str(patient.uuid),
+        "case_number": patient.case_number,
+        "real_name": patient.real_name,
+        "gender": patient.gender,
+        "card_number": _mask_card_number(patient.card_number),
+        "birthdate": patient.birthdate.isoformat() if patient.birthdate else None,
+        "created_at": patient.created_at.isoformat() if patient.created_at else None,
+    }
+
+
 _VALID_NOON_VALUES = {"上午", "下午"}
 _VALID_WEEK_RULE_VALUES = {str(i) for i in range(1, 8)}
 _VALID_APPLICATION_STATUSES = {"pending", "approved", "rejected", "duplicate"}
@@ -845,7 +866,7 @@ async def list_admin_patients(
     result = await session.execute(item_stmt)
     total = (await session.execute(select(func.count()).select_from(Patient).where(*conditions))).scalar_one()
     return {
-        "items": [_serialize_patient(patient) for patient in result.scalars().all()],
+        "items": [_serialize_admin_patient_list_item(patient) for patient in result.scalars().all()],
         "pagination": {
             "total": int(total or 0),
             "limit": safe_limit,
@@ -872,6 +893,13 @@ async def update_admin_patient(session: AsyncSession, patient_uuid: uuid_pkg.UUI
     patient.home_address = data.get("home_address")
     session.add(patient)
     await session.flush()
+    return _serialize_admin_patient_list_item(patient)
+
+
+async def get_admin_patient_detail(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> dict:
+    patient = await get_patient_by_uuid(session, patient_uuid)
+    if not patient:
+        raise ValueError("患者不存在")
     return _serialize_patient(patient)
 
 async def get_patient_by_uuid(session: AsyncSession, patient_uuid: uuid_pkg.UUID) -> Optional[Patient]:

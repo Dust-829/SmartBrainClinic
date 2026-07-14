@@ -367,8 +367,12 @@ export interface PatientAdminListItem {
   gender: string
   card_number: string
   birthdate: string
-  home_address?: string | null
   created_at?: string | null
+}
+
+export interface PatientAdminDetail extends PatientAdminListItem {
+  card_number: string
+  home_address?: string | null
 }
 
 export interface PatientAdminPage {
@@ -532,6 +536,9 @@ export const adminApi = {
   },
   listPatients(params: { keyword?: string; limit?: number; offset?: number } = {}) {
     return http.get<ApiEnvelope<PatientAdminPage>>('/api/v1/patient/admin/patients', { params })
+  },
+  getPatientDetail(patientUuid: string) {
+    return http.get<ApiEnvelope<PatientAdminDetail>>(`/api/v1/patient/admin/patients/${encodeURIComponent(patientUuid)}`)
   },
   getPatientAdminStats() {
     return http.get<ApiEnvelope<PatientAdminStats>>('/api/v1/patient/admin/stats')

@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { adminApi, type PatientAdminListItem } from '@/api/admin'
+import { adminApi, type PatientAdminDetail, type PatientAdminListItem } from '@/api/admin'
 import { authApi, type DoctorDirectoryItem } from '@/api/auth'
 import SectionCard from '@/components/common/SectionCard.vue'
 
@@ -44,6 +44,7 @@ const patientLoaded = ref(false)
 const patientDialogVisible = ref(false)
 const patientDialogMode = ref<'create' | 'edit'>('create')
 const savingPatient = ref(false)
+const loadingPatientDetail = ref(false)
 const editingPatientUuid = ref('')
 
 const patientForm = reactive({
@@ -255,15 +256,25 @@ function openCreatePatientDialog() {
   patientDialogVisible.value = true
 }
 
-function openEditPatientDialog(patient: PatientAdminListItem) {
+async function openEditPatientDialog(patient: PatientAdminListItem) {
   patientDialogMode.value = 'edit'
   editingPatientUuid.value = patient.uuid
-  patientForm.real_name = patient.real_name
-  patientForm.gender = normalizePatientGender(patient.gender)
-  patientForm.card_number = patient.card_number
-  patientForm.birthdate = patient.birthdate
-  patientForm.home_address = patient.home_address || ''
-  patientDialogVisible.value = true
+  loadingPatientDetail.value = true
+  try {
+    const response = await adminApi.getPatientDetail(patient.uuid)
+    const detail: PatientAdminDetail | undefined = response.data.data
+    if (!detail) throw new Error('患者档案详情为空')
+    patientForm.real_name = detail.real_name
+    patientForm.gender = normalizePatientGender(detail.gender)
+    patientForm.card_number = detail.card_number
+    patientForm.birthdate = detail.birthdate
+    patientForm.home_address = detail.home_address || ''
+    patientDialogVisible.value = true
+  } catch {
+    ElMessage.error('患者完整档案加载失败，请稍后重试')
+  } finally {
+    loadingPatientDetail.value = false
+  }
 }
 
 async function submitPatientForm() {
@@ -411,7 +422,7 @@ watch(activeTab, (tab) => {
         </div>
       </SectionCard>
 
-      <SectionCard title="患者账号列表" subtitle="编辑时证件号只读，避免破坏建档唯一性。">
+      <SectionCard title="患者档案列表" subtitle="列表仅显示脱敏证件号；完整地址只在受控编辑操作中按需读取。">
         <div class="accounts-list-status" aria-live="polite">
           <span v-if="patientLoaded">显示 {{ patientPageStart }}–{{ patientPageEnd }} / 共 {{ patientPagination.total }} 条</span>
           <span v-else>正在准备患者档案列表</span>
@@ -439,19 +450,21 @@ watch(activeTab, (tab) => {
             <div class="account-card__head">
               <div>
                 <strong>{{ patient.real_name }}</strong>
-                <p>{{ formatPatientGender(patient.gender) }} | {{ patient.card_number }}</p>
+                <p>{{ formatPatientGender(patient.gender) }} | 证件号 {{ patient.card_number }}</p>
               </div>
               <span>{{ patient.case_number }}</span>
             </div>
 
             <div class="account-meta">
               <p>出生日期：{{ patient.birthdate }}</p>
-              <p>家庭住址：{{ patient.home_address || '未填写' }}</p>
+              <p>家庭住址：受控查看</p>
               <p>建档时间：{{ patient.created_at?.replace('T', ' ').slice(0, 16) || '未记录' }}</p>
             </div>
 
             <div class="account-card__actions">
-              <button type="button" @click="openEditPatientDialog(patient)">编辑资料</button>
+              <button type="button" :disabled="loadingPatientDetail" @click="openEditPatientDialog(patient)">
+                {{ loadingPatientDetail ? '正在读取详情...' : '编辑资料' }}
+              </button>
             </div>
           </article>
         </div>

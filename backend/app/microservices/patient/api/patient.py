@@ -801,6 +801,20 @@ async def update_admin_patient(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get('/admin/patients/{uuid}', summary='管理员查看患者完整档案')
+async def get_admin_patient_detail(
+    uuid: uuid_pkg.UUID,
+    session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
+):
+    try:
+        return success(await svc.get_admin_patient_detail(session, uuid))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get('/{uuid}', summary='API endpoint')
 async def get_patient_info(uuid: str, session: AsyncSession = Depends(get_session)):
     patient = await svc.get_patient_by_uuid(session, uuid_pkg.UUID(uuid))

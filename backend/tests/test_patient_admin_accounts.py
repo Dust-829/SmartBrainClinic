@@ -51,7 +51,7 @@ class FakeSession:
 
 
 @pytest.mark.asyncio
-async def test_list_admin_patients_serializes_recent_records():
+async def test_list_admin_patients_masks_sensitive_fields():
     patient_uuid = uuid.UUID('00000000-0000-0000-0000-000000000061')
     session = FakeSession(
         [
@@ -78,9 +78,8 @@ async def test_list_admin_patients_serializes_recent_records():
                 'case_number': 'BLH202607090001',
                 'real_name': 'Zhang San',
                 'gender': '男',
-                'card_number': '210102199001011234',
+                'card_number': '2101**********1234',
                 'birthdate': '1990-01-01',
-                'home_address': 'Shenyang 1',
                 'created_at': '2026-07-09T10:30:00',
             }
         ],
@@ -133,8 +132,28 @@ async def test_update_admin_patient_profile_updates_allowed_fields_only():
         'case_number': 'BLH202607090002',
         'real_name': 'Li Si Updated',
         'gender': '男',
-        'card_number': '210102199202022222',
+        'card_number': '2101**********2222',
         'birthdate': '1993-03-03',
-        'home_address': 'New Address',
         'created_at': '2026-07-09T11:00:00',
     }
+
+
+@pytest.mark.asyncio
+async def test_get_admin_patient_detail_returns_full_fields_only_for_detail_flow():
+    patient_uuid = uuid.UUID('00000000-0000-0000-0000-000000000081')
+    patient = SimpleNamespace(
+        id=1,
+        uuid=patient_uuid,
+        case_number='BLH202607090003',
+        real_name='Wang Wu',
+        gender='男',
+        card_number='210102199303033333',
+        birthdate=date(1993, 3, 3),
+        home_address='Shenyang 3',
+        created_at=datetime(2026, 7, 9, 12, 0, 0),
+    )
+
+    result = await patient_service.get_admin_patient_detail(FakeSession(patient), patient_uuid)
+
+    assert result['card_number'] == '210102199303033333'
+    assert result['home_address'] == 'Shenyang 3'
