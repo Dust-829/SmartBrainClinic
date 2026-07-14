@@ -113,7 +113,7 @@ function openEntry(route: string) {
 .portal-entry__stage {
   position: relative;
   z-index: 1;
-  width: min(1240px, 100%);
+  width: min(1320px, 100%);
   margin: 0 auto;
 }
 
@@ -144,13 +144,14 @@ function openEntry(route: string) {
   min-height: 100vh;
   align-content: center;
   padding: clamp(24px, 6vw, 72px) 0;
+  transform: translateX(clamp(0px, 6vw, 96px));
 }
 
 .portal-entry__entry {
   --entry-accent: #171723;
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(248px, 28vw);
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
   align-items: end;
   gap: clamp(24px, 3vw, 42px);
   width: 100%;
@@ -177,6 +178,11 @@ function openEntry(route: string) {
 
 .portal-entry__entry.is-admin {
   --entry-accent: #4338ca;
+}
+
+.portal-entry__entry.is-admin .portal-entry__title {
+  font-size: clamp(3.8rem, 7.6vw, 6.65rem);
+  letter-spacing: -0.07em;
 }
 
 .portal-entry__entry:hover,
@@ -237,6 +243,10 @@ function openEntry(route: string) {
 }
 
 @media (max-width: 980px) {
+  .portal-entry__stage {
+    transform: none;
+  }
+
   .portal-entry__entry,
   .portal-entry__entry.is-doctor,
   .portal-entry__entry.is-admin {
@@ -265,6 +275,10 @@ function openEntry(route: string) {
 
   .portal-entry__title {
     font-size: clamp(3rem, 18vw, 4.8rem);
+  }
+
+  .portal-entry__entry.is-admin .portal-entry__title {
+    font-size: clamp(3rem, 15vw, 4.05rem);
   }
 }
 
