@@ -2,7 +2,15 @@ import uuid as uuid_pkg
 from typing import Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..models.auth import AdminAccount, Employee, Department, RegistLevel, SettleCategory, ClinicRoom
+from ..models.auth import (
+    AccountOperationAudit,
+    AdminAccount,
+    Employee,
+    Department,
+    RegistLevel,
+    SettleCategory,
+    ClinicRoom,
+)
 import json
 from ..models.auth import OutboxEvent
 import bcrypt
@@ -13,6 +21,36 @@ from app.common.clients import PatientClient
 
 def _normalize_staff_code(value: str) -> str:
     return str(value or "").strip().upper()
+
+
+def _append_account_operation_audit(
+    session: AsyncSession,
+    *,
+    actor_admin_uuid: uuid_pkg.UUID | None,
+    target_uuid: uuid_pkg.UUID,
+    action: str,
+    result: str,
+    detail: str | None = None,
+) -> None:
+    """Append an account-operation audit row to the current transaction.
+
+    ``detail`` is intentionally supplied only by fixed server-side messages.  Do
+    not pass request payloads here: they can contain credentials or other
+    sensitive profile data.
+    """
+    if not actor_admin_uuid:
+        return
+
+    session.add(
+        AccountOperationAudit(
+            actor_admin_uuid=actor_admin_uuid,
+            target_type="employee",
+            target_uuid=target_uuid,
+            action=action,
+            result=result,
+            detail=detail,
+        )
+    )
 
 
 async def authenticate_admin(session: AsyncSession, staff_code: str, password: str) -> AdminAccount | None:
@@ -312,7 +350,11 @@ async def search_similar_doctors(session: AsyncSession, dept_id: int, gender_pre
 
 
 
-async def create_employee(session: AsyncSession, data: dict) -> Employee:
+async def create_employee(
+    session: AsyncSession,
+    data: dict,
+    actor_admin_uuid: uuid_pkg.UUID | None = None,
+) -> Employee:
     """
     新建医生，并在存库后抛出消息进行后台异步向量化
     """
@@ -350,6 +392,14 @@ async def create_employee(session: AsyncSession, data: dict) -> Employee:
     )
     
     session.add(emp)
+    _append_account_operation_audit(
+        session,
+        actor_admin_uuid=actor_admin_uuid,
+        target_uuid=emp.uuid,
+        action="create",
+        result="success",
+        detail="doctor_created",
+    )
     
     # 存库和发件箱记录在同一个本地事务中原子提交
     if emp.expertise:
@@ -372,7 +422,12 @@ async def create_employee(session: AsyncSession, data: dict) -> Employee:
     return emp
 
 
-async def reset_employee_password(session: AsyncSession, emp_uuid: uuid_pkg.UUID, new_password: str) -> dict:
+async def reset_employee_password(
+    session: AsyncSession,
+    emp_uuid: uuid_pkg.UUID,
+    new_password: str,
+    actor_admin_uuid: uuid_pkg.UUID | None = None,
+) -> dict:
     normalized_password = str(new_password or "")
     if len(normalized_password) < 8:
         raise ValueError("新密码至少需要 8 位")
@@ -384,6 +439,14 @@ async def reset_employee_password(session: AsyncSession, emp_uuid: uuid_pkg.UUID
 
     employee.password = bcrypt.hashpw(normalized_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     session.add(employee)
+    _append_account_operation_audit(
+        session,
+        actor_admin_uuid=actor_admin_uuid,
+        target_uuid=employee.uuid,
+        action="credentials_reset",
+        result="success",
+        detail="credentials_reset",
+    )
     await session.commit()
     return {"uuid": str(employee.uuid), "credentials_reset": True}
 
@@ -397,6 +460,7 @@ async def update_employee_active_status(
     emp_uuid: uuid_pkg.UUID,
     is_active: bool,
     authorization: str | None,
+    actor_admin_uuid: uuid_pkg.UUID | None = None,
 ) -> dict:
     result = await session.execute(select(Employee).where(Employee.uuid == emp_uuid))
     employee = result.scalar_one_or_none()
@@ -410,10 +474,28 @@ async def update_employee_active_status(
                 f"{item.get('message', '存在未完成业务')}（{item.get('count', 0)}）"
                 for item in check.get("blockers", [])
             )
+            _append_account_operation_audit(
+                session,
+                actor_admin_uuid=actor_admin_uuid,
+                target_uuid=employee.uuid,
+                action="deactivate",
+                result="failed",
+                detail="deactivation_blocked",
+            )
+            if actor_admin_uuid:
+                await session.commit()
             raise ValueError(f"当前不能停用该医生：{messages}")
 
     employee.delmark = 1 if is_active else 0
     session.add(employee)
+    _append_account_operation_audit(
+        session,
+        actor_admin_uuid=actor_admin_uuid,
+        target_uuid=employee.uuid,
+        action="activate" if is_active else "deactivate",
+        result="success",
+        detail="activated" if is_active else "deactivated",
+    )
     await session.commit()
     return {"uuid": str(employee.uuid), "is_active": bool(employee.delmark == 1)}
 
@@ -445,7 +527,12 @@ async def update_employee_expertise(session: AsyncSession, emp_uuid: uuid_pkg.UU
     return emp.model_dump(exclude={"password", "expertise_vector"}, mode="json")
 
 
-async def update_employee_profile(session: AsyncSession, emp_uuid: uuid_pkg.UUID, data: dict) -> dict:
+async def update_employee_profile(
+    session: AsyncSession,
+    emp_uuid: uuid_pkg.UUID,
+    data: dict,
+    actor_admin_uuid: uuid_pkg.UUID | None = None,
+) -> dict:
     stmt = select(Employee, Department.uuid, RegistLevel.uuid).outerjoin(
         Department, Employee.dept_id == Department.id
     ).outerjoin(
@@ -477,6 +564,14 @@ async def update_employee_profile(session: AsyncSession, emp_uuid: uuid_pkg.UUID
     emp.gender = data.get("gender")
     emp.expertise = data.get("expertise")
     session.add(emp)
+    _append_account_operation_audit(
+        session,
+        actor_admin_uuid=actor_admin_uuid,
+        target_uuid=emp.uuid,
+        action="profile_update",
+        result="success",
+        detail="profile_updated",
+    )
     await session.commit()
 
     dept = await get_department_by_code(session, data["dept_code"]) if data.get("dept_code") else None

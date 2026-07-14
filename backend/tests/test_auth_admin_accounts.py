@@ -203,6 +203,25 @@ async def test_reset_employee_password_persists_only_bcrypt_hash():
 
 
 @pytest.mark.asyncio
+async def test_reset_employee_password_records_a_safe_account_audit():
+    employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000106')
+    admin_uuid = uuid.UUID('00000000-0000-0000-0000-000000000901')
+    employee = SimpleNamespace(uuid=employee_uuid, password='old-password-hash')
+    session = FakeSession([employee])
+
+    await auth_service.reset_employee_password(session, employee_uuid, 'NewSecurePass8', admin_uuid)
+
+    audit = session.added[-1]
+    assert audit.actor_admin_uuid == admin_uuid
+    assert audit.target_uuid == employee_uuid
+    assert audit.target_type == 'employee'
+    assert audit.action == 'credentials_reset'
+    assert audit.result == 'success'
+    assert audit.detail == 'credentials_reset'
+    assert 'NewSecurePass8' not in str(audit.detail)
+
+
+@pytest.mark.asyncio
 async def test_update_employee_active_status_rejects_blocked_deactivation():
     employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000104')
     employee = SimpleNamespace(uuid=employee_uuid, delmark=1)
@@ -247,4 +266,32 @@ async def test_update_employee_active_status_deactivates_when_no_blocker():
     assert result == {'uuid': str(employee_uuid), 'is_active': False}
     assert employee.delmark == 0
     assert session.added == [employee]
+    assert session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_blocked_deactivation_records_failed_audit_without_sensitive_detail():
+    employee_uuid = uuid.UUID('00000000-0000-0000-0000-000000000107')
+    admin_uuid = uuid.UUID('00000000-0000-0000-0000-000000000902')
+    employee = SimpleNamespace(uuid=employee_uuid, delmark=1)
+    session = FakeSession([employee])
+
+    original_check = auth_service.get_employee_deactivation_check
+
+    async def fake_check(_employee_uuid, _authorization):
+        return {'can_deactivate': False, 'blockers': [{'message': '存在待接诊挂号', 'count': 2}]}
+
+    auth_service.get_employee_deactivation_check = fake_check
+    try:
+        with pytest.raises(ValueError, match='存在待接诊挂号'):
+            await auth_service.update_employee_active_status(
+                session, employee_uuid, False, 'Bearer test', admin_uuid
+            )
+    finally:
+        auth_service.get_employee_deactivation_check = original_check
+
+    audit = session.added[-1]
+    assert audit.action == 'deactivate'
+    assert audit.result == 'failed'
+    assert audit.detail == 'deactivation_blocked'
     assert session.commit_count == 1

@@ -97,10 +97,10 @@ async def get_employee(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_
 async def create_employee(
     data: EmployeeCreate,
     session: AsyncSession = Depends(get_session),
-    _: AdminPrincipal = Depends(require_admin),
+    admin: AdminPrincipal = Depends(require_admin),
 ):
     try:
-        emp = await svc.create_employee(session, data.model_dump())
+        emp = await svc.create_employee(session, data.model_dump(), uuid_pkg.UUID(admin.uuid))
         return success(emp.model_dump(exclude={"password", "expertise_vector"}, mode="json"))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -111,10 +111,10 @@ async def update_employee_profile(
     uuid: uuid_pkg.UUID,
     data: EmployeeProfileUpdate,
     session: AsyncSession = Depends(get_session),
-    _: AdminPrincipal = Depends(require_admin),
+    admin: AdminPrincipal = Depends(require_admin),
 ):
     try:
-        result = await svc.update_employee_profile(session, uuid, data.model_dump())
+        result = await svc.update_employee_profile(session, uuid, data.model_dump(), uuid_pkg.UUID(admin.uuid))
         return success(result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -155,10 +155,10 @@ async def reset_employee_credentials(
     uuid: uuid_pkg.UUID,
     data: EmployeePasswordResetRequest,
     session: AsyncSession = Depends(get_session),
-    _: AdminPrincipal = Depends(require_admin),
+    admin: AdminPrincipal = Depends(require_admin),
 ):
     try:
-        return success(await svc.reset_employee_password(session, uuid, data.new_password))
+        return success(await svc.reset_employee_password(session, uuid, data.new_password, uuid_pkg.UUID(admin.uuid)))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -181,10 +181,18 @@ async def update_employee_active_status(
     data: EmployeeActiveStatusUpdate,
     session: AsyncSession = Depends(get_session),
     authorization: Optional[str] = Header(default=None),
-    _: AdminPrincipal = Depends(require_admin),
+    admin: AdminPrincipal = Depends(require_admin),
 ):
     try:
-        return success(await svc.update_employee_active_status(session, uuid, data.is_active, authorization))
+        return success(
+            await svc.update_employee_active_status(
+                session,
+                uuid,
+                data.is_active,
+                authorization,
+                uuid_pkg.UUID(admin.uuid),
+            )
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
