@@ -12,6 +12,48 @@
 
 M1 部署方式：按文件名顺序执行 `backend/migrations/20260714_02_create_admin_account_auth.sql`，配置 `JWT_SECRET_KEY` 与三个 `ADMIN_BOOTSTRAP_*` 环境变量，然后在 `backend/` 目录运行 `python scripts/bootstrap_admin.py`。该脚本只将 bcrypt 散列写入数据库，明文密码不会进入代码或接口响应。2026-07-14 已在本地环境完成迁移、初始化、服务重启和端到端验证。
 
+## 本地演示流程（M1 + M2）
+
+演示目标：确认管理员不是“页面演示登录”，而是能拿到 JWT、访问受保护的账号接口；同时确认医生、患者列表接口已经具备分页返回结构。
+
+### 演示前提
+
+1. 新环境先执行 `backend/migrations/20260714_02_create_admin_account_auth.sql`，在 `backend/.env` 配置 JWT 与管理员初始化变量后，进入 `backend` 运行 `python scripts/bootstrap_admin.py`。本机环境已完成这一步。
+2. 启动后端服务。Windows 本地运行时，为避免控制台编码问题，可在 `backend` 目录执行：
+
+   ```powershell
+   $env:PYTHONUTF8='1'
+   $env:PYTHONIOENCODING='utf-8'
+   & 'D:\develop\Anaconda\envs\py3106\python.exe' run_microservices.py
+   ```
+
+3. 启动前端开发服务后，打开 `http://localhost:5173/admin/login`。账号和密码只从本机忽略提交的 `backend/.env` 获取；不要把密码或 JWT 粘贴到文档、截图或录屏中。
+
+### 浏览器演示
+
+1. 在管理员登录页使用已初始化的管理员账号登录，登录成功后应进入管理员工作台。
+2. 打开账号管理页 `/admin/accounts`，确认医生、患者两个标签页都能加载首屏数据。
+3. 本轮 M2 完成的是后端分页协议，当前页面仍只加载第一页；页码、上一页/下一页、每页条数控件属于 M3，演示时应明确说明尚未接入。
+
+### 接口演示
+
+1. 调用 `POST /api/v1/auth/admin/login`，请求体使用本地管理员凭据。成功响应会返回 `access_token`，仅在当前终端或 API 工具中临时使用。
+2. 带上 `Authorization: Bearer <access_token>` 调用：
+
+   ```text
+   GET /api/v1/auth/admin/doctors?limit=1&offset=0
+   ```
+
+   响应应包含 `data.items` 和 `data.pagination`；其中 `pagination` 至少包含 `total`、`limit`、`offset`。
+3. 修改 `offset`（例如改为 `1`），或使用 `limit=20&offset=20`，即可演示请求页发生变化。若本地数据总数不超过单页条数，后续页为空属于正常结果。
+4. 不携带 Bearer Token 调用 `GET /api/v1/patient/admin/patients?limit=1`，应返回 `401`，用来证明患者档案管理接口已受管理员身份保护。
+
+### 推荐讲解顺序
+
+先展示未登录访问被拒绝（401），再展示管理员登录后访问列表成功（200），最后展示分页响应中的 `items + pagination` 结构，并说明前端翻页控件将在 M3 补齐。
+
+2026-07-14 本地验证记录：管理员登录返回 200；带 Token 的医生列表返回 200 且包含分页结构；未带 Token 的患者管理列表返回 401；网关、认证、患者服务健康检查均正常。
+
 ## Goal
 
 把 `/admin/accounts` 从“医生与患者基础资料的前 20 条卡片列表”升级为可在真实管理员身份下安全使用的人员与患者档案工作台：可检索、可分页、可区分加载/空/错误状态，并对敏感信息和关键操作保留最小必要的权限与审计边界。
