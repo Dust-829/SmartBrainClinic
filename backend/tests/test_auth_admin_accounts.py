@@ -21,6 +21,9 @@ class FakeResult:
     def scalar_one_or_none(self):
         return self._rows[0] if self._rows else None
 
+    def scalar_one(self):
+        return self._rows[0] if self._rows else 0
+
 
 class FakeSession:
     def __init__(self, rows):
@@ -31,6 +34,8 @@ class FakeSession:
 
     async def execute(self, statement):
         self.statements.append(str(statement))
+        if "count(" in str(statement).lower():
+            return FakeResult([len(self.rows)])
         return FakeResult(self.rows)
 
     def add(self, row):
@@ -70,22 +75,30 @@ async def test_list_doctor_accounts_serializes_keyword_results():
         ]
     )
 
-    result = await auth_service.list_doctor_accounts(session, keyword='王', limit=10)
+    result = await auth_service.list_doctor_accounts(session, keyword='王', limit=10, offset=7)
 
-    assert result == [
-        {
-            'uuid': str(doctor_uuid),
-            'realname': '王若岚',
-            'gender': '女',
-            'expertise': '头痛,神经影像',
-            'ai_eval_score': '4.5',
-            'dept_uuid': str(dept_uuid),
-            'dept_code': 'SJWK',
-            'regist_level_uuid': str(regist_level_uuid),
-            'regist_level_code': 'ZJ',
-        }
-    ]
+    assert result == {
+        'items': [
+            {
+                'uuid': str(doctor_uuid),
+                'realname': '王若岚',
+                'gender': '女',
+                'expertise': '头痛,神经影像',
+                'ai_eval_score': '4.5',
+                'dept_uuid': str(dept_uuid),
+                'dept_code': 'SJWK',
+                'regist_level_uuid': str(regist_level_uuid),
+                'regist_level_code': 'ZJ',
+            }
+        ],
+        'pagination': {
+            'total': 1,
+            'limit': 10,
+            'offset': 7,
+        },
+    }
     assert any('employee.realname' in statement.lower() for statement in session.statements)
+    assert any('offset' in statement.lower() for statement in session.statements)
 
 
 @pytest.mark.asyncio

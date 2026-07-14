@@ -138,31 +138,35 @@ def _serialize_doctor_account(emp: Employee, dept_uuid=None, dept_code=None, reg
     return doc_dict
 
 
-async def list_doctor_accounts(session: AsyncSession, keyword: str = "", limit: int = 20) -> list[dict]:
+async def list_doctor_accounts(
+    session: AsyncSession,
+    keyword: str = "",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
     normalized_keyword = str(keyword or "").strip()
     safe_limit = max(1, min(int(limit or 20), 100))
+    safe_offset = max(0, int(offset or 0))
+
+    conditions = [
+        Employee.regist_level_id.isnot(None),
+        Employee.delmark == 1,
+    ]
 
     stmt = (
         select(Employee, Department.uuid, Department.dept_code, RegistLevel.uuid, RegistLevel.regist_code)
         .outerjoin(Department, Employee.dept_id == Department.id)
         .outerjoin(RegistLevel, Employee.regist_level_id == RegistLevel.id)
-        .where(
-            Employee.regist_level_id.isnot(None),
-            Employee.delmark == 1,
-        )
     )
 
     if normalized_keyword:
         fuzzy_keyword = f"%{normalized_keyword}%"
-        stmt = stmt.where(
-            or_(
-                Employee.realname.ilike(fuzzy_keyword),
-                Department.dept_code.ilike(fuzzy_keyword),
-            )
+        conditions.append(
+            or_(Employee.realname.ilike(fuzzy_keyword), Department.dept_code.ilike(fuzzy_keyword))
         )
 
-    stmt = stmt.order_by(Employee.id.desc()).limit(safe_limit)
-    result = await session.execute(stmt)
+    item_stmt = stmt.where(*conditions).order_by(Employee.id.desc()).limit(safe_limit).offset(safe_offset)
+    result = await session.execute(item_stmt)
 
     doctors = []
     for emp, dept_uuid, dept_code, regist_level_uuid, regist_level_code in result.all():
@@ -175,7 +179,16 @@ async def list_doctor_accounts(session: AsyncSession, keyword: str = "", limit: 
                 regist_level_code=regist_level_code,
             )
         )
-    return doctors
+    total_stmt = select(func.count()).select_from(Employee).outerjoin(Department, Employee.dept_id == Department.id).where(*conditions)
+    total = (await session.execute(total_stmt)).scalar_one()
+    return {
+        "items": doctors,
+        "pagination": {
+            "total": int(total or 0),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        },
+    }
 
 async def get_employees_by_dept_type(session: AsyncSession, dept_type: str) -> list:
     stmt = (

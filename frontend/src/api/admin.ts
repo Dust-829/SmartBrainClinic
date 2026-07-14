@@ -371,6 +371,11 @@ export interface PatientAdminListItem {
   created_at?: string | null
 }
 
+export interface PatientAdminPage {
+  items: PatientAdminListItem[]
+  pagination: WorkbenchPagination
+}
+
 export interface AuditPagination {
   total: number
   limit: number
@@ -525,8 +530,8 @@ export const adminApi = {
   getAdminBillDetail(billCode: string) {
     return http.get<ApiEnvelope<AdminBillDetail>>(`/api/v1/bill/${encodeURIComponent(billCode)}/detail`)
   },
-  listPatients(params: { keyword?: string; limit?: number } = {}) {
-    return http.get<ApiEnvelope<PatientAdminListItem[]>>('/api/v1/patient/admin/patients', { params })
+  listPatients(params: { keyword?: string; limit?: number; offset?: number } = {}) {
+    return http.get<ApiEnvelope<PatientAdminPage>>('/api/v1/patient/admin/patients', { params })
   },
   getPatientAdminStats() {
     return http.get<ApiEnvelope<PatientAdminStats>>('/api/v1/patient/admin/stats')

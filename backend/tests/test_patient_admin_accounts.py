@@ -24,6 +24,11 @@ class FakeScalarResult:
             return self._rows[0] if self._rows else None
         return self._rows
 
+    def scalar_one(self):
+        if isinstance(self._rows, list):
+            return self._rows[0] if self._rows else 0
+        return self._rows
+
 
 class FakeSession:
     def __init__(self, rows):
@@ -34,6 +39,8 @@ class FakeSession:
 
     async def execute(self, statement):
         self.statements.append(str(statement))
+        if 'count(' in str(statement).lower():
+            return FakeScalarResult([len(self.rows)])
         return FakeScalarResult(self.rows)
 
     def add(self, row):
@@ -62,20 +69,27 @@ async def test_list_admin_patients_serializes_recent_records():
         ]
     )
 
-    result = await patient_service.list_admin_patients(session, keyword='Zhang', limit=10)
+    result = await patient_service.list_admin_patients(session, keyword='Zhang', limit=10, offset=4)
 
-    assert result == [
-        {
-            'uuid': str(patient_uuid),
-            'case_number': 'BLH202607090001',
-            'real_name': 'Zhang San',
-            'gender': '男',
-            'card_number': '210102199001011234',
-            'birthdate': '1990-01-01',
-            'home_address': 'Shenyang 1',
-            'created_at': '2026-07-09T10:30:00',
-        }
-    ]
+    assert result == {
+        'items': [
+            {
+                'uuid': str(patient_uuid),
+                'case_number': 'BLH202607090001',
+                'real_name': 'Zhang San',
+                'gender': '男',
+                'card_number': '210102199001011234',
+                'birthdate': '1990-01-01',
+                'home_address': 'Shenyang 1',
+                'created_at': '2026-07-09T10:30:00',
+            }
+        ],
+        'pagination': {
+            'total': 1,
+            'limit': 10,
+            'offset': 4,
+        },
+    }
     assert any('patient.real_name' in statement for statement in session.statements)
     assert any('patient.card_number' in statement for statement in session.statements)
 

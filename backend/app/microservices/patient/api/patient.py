@@ -765,11 +765,12 @@ async def admin_update_scheduling_actual(data: AdminUpdateActualRequest, session
 async def list_admin_patients(
     keyword: str = '',
     limit: int = 20,
+    offset: int = 0,
     session: AsyncSession = Depends(get_session),
     _: AdminPrincipal = Depends(require_admin),
 ):
     try:
-        patients = await svc.list_admin_patients(session, keyword=keyword, limit=limit)
+        patients = await svc.list_admin_patients(session, keyword=keyword, limit=limit, offset=offset)
         return success(patients)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

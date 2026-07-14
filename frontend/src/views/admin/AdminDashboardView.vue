@@ -378,7 +378,7 @@ async function loadDashboard() {
     recentBills.value = results[4].status === 'fulfilled' ? results[4].value.data.data ?? [] : []
     resourceStats.value = results[5].status === 'fulfilled' ? results[5].value.data.data ?? { ...DEFAULT_RESOURCE_STATS } : { ...DEFAULT_RESOURCE_STATS }
     patientStats.value = results[6].status === 'fulfilled' ? results[6].value.data.data ?? { ...DEFAULT_PATIENT_STATS } : { ...DEFAULT_PATIENT_STATS }
-    recentPatients.value = results[7].status === 'fulfilled' ? results[7].value.data.data ?? [] : []
+    recentPatients.value = results[7].status === 'fulfilled' ? results[7].value.data.data?.items ?? [] : []
     defaultDepartment.value = results[8].status === 'fulfilled' ? results[8].value.data.data ?? null : null
     lastUpdatedAt.value = new Date().toLocaleString('zh-CN', { hour12: false })
   } finally {

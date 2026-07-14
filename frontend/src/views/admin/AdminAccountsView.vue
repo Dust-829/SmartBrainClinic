@@ -75,7 +75,7 @@ async function loadDoctors() {
       keyword: doctorKeyword.value.trim() || undefined,
       limit: 20,
     })
-    doctors.value = response.data.data ?? []
+    doctors.value = response.data.data?.items ?? []
   } catch {
     doctors.value = []
   } finally {
@@ -162,7 +162,7 @@ async function loadPatients() {
       keyword: patientKeyword.value.trim() || undefined,
       limit: 20,
     })
-    patients.value = response.data.data ?? []
+    patients.value = response.data.data?.items ?? []
   } catch {
     patients.value = []
   } finally {

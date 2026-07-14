@@ -146,11 +146,12 @@ async def adjust_employee_score(
 async def list_doctor_accounts(
     keyword: str = "",
     limit: int = 20,
+    offset: int = 0,
     session: AsyncSession = Depends(get_session),
     _: AdminPrincipal = Depends(require_admin),
 ):
     try:
-        doctors = await svc.list_doctor_accounts(session, keyword=keyword, limit=limit)
+        doctors = await svc.list_doctor_accounts(session, keyword=keyword, limit=limit, offset=offset)
         return success(doctors)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

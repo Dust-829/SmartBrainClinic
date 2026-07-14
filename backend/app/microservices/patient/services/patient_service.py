@@ -815,23 +815,43 @@ async def create_patient(session: AsyncSession, data: dict) -> Patient:
     return patient
 
 
-async def list_admin_patients(session: AsyncSession, keyword: str = "", limit: int = 20) -> list[dict]:
+async def list_admin_patients(
+    session: AsyncSession,
+    keyword: str = "",
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
     normalized_keyword = str(keyword or "").strip()
     safe_limit = max(1, min(int(limit or 20), 100))
+    safe_offset = max(0, int(offset or 0))
     stmt = select(Patient)
+    conditions = []
 
     if normalized_keyword:
         fuzzy_keyword = f"%{normalized_keyword}%"
-        stmt = stmt.where(
+        conditions.append(
             or_(
                 Patient.real_name.ilike(fuzzy_keyword),
                 Patient.card_number.ilike(fuzzy_keyword),
             )
         )
 
-    stmt = stmt.order_by(Patient.created_at.desc()).limit(safe_limit)
-    result = await session.execute(stmt)
-    return [_serialize_patient(patient) for patient in result.scalars().all()]
+    item_stmt = (
+        stmt.where(*conditions)
+        .order_by(Patient.created_at.desc(), Patient.id.desc())
+        .limit(safe_limit)
+        .offset(safe_offset)
+    )
+    result = await session.execute(item_stmt)
+    total = (await session.execute(select(func.count()).select_from(Patient).where(*conditions))).scalar_one()
+    return {
+        "items": [_serialize_patient(patient) for patient in result.scalars().all()],
+        "pagination": {
+            "total": int(total or 0),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        },
+    }
 
 
 async def get_admin_patient_stats(session: AsyncSession) -> dict[str, int]:

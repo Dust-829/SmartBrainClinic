@@ -58,6 +58,17 @@ export interface AdminLoginResult {
   }
 }
 
+export interface AccountPagination {
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface DoctorAccountPage {
+  items: DoctorDirectoryItem[]
+  pagination: AccountPagination
+}
+
 export interface DoctorProfileUpdatePayload {
   realname: string
   dept_code?: string
@@ -70,8 +81,8 @@ export const authApi = {
   adminLogin(payload: { staff_code: string; password: string }) {
     return http.post<ApiEnvelope<AdminLoginResult>>('/api/v1/auth/admin/login', payload)
   },
-  listDoctorAccounts(params: { keyword?: string; limit?: number } = {}) {
-    return http.get<ApiEnvelope<DoctorDirectoryItem[]>>('/api/v1/auth/admin/doctors', { params })
+  listDoctorAccounts(params: { keyword?: string; limit?: number; offset?: number } = {}) {
+    return http.get<ApiEnvelope<DoctorAccountPage>>('/api/v1/auth/admin/doctors', { params })
   },
   getAdminResourceStats() {
     return http.get<ApiEnvelope<AdminResourceStats>>('/api/v1/auth/admin/resource-stats')
