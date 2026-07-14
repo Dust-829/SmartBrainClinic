@@ -20,6 +20,12 @@ class BaseMicroserviceSettings(BaseSettings):
     AI_SECOND_REVIEW_MODEL: str = "deepseek-ai/DeepSeek-V4-Pro"
     ADMIN_API_TOKEN: str = ""
     AI_AUDIT_ADMIN_TOKEN: str = ""
+    JWT_SECRET_KEY: str = ""
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 60
+    ADMIN_BOOTSTRAP_STAFF_CODE: str = ""
+    ADMIN_BOOTSTRAP_DISPLAY_NAME: str = ""
+    ADMIN_BOOTSTRAP_PASSWORD: str = ""
     
     # 基础数据库配置 (各服务可覆盖)
     DB_HOST: str = "localhost"

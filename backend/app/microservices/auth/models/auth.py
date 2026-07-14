@@ -120,6 +120,33 @@ class Employee(SQLModel, table=True):
         default=1, sa_column=Column(SmallInteger, default=1)
     )
 
+
+class AdminAccount(SQLModel, table=True):
+    __tablename__ = "admin_account"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    uuid: uuid_pkg.UUID = Field(default_factory=uuid_pkg.uuid4, unique=True, nullable=False, index=True)
+    staff_code: str = Field(max_length=64, unique=True, nullable=False, index=True)
+    display_name: str = Field(max_length=64, nullable=False)
+    password_hash: str = Field(max_length=128, nullable=False)
+    is_active: bool = Field(default=True, nullable=False)
+    created_at: datetime = Field(default_factory=datetime.now, nullable=False)
+    updated_at: datetime = Field(default_factory=datetime.now, nullable=False)
+
+
+class AccountOperationAudit(SQLModel, table=True):
+    __tablename__ = "account_operation_audit"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    uuid: uuid_pkg.UUID = Field(default_factory=uuid_pkg.uuid4, unique=True, nullable=False, index=True)
+    actor_admin_uuid: uuid_pkg.UUID = Field(nullable=False, index=True)
+    target_type: str = Field(max_length=32, nullable=False)
+    target_uuid: uuid_pkg.UUID = Field(nullable=False, index=True)
+    action: str = Field(max_length=64, nullable=False)
+    result: str = Field(max_length=16, nullable=False)
+    detail: Optional[str] = Field(default=None, sa_column=Column(Text))
+    created_at: datetime = Field(default_factory=datetime.now, nullable=False)
+
 class OutboxEvent(SQLModel, table=True):
     __tablename__ = "outbox_event"
     id: Optional[int] = Field(default=None, primary_key=True)

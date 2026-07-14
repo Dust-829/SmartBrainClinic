@@ -47,6 +47,17 @@ export interface AdminResourceStats {
   clinic_room_total: number
 }
 
+export interface AdminLoginResult {
+  access_token: string
+  token_type: 'Bearer'
+  expires_in: number
+  staff: {
+    uuid: string
+    staff_code: string
+    display_name: string
+  }
+}
+
 export interface DoctorProfileUpdatePayload {
   realname: string
   dept_code?: string
@@ -56,6 +67,9 @@ export interface DoctorProfileUpdatePayload {
 }
 
 export const authApi = {
+  adminLogin(payload: { staff_code: string; password: string }) {
+    return http.post<ApiEnvelope<AdminLoginResult>>('/api/v1/auth/admin/login', payload)
+  },
   listDoctorAccounts(params: { keyword?: string; limit?: number } = {}) {
     return http.get<ApiEnvelope<DoctorDirectoryItem[]>>('/api/v1/auth/admin/doctors', { params })
   },

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.response import success
+from app.common.security import AdminPrincipal, create_admin_access_token, require_admin
 
 from ..database import get_session
 from ..services import auth_service as svc
@@ -46,6 +47,36 @@ class ScoreAdjustRequest(BaseModel):
     adjustment: float
 
 
+class AdminLoginRequest(BaseModel):
+    staff_code: str
+    password: str
+
+
+@router.post("/admin/login", summary="管理员登录")
+async def admin_login(data: AdminLoginRequest, session: AsyncSession = Depends(get_session)):
+    admin = await svc.authenticate_admin(session, data.staff_code, data.password)
+    if not admin:
+        raise HTTPException(status_code=401, detail="管理员工号或密码错误")
+
+    access_token, expires_in = create_admin_access_token(
+        admin_uuid=str(admin.uuid),
+        staff_code=admin.staff_code,
+        display_name=admin.display_name,
+    )
+    return success(
+        {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "expires_in": expires_in,
+            "staff": {
+                "uuid": str(admin.uuid),
+                "staff_code": admin.staff_code,
+                "display_name": admin.display_name,
+            },
+        }
+    )
+
+
 @router.get("/employee/{uuid}", summary="获取员工信息")
 async def get_employee(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_session)):
     emp = await svc.get_employee_by_uuid(session, uuid)
@@ -55,7 +86,11 @@ async def get_employee(uuid: uuid_pkg.UUID, session: AsyncSession = Depends(get_
 
 
 @router.post("/employee", summary="新增医生", status_code=201)
-async def create_employee(data: EmployeeCreate, session: AsyncSession = Depends(get_session)):
+async def create_employee(
+    data: EmployeeCreate,
+    session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
+):
     try:
         emp = await svc.create_employee(session, data.model_dump())
         return success(emp.model_dump(exclude={"password", "expertise_vector"}, mode="json"))
@@ -68,6 +103,7 @@ async def update_employee_profile(
     uuid: uuid_pkg.UUID,
     data: EmployeeProfileUpdate,
     session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
 ):
     try:
         result = await svc.update_employee_profile(session, uuid, data.model_dump())
@@ -77,7 +113,12 @@ async def update_employee_profile(
 
 
 @router.put("/employee/{uuid}/expertise", summary="修改医生专长")
-async def update_expertise(uuid: uuid_pkg.UUID, data: ExpertiseUpdate, session: AsyncSession = Depends(get_session)):
+async def update_expertise(
+    uuid: uuid_pkg.UUID,
+    data: ExpertiseUpdate,
+    session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
+):
     try:
         emp = await svc.update_employee_expertise(session, uuid, data.expertise)
         return success(emp)
@@ -86,7 +127,12 @@ async def update_expertise(uuid: uuid_pkg.UUID, data: ExpertiseUpdate, session: 
 
 
 @router.put("/employee/{uuid}/score/adjust", summary="调整医生 AI 评分")
-async def adjust_employee_score(uuid: str, data: ScoreAdjustRequest, session: AsyncSession = Depends(get_session)):
+async def adjust_employee_score(
+    uuid: str,
+    data: ScoreAdjustRequest,
+    session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
+):
     try:
         res = await svc.adjust_employee_score(session, uuid_pkg.UUID(uuid), data.adjustment)
         return success(res)
@@ -101,6 +147,7 @@ async def list_doctor_accounts(
     keyword: str = "",
     limit: int = 20,
     session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
 ):
     try:
         doctors = await svc.list_doctor_accounts(session, keyword=keyword, limit=limit)

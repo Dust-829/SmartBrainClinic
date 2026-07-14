@@ -23,6 +23,7 @@ from app.common.ai_conversation import (
 )
 from app.common.clients import AuthClient
 from app.common.response import created, success
+from app.common.security import AdminPrincipal, require_admin
 from app.microservices.patient.ws_manager import manager as ws_manager
 
 from ..config import settings
@@ -765,6 +766,7 @@ async def list_admin_patients(
     keyword: str = '',
     limit: int = 20,
     session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
 ):
     try:
         patients = await svc.list_admin_patients(session, keyword=keyword, limit=limit)
@@ -787,6 +789,7 @@ async def update_admin_patient(
     uuid: uuid_pkg.UUID,
     data: PatientAdminUpdate,
     session: AsyncSession = Depends(get_session),
+    _: AdminPrincipal = Depends(require_admin),
 ):
     try:
         patient = await svc.update_admin_patient(session, uuid, data.model_dump())

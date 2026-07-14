@@ -2,12 +2,61 @@ import uuid as uuid_pkg
 from typing import Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..models.auth import Employee, Department, RegistLevel, SettleCategory, ClinicRoom
+from ..models.auth import AdminAccount, Employee, Department, RegistLevel, SettleCategory, ClinicRoom
 import json
 from ..models.auth import OutboxEvent
 import bcrypt
 from sqlalchemy.exc import IntegrityError
 from decimal import Decimal
+
+
+def _normalize_staff_code(value: str) -> str:
+    return str(value or "").strip().upper()
+
+
+async def authenticate_admin(session: AsyncSession, staff_code: str, password: str) -> AdminAccount | None:
+    normalized_staff_code = _normalize_staff_code(staff_code)
+    if not normalized_staff_code or not password:
+        return None
+
+    result = await session.execute(select(AdminAccount).where(AdminAccount.staff_code == normalized_staff_code))
+    admin = result.scalar_one_or_none()
+    if not admin or not admin.is_active:
+        return None
+
+    try:
+        password_matches = bcrypt.checkpw(password.encode("utf-8"), admin.password_hash.encode("utf-8"))
+    except (TypeError, ValueError):
+        return None
+    return admin if password_matches else None
+
+
+async def create_admin_account(
+    session: AsyncSession,
+    *,
+    staff_code: str,
+    display_name: str,
+    password: str,
+) -> AdminAccount:
+    normalized_staff_code = _normalize_staff_code(staff_code)
+    normalized_display_name = str(display_name or "").strip()
+    if not normalized_staff_code or not normalized_display_name or not password:
+        raise ValueError("管理员工号、姓名和密码不能为空")
+
+    existing = await session.execute(select(AdminAccount).where(AdminAccount.staff_code == normalized_staff_code))
+    if existing.scalar_one_or_none():
+        raise ValueError("管理员工号已存在")
+
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    admin = AdminAccount(
+        staff_code=normalized_staff_code,
+        display_name=normalized_display_name,
+        password_hash=password_hash,
+    )
+    session.add(admin)
+    await session.commit()
+    await session.refresh(admin)
+    return admin
 
 async def get_employee_by_uuid(session: AsyncSession, uuid: uuid_pkg.UUID) -> Optional[dict]:
     stmt = (
