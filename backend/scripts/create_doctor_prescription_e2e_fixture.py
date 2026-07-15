@@ -61,7 +61,7 @@ def create_fixture(api: E2EClient, admin_headers: dict[str, str]) -> dict[str, A
         json={
             "realname": f"{FIXTURE_PREFIX} Doctor {run_id}",
             "password": "E2Epass123",
-            "dept_code": "E2E_DEPT",
+            "dept_code": "XNK",
             "regist_level_code": "E2E_LEVEL",
             "gender": "\u7537",
             "expertise": "prescription browser regression fixture",

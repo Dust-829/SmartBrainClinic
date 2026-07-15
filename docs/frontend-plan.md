@@ -213,7 +213,8 @@ AI 辅助与布局（已完成 / 待验证）：
 - 已新增响应式静态回归，锁住工作区 DOM 顺序和 `1180px` 以下单列规则；已由 `1024 x 768` 与 `390 x 844` 实机浏览器复验补足静态检查边界。
 - 已使用已确认病历样本复验“左侧工作区优先、右侧 AI 支持区随后”的纵向顺序，页面未横向溢出。
 - 已在 `frontend/` 引入 Playwright 和 Chromium，`pnpm test:e2e` 已通过医生登录页只读冒烟测试；失败时保留 trace 和截图，当前尚未覆盖处方写操作。
-- 已新增 `backend/scripts/create_doctor_prescription_e2e_fixture.py`：通过管理员 JWT 创建带 `E2E Prescription` 前缀的医生、患者、明日号源和已支付接诊中挂号，并等待病历草稿就绪后输出浏览器所需 UUID；脚本不确认病历、不请求处方建议、不创建处方。运行命令为 `cd backend && python scripts/create_doctor_prescription_e2e_fixture.py`，依赖本机 `.env` 的管理员初始化凭据与已启动微服务。
+- 已新增 `backend/scripts/create_doctor_prescription_e2e_fixture.py`：通过管理员 JWT 在登录页可见的心内科创建带 `E2E Prescription` 前缀的医生、患者、明日号源和已支付接诊中挂号，并等待病历草稿就绪后输出浏览器所需 UUID；脚本不确认病历、不请求处方建议、不创建处方。运行命令为 `cd backend && python scripts/create_doctor_prescription_e2e_fixture.py`，依赖本机 `.env` 的管理员初始化凭据与已启动微服务。
+- 已通过 Playwright 病历确认回归：测试先运行受控造数脚本，再以生成医生身份登录、打开对应接诊页、填写必填病历字段并确认；已断言确认后“生成 AI 处方建议”按钮可用，尚未生成建议或创建处方。
 - 将已通过的“登录 -> 候诊 -> 接诊 -> 病历确认 -> 生成建议 -> 调整数量 -> 处方确认”链路固化为可重复执行的浏览器回归脚本。
 - 脚本必须使用受控演示数据或可恢复数据，避免重复开立正式处方；桌面和窄屏均保留断言或截图证据。
 
