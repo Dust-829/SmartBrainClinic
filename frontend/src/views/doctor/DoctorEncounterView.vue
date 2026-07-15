@@ -18,6 +18,12 @@ import {
   type SimilarMedicalRecord,
 } from '@/api/medical'
 import { patientApi, type RegisterAIContext, type RegisterDetail } from '@/api/patient'
+import {
+  pharmacyApi,
+  type PrescriptionCreateResult,
+  type PrescriptionRecommendationItem,
+  type PrescriptionRecommendationResult,
+} from '@/api/pharmacy'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
 
@@ -100,6 +106,19 @@ const orderDraft = reactive({
 })
 const pendingOrders = ref<PendingOrder[]>([])
 
+interface PendingPrescriptionItem extends PrescriptionRecommendationItem {
+  localId: number
+}
+
+const isMedicalRecordConfirmed = ref(false)
+const prescriptionRecommendationLoading = ref(false)
+const prescriptionRecommendationError = ref('')
+const prescriptionRecommendation = ref<PrescriptionRecommendationResult | null>(null)
+const pendingPrescriptionItems = ref<PendingPrescriptionItem[]>([])
+const creatingPrescription = ref(false)
+const createdPrescription = ref<PrescriptionCreateResult | null>(null)
+let pendingPrescriptionSequence = 0
+
 const encounterForm = reactive<MedicalRecordDraftConfirmPayload>({
   readme: '',
   present: '',
@@ -149,12 +168,25 @@ const requestGroups = computed(() =>
 const canConfirm = computed(
   () =>
     !draftMissing.value &&
+    !isMedicalRecordConfirmed.value &&
     !savingDraft.value &&
     encounterForm.readme.trim() &&
     encounterForm.present.trim() &&
     encounterForm.history.trim() &&
     encounterForm.physique.trim() &&
     encounterForm.diagnosis.trim(),
+)
+const canGeneratePrescriptionRecommendation = computed(
+  () => isMedicalRecordConfirmed.value && !prescriptionRecommendationLoading.value && !creatingPrescription.value,
+)
+const canCreatePrescription = computed(
+  () =>
+    isMedicalRecordConfirmed.value &&
+    !creatingPrescription.value &&
+    pendingPrescriptionItems.value.length > 0 &&
+    pendingPrescriptionItems.value.every(
+      (item) => item.drug_usage.trim() && Number.isInteger(Number(item.drug_number)) && Number(item.drug_number) > 0,
+    ),
 )
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -163,6 +195,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 function resetEncounterForm(detail: RegisterDetail | null, draft?: MedicalRecordDraft | null) {
+  isMedicalRecordConfirmed.value = Boolean(draft?.is_doctor_confirmed)
   encounterForm.readme = draft?.readme ?? ''
   encounterForm.present = draft?.present ?? detail?.symptoms ?? ''
   encounterForm.history = draft?.history ?? ''
@@ -171,6 +204,14 @@ function resetEncounterForm(detail: RegisterDetail | null, draft?: MedicalRecord
   encounterForm.allergy = draft?.allergy ?? ''
   encounterForm.proposal = draft?.proposal ?? ''
   encounterForm.cure = draft?.cure ?? ''
+}
+
+function resetPrescriptionWorkspace() {
+  prescriptionRecommendationLoading.value = false
+  prescriptionRecommendationError.value = ''
+  prescriptionRecommendation.value = null
+  pendingPrescriptionItems.value = []
+  createdPrescription.value = null
 }
 
 function resetOrderDraft() {
@@ -414,6 +455,7 @@ async function loadEncounter() {
   similarCases.value = []
   assistantAnswer.value = ''
   assistantQuestion.value = ''
+  resetPrescriptionWorkspace()
 
   try {
     const detailResponse = await patientApi.getRegisterDetail(registerId.value)
@@ -476,12 +518,66 @@ async function confirmDraft() {
       proposal: encounterForm.proposal?.trim() || '',
       cure: encounterForm.cure?.trim() || '',
     })
-    ElMessage.success('病历已确认，本次接诊已结束。')
-    await router.push({ name: 'doctor-home' })
+    isMedicalRecordConfirmed.value = true
+    ElMessage.success('病历已确认，可生成处方建议并由医生确认开立。')
   } catch (error) {
     ElMessage.error(getErrorMessage(error, '确认病历失败，请稍后重试。'))
   } finally {
     savingDraft.value = false
+  }
+}
+
+async function generatePrescriptionRecommendation() {
+  if (!registerId.value || !canGeneratePrescriptionRecommendation.value) return
+
+  prescriptionRecommendationLoading.value = true
+  prescriptionRecommendationError.value = ''
+  createdPrescription.value = null
+  try {
+    const response = await pharmacyApi.recommendPrescription(registerId.value)
+    const result = response.data.data ?? null
+    prescriptionRecommendation.value = result
+    pendingPrescriptionItems.value = (result?.recommendations ?? []).map((item) => ({
+      ...item,
+      localId: ++pendingPrescriptionSequence,
+    }))
+    if (!pendingPrescriptionItems.value.length) {
+      ElMessage.info('当前病历没有返回可供医生确认的处方建议。')
+    }
+  } catch (error) {
+    prescriptionRecommendation.value = null
+    pendingPrescriptionItems.value = []
+    prescriptionRecommendationError.value = getErrorMessage(error, '处方建议生成失败，请稍后重试。')
+  } finally {
+    prescriptionRecommendationLoading.value = false
+  }
+}
+
+function removePendingPrescriptionItem(localId: number) {
+  if (creatingPrescription.value) return
+  pendingPrescriptionItems.value = pendingPrescriptionItems.value.filter((item) => item.localId !== localId)
+}
+
+async function createPrescription() {
+  if (!registerId.value || !canCreatePrescription.value) return
+
+  creatingPrescription.value = true
+  try {
+    const response = await pharmacyApi.createPrescription(
+      registerId.value,
+      pendingPrescriptionItems.value.map((item) => ({
+        drug_id: item.drug_id,
+        drug_usage: item.drug_usage.trim(),
+        drug_number: Number(item.drug_number),
+      })),
+    )
+    createdPrescription.value = response.data.data ?? null
+    pendingPrescriptionItems.value = []
+    ElMessage.success('处方已由医生确认开立，等待患者缴费。')
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error, '处方开立失败，请核对用法用量后重试。'))
+  } finally {
+    creatingPrescription.value = false
   }
 }
 
@@ -988,7 +1084,7 @@ onBeforeUnmount(() => {
       <div class="doctor-encounter__hero-actions">
         <button type="button" class="doctor-encounter__secondary" @click="goBack">返回工作台</button>
         <button type="button" class="doctor-encounter__primary" :disabled="!canConfirm" @click="confirmDraft">
-          {{ savingDraft ? '确认中...' : '确认病历并结束接诊' }}
+          {{ savingDraft ? '确认中...' : isMedicalRecordConfirmed ? '病历已确认' : '确认病历' }}
         </button>
       </div>
     </section>
@@ -1443,42 +1539,111 @@ onBeforeUnmount(() => {
                 <div v-else class="doctor-encounter__form">
                   <label>
                     <span>主诉</span>
-                    <textarea v-model="encounterForm.readme" rows="3" placeholder="例如：头痛伴恶心两周。"></textarea>
+                    <textarea v-model="encounterForm.readme" rows="3" :disabled="isMedicalRecordConfirmed" placeholder="例如：头痛伴恶心两周。"></textarea>
                   </label>
                   <label>
                     <span>现病史</span>
                     <textarea
                       v-model="encounterForm.present"
                       rows="5"
+                      :disabled="isMedicalRecordConfirmed"
                       placeholder="补充症状演变、持续时间、伴随症状与外院检查情况。"
                     ></textarea>
                   </label>
                   <label>
                     <span>病史</span>
-                    <textarea v-model="encounterForm.history" rows="4" placeholder="补充既往相关病史、用药史、家族史等。"></textarea>
+                    <textarea v-model="encounterForm.history" rows="4" :disabled="isMedicalRecordConfirmed" placeholder="补充既往相关病史、用药史、家族史等。"></textarea>
                   </label>
                   <label>
                     <span>查体</span>
-                    <textarea v-model="encounterForm.physique" rows="4" placeholder="补充神经系统查体、生命体征与阳性体征。"></textarea>
+                    <textarea v-model="encounterForm.physique" rows="4" :disabled="isMedicalRecordConfirmed" placeholder="补充神经系统查体、生命体征与阳性体征。"></textarea>
                   </label>
                   <label>
                     <span>诊断</span>
-                    <textarea v-model="encounterForm.diagnosis" rows="3" placeholder="填写初步诊断或待排诊断。"></textarea>
+                    <textarea v-model="encounterForm.diagnosis" rows="3" :disabled="isMedicalRecordConfirmed" placeholder="填写初步诊断或待排诊断。"></textarea>
                   </label>
                   <div class="doctor-encounter__form-grid">
                     <label>
                       <span>过敏史</span>
-                      <textarea v-model="encounterForm.allergy" rows="3" placeholder="无则写无。"></textarea>
+                      <textarea v-model="encounterForm.allergy" rows="3" :disabled="isMedicalRecordConfirmed" placeholder="无则写无。"></textarea>
                     </label>
                     <label>
                       <span>检查建议</span>
-                      <textarea v-model="encounterForm.proposal" rows="3" placeholder="例如：建议头颅增强 MRI、血管评估等。"></textarea>
+                      <textarea v-model="encounterForm.proposal" rows="3" :disabled="isMedicalRecordConfirmed" placeholder="例如：建议头颅增强 MRI、血管评估等。"></textarea>
                     </label>
                   </div>
                   <label>
                     <span>处置 / 治疗建议</span>
-                    <textarea v-model="encounterForm.cure" rows="4" placeholder="填写对症处理、复诊或住院建议。"></textarea>
+                    <textarea v-model="encounterForm.cure" rows="4" :disabled="isMedicalRecordConfirmed" placeholder="填写对症处理、复诊或住院建议。"></textarea>
                   </label>
+                </div>
+              </SectionCard>
+
+              <SectionCard title="AI 处方建议" subtitle="先确认病历，再由医生调整和确认；AI 不会自动写入正式处方。">
+                <template #extra>
+                  <span class="doctor-encounter__badge" :class="isMedicalRecordConfirmed ? 'is-live' : 'is-progress'">
+                    {{ isMedicalRecordConfirmed ? '可生成建议' : '等待病历确认' }}
+                  </span>
+                </template>
+
+                <div v-if="!isMedicalRecordConfirmed" class="doctor-encounter__state is-plain">
+                  <strong>请先确认本次病历</strong>
+                  <p>处方建议只读取已确认的诊断、症状和过敏史，避免根据未定稿信息开方。</p>
+                </div>
+
+                <div v-else class="doctor-encounter__prescription-workspace">
+                  <div class="doctor-encounter__panel-actions">
+                    <button
+                      type="button"
+                      class="doctor-encounter__secondary"
+                      :disabled="!canGeneratePrescriptionRecommendation"
+                      @click="generatePrescriptionRecommendation"
+                    >
+                      {{ prescriptionRecommendationLoading ? '生成中...' : '生成 AI 处方建议' }}
+                    </button>
+                  </div>
+
+                  <div v-if="prescriptionRecommendationError" class="doctor-encounter__state is-error">
+                    <strong>{{ prescriptionRecommendationError }}</strong>
+                    <button type="button" class="doctor-encounter__secondary" @click="generatePrescriptionRecommendation">重新生成</button>
+                  </div>
+
+                  <div v-else-if="prescriptionRecommendation" class="doctor-encounter__prescription-context">
+                    <span>建议依据：{{ prescriptionRecommendation.diagnosis || '已确认病历' }}；过敏史：{{ prescriptionRecommendation.patient_allergy || '未记录' }}</span>
+                  </div>
+
+                  <section v-if="prescriptionRecommendation" class="doctor-encounter__prescription-list" aria-label="待确认处方">
+                    <div v-if="!pendingPrescriptionItems.length" class="doctor-encounter__state is-plain">
+                      <strong>没有待确认药品</strong>
+                      <p>AI 未返回建议，或医生已移除全部药品。本次不会开立处方。</p>
+                    </div>
+                    <article v-for="item in pendingPrescriptionItems" :key="item.localId" class="doctor-encounter__prescription-item">
+                      <div class="doctor-encounter__prescription-heading">
+                        <strong>{{ item.drug_name }}</strong>
+                        <button type="button" :disabled="creatingPrescription" @click="removePendingPrescriptionItem(item.localId)">移除</button>
+                      </div>
+                      <p>{{ item.reason }}</p>
+                      <div class="doctor-encounter__prescription-fields">
+                        <label class="doctor-encounter__field">
+                          <span>用法</span>
+                          <input v-model="item.drug_usage" type="text" :disabled="creatingPrescription" />
+                        </label>
+                        <label class="doctor-encounter__field">
+                          <span>数量</span>
+                          <input v-model.number="item.drug_number" type="number" min="1" step="1" :disabled="creatingPrescription" />
+                        </label>
+                      </div>
+                    </article>
+                    <button type="button" class="doctor-encounter__primary" :disabled="!canCreatePrescription" @click="createPrescription">
+                      {{ creatingPrescription ? '开立中...' : `医生确认并开立（${pendingPrescriptionItems.length} 项）` }}
+                    </button>
+                    <p class="doctor-encounter__sign-hint">调整用法、数量或移除药品后，仍需再次点击确认才会创建正式处方。</p>
+                  </section>
+
+                  <div v-if="createdPrescription" class="doctor-encounter__prescription-created">
+                    <strong>处方已开立：{{ createdPrescription.prescription_code }}</strong>
+                    <p>共 {{ createdPrescription.items.length }} 项，金额 {{ createdPrescription.total_amount }} 元；后续进入患者缴费和药房发药流程。</p>
+                  </div>
                 </div>
               </SectionCard>
             </div>
@@ -1732,7 +1897,9 @@ onBeforeUnmount(() => {
 .doctor-encounter__request-groups,
 .doctor-encounter__request-list,
 .doctor-encounter__similar-list,
-.doctor-encounter__form {
+.doctor-encounter__form,
+.doctor-encounter__prescription-workspace,
+.doctor-encounter__prescription-list {
   display: grid;
   gap: 16px;
 }
@@ -2568,6 +2735,69 @@ onBeforeUnmount(() => {
   border: 1px solid #99f6e4;
 }
 
+.doctor-encounter__prescription-context,
+.doctor-encounter__prescription-item,
+.doctor-encounter__prescription-created {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #dbe5f0;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.doctor-encounter__prescription-context {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doctor-encounter__prescription-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.doctor-encounter__prescription-heading strong,
+.doctor-encounter__prescription-created strong {
+  color: #0f172a;
+}
+
+.doctor-encounter__prescription-heading button {
+  border: 0;
+  background: transparent;
+  color: #b91c1c;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.doctor-encounter__prescription-heading button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.doctor-encounter__prescription-item p,
+.doctor-encounter__prescription-created p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doctor-encounter__prescription-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 12px;
+}
+
+.doctor-encounter__prescription-created {
+  border-color: #99f6e4;
+  background: #ecfeff;
+}
+
 .doctor-encounter__state {
   display: grid;
   gap: 10px;
@@ -2653,6 +2883,10 @@ onBeforeUnmount(() => {
   .doctor-encounter__report-save,
   .doctor-encounter__report-publish {
     width: 100%;
+  }
+
+  .doctor-encounter__prescription-fields {
+    grid-template-columns: 1fr;
   }
 }
 
