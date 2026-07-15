@@ -56,6 +56,7 @@ async def test_list_doctor_accounts_serializes_keyword_results():
             (
                 SimpleNamespace(
                     uuid=doctor_uuid,
+                    staff_code='DOC-000101',
                     realname='王若岚',
                     gender='女',
                     expertise='头痛,神经影像',
@@ -82,6 +83,7 @@ async def test_list_doctor_accounts_serializes_keyword_results():
         'items': [
             {
                 'uuid': str(doctor_uuid),
+                'staff_code': 'DOC-000101',
                 'realname': '王若岚',
                 'gender': '女',
                 'expertise': '头痛,神经影像',
@@ -200,6 +202,32 @@ async def test_reset_employee_password_persists_only_bcrypt_hash():
     assert bcrypt.checkpw(b'NewSecurePass8', employee.password.encode('utf-8'))
     assert session.added == [employee]
     assert session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_authenticate_doctor_requires_active_matching_credentials():
+    password_hash = bcrypt.hashpw(b'correct-password', bcrypt.gensalt()).decode('utf-8')
+    doctor = SimpleNamespace(
+        uuid=uuid.UUID('00000000-0000-0000-0000-000000000109'),
+        staff_code='DOC-000109',
+        realname='李医生',
+        password=password_hash,
+    )
+
+    result = await auth_service.authenticate_doctor(
+        FakeSession([(doctor, 'SJWK', '神经外科')]), 'doc-000109', 'correct-password'
+    )
+
+    assert result == {
+        'uuid': str(doctor.uuid),
+        'staff_code': 'DOC-000109',
+        'display_name': '李医生',
+        'dept_code': 'SJWK',
+        'dept_name': '神经外科',
+    }
+    assert await auth_service.authenticate_doctor(
+        FakeSession([(doctor, 'SJWK', '神经外科')]), 'DOC-000109', 'wrong-password'
+    ) is None
 
 
 @pytest.mark.asyncio

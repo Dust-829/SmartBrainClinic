@@ -23,6 +23,7 @@ class SearchSimilarDoctorRequest(BaseModel):
 
 class EmployeeCreate(BaseModel):
     realname: str
+    staff_code: Optional[str] = Field(default=None, max_length=64)
     password: str = Field(min_length=8, max_length=128)
     dept_code: Optional[str] = None
     regist_level_code: Optional[str] = None
@@ -60,6 +61,11 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
+class DoctorLoginRequest(BaseModel):
+    staff_code: str
+    password: str
+
+
 @router.post("/admin/login", summary="管理员登录")
 async def admin_login(data: AdminLoginRequest, session: AsyncSession = Depends(get_session)):
     admin = await svc.authenticate_admin(session, data.staff_code, data.password)
@@ -83,6 +89,14 @@ async def admin_login(data: AdminLoginRequest, session: AsyncSession = Depends(g
             },
         }
     )
+
+
+@router.post("/doctor/login", summary="医生登录")
+async def doctor_login(data: DoctorLoginRequest, session: AsyncSession = Depends(get_session)):
+    doctor = await svc.authenticate_doctor(session, data.staff_code, data.password)
+    if not doctor:
+        raise HTTPException(status_code=401, detail="医生工号或密码错误")
+    return success({"staff": doctor})
 
 
 @router.get("/employee/{uuid}", summary="获取员工信息")

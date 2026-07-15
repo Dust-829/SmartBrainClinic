@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 
 import { authApi } from '@/api/auth'
-import SectionCard from '@/components/common/SectionCard.vue'
 import { useAdminSessionStore } from '@/stores/adminSession'
 
 const route = useRoute()
 const router = useRouter()
 const session = useAdminSessionStore()
 const submitting = ref(false)
+const attempted = ref(false)
+const submitError = ref('')
 
 const form = reactive({
   staffCode: '',
@@ -18,12 +18,17 @@ const form = reactive({
 })
 
 const expiredSessionNotice = computed(() => route.query.reason === 'expired')
+const staffCodeError = computed(() => attempted.value && !form.staffCode.trim() ? '请填写工号' : '')
+const passwordError = computed(() => attempted.value && !form.password ? '请填写密码' : '')
+
+function clearSubmitError() {
+  submitError.value = ''
+}
 
 async function submit() {
-  if (!form.staffCode.trim() || !form.password) {
-    ElMessage.warning('请输入管理员工号和密码')
-    return
-  }
+  attempted.value = true
+  clearSubmitError()
+  if (staffCodeError.value || passwordError.value) return
 
   submitting.value = true
   try {
@@ -39,7 +44,7 @@ async function submit() {
     }, result.access_token)
     router.replace({ name: 'admin-home' })
   } catch {
-    ElMessage.error('登录失败，请检查工号、密码或管理员认证配置。')
+    submitError.value = '工号或密码不正确，请重新输入。'
   } finally {
     submitting.value = false
   }
@@ -47,38 +52,53 @@ async function submit() {
 </script>
 
 <template>
-  <div class="admin-login">
-    <div class="admin-login__hero">
-      <span class="admin-login__eyebrow">智慧云脑诊疗平台</span>
-      <h1>管理员登录</h1>
-      <p>使用已授权的管理员工号和密码登录，进入医院运营后台。</p>
-    </div>
-
-    <SectionCard title="登录控制台" subtitle="登录凭据由部署管理员初始化，不在前端保存默认账号。">
-      <div class="admin-login__form">
-        <p v-if="expiredSessionNotice" class="admin-login__notice">登录状态已失效，请重新登录。</p>
-        <label>
-          <span>工号</span>
-          <input v-model="form.staffCode" type="text" placeholder="请输入工号" autocomplete="username" />
-        </label>
-
-        <label>
-          <span>密码</span>
-          <input v-model="form.password" type="password" placeholder="请输入密码" autocomplete="current-password" @keyup.enter="submit" />
-        </label>
-
-        <button type="button" :disabled="submitting" @click="submit">
-          {{ submitting ? '进入中...' : '进入管理后台' }}
-        </button>
+  <section class="staff-login staff-login--admin" aria-labelledby="admin-login-title">
+    <aside class="staff-login__context">
+      <div class="staff-login__brand">
+        <span>智慧云脑诊疗平台</span>
+        <strong>管理端</strong>
       </div>
-    </SectionCard>
-  </div>
-</template>
+      <div class="staff-login__context-copy">
+        <p class="staff-login__eyebrow">管理员登录</p>
+        <h1 id="admin-login-title">让关键运营动作始终可追溯</h1>
+        <p>统一处理排班、业务审批与审计追踪。</p>
+      </div>
+      <ul class="staff-login__capabilities" aria-label="管理端职责">
+        <li><strong>01</strong><span>排班管理</span></li>
+        <li><strong>02</strong><span>业务审批</span></li>
+        <li><strong>03</strong><span>审计追踪</span></li>
+      </ul>
+    </aside>
 
-<style scoped>
-.admin-login__notice {
-  margin: 0;
-  color: #92400e;
-  line-height: 1.6;
-}
-</style>
+    <div class="staff-login__panel">
+      <form class="staff-login__form" novalidate @submit.prevent="submit">
+        <div class="staff-login__form-heading">
+          <p class="staff-login__eyebrow">管理员登录</p>
+          <h2>进入管理后台</h2>
+          <p>使用已授权的管理员工号和密码登录。</p>
+        </div>
+
+        <p v-if="expiredSessionNotice" class="staff-login__feedback is-warning" role="status">登录状态已失效，请重新登录。</p>
+
+        <label class="staff-login__field" :class="{ 'has-error': staffCodeError }">
+          <span>工号</span>
+          <input v-model="form.staffCode" type="text" autocomplete="username" placeholder="请输入工号" @input="clearSubmitError" />
+          <small v-if="staffCodeError">{{ staffCodeError }}</small>
+        </label>
+
+        <label class="staff-login__field" :class="{ 'has-error': passwordError }">
+          <span>密码</span>
+          <input v-model="form.password" type="password" autocomplete="current-password" placeholder="请输入密码" @input="clearSubmitError" />
+          <small v-if="passwordError">{{ passwordError }}</small>
+        </label>
+
+        <p v-if="submitError" class="staff-login__feedback is-error" role="alert">{{ submitError }}</p>
+        <p v-else-if="submitting" class="staff-login__feedback" aria-live="polite">正在登录…</p>
+
+        <button class="staff-login__submit" type="submit" :disabled="submitting">
+          {{ submitting ? '正在进入后台…' : '进入管理后台' }}
+        </button>
+      </form>
+    </div>
+  </section>
+</template>

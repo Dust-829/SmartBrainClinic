@@ -70,6 +70,38 @@ async def authenticate_admin(session: AsyncSession, staff_code: str, password: s
     return admin if password_matches else None
 
 
+async def authenticate_doctor(session: AsyncSession, staff_code: str, password: str) -> dict | None:
+    """Validate an active doctor's credentials and return the session identity."""
+    normalized_staff_code = _normalize_staff_code(staff_code)
+    if not normalized_staff_code or not password:
+        return None
+
+    result = await session.execute(
+        select(Employee, Department.dept_code, Department.dept_name)
+        .outerjoin(Department, Employee.dept_id == Department.id)
+        .where(Employee.staff_code == normalized_staff_code, Employee.delmark == 1)
+    )
+    row = result.first()
+    if not row:
+        return None
+
+    employee, dept_code, dept_name = row
+    try:
+        password_matches = bcrypt.checkpw(password.encode("utf-8"), employee.password.encode("utf-8"))
+    except (TypeError, ValueError):
+        return None
+    if not password_matches:
+        return None
+
+    return {
+        "uuid": str(employee.uuid),
+        "staff_code": employee.staff_code,
+        "display_name": employee.realname,
+        "dept_code": dept_code,
+        "dept_name": dept_name,
+    }
+
+
 async def create_admin_account(
     session: AsyncSession,
     *,
@@ -170,6 +202,7 @@ async def get_doctors_by_dept(session: AsyncSession, dept_id: int) -> list:
 
 def _serialize_doctor_account(emp: Employee, dept_uuid=None, dept_code=None, regist_level_uuid=None, regist_level_code=None) -> dict:
     doc_dict = emp.model_dump(exclude={"password", "expertise_vector"}, mode="json")
+    doc_dict["staff_code"] = getattr(emp, "staff_code", None)
     doc_dict["dept_uuid"] = str(dept_uuid) if dept_uuid else None
     doc_dict["dept_code"] = dept_code
     doc_dict["regist_level_uuid"] = str(regist_level_uuid) if regist_level_uuid else None
@@ -381,8 +414,19 @@ async def create_employee(
             raise ValueError(f"挂号等级编码 {data['regist_level_code']} 不存在")
         regist_level_id = level.id
         
+    employee_uuid = uuid_pkg.uuid4()
+    staff_code = _normalize_staff_code(data.get("staff_code") or f"DOC-{str(employee_uuid)[:8]}")
+    if not staff_code:
+        raise ValueError("医生工号不能为空")
+
+    existing = await session.execute(select(Employee).where(Employee.staff_code == staff_code))
+    if existing.scalar_one_or_none():
+        raise ValueError("医生工号已存在")
+
     emp = Employee(
+        uuid=employee_uuid,
         realname=data["realname"],
+        staff_code=staff_code,
         password=hashed_password,
         dept_id=dept_id,
         regist_level_id=regist_level_id,

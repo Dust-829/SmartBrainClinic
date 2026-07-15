@@ -8,6 +8,7 @@ import { pinia } from './stores/pinia'
 import './styles/reset.css'
 import './styles/theme.css'
 import './styles/admin-skin.css'
+import './styles/staff-login.css'
 
 const app = createApp(App)
 

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import { useDoctorSessionStore } from '@/stores/doctorSession'
 
 const router = useRouter()
+const route = useRoute()
 const session = useDoctorSessionStore()
 
 const doctor = computed(() => session.staff)
@@ -16,12 +17,12 @@ function logout() {
 </script>
 
 <template>
-  <div class="doctor-layout">
-    <aside class="doctor-layout__sidebar">
+  <div class="doctor-layout" :class="{ 'is-login': route.path === '/doctor/login' }">
+    <aside v-if="route.path !== '/doctor/login'" class="doctor-layout__sidebar">
       <div class="doctor-layout__intro">
         <div class="doctor-layout__eyebrow">智慧云脑诊疗平台</div>
         <h1>医生端</h1>
-        <p>当前先收口真实接诊首屏：登录身份进入独立会话，工作台首屏读取今日候诊队列。</p>
+        <p>登录后可查看今日候诊队列，并进入接诊工作台。</p>
       </div>
 
       <div v-if="doctor" class="doctor-layout__identity">
@@ -31,7 +32,7 @@ function logout() {
         <button type="button" @click="logout">退出登录</button>
       </div>
     </aside>
-    <main class="doctor-layout__main">
+    <main class="doctor-layout__main" :class="{ 'is-login': route.path === '/doctor/login' }">
       <router-view />
     </main>
   </div>
@@ -110,6 +111,14 @@ function logout() {
 
 .doctor-layout__main {
   padding: 24px;
+}
+
+.doctor-layout__main.is-login {
+  padding: 0;
+}
+
+.doctor-layout.is-login {
+  grid-template-columns: 1fr;
 }
 
 @media (max-width: 1100px) {

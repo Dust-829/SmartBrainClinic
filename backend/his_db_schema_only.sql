@@ -301,6 +301,7 @@ CREATE TABLE public.employee (
     dept_id integer,
     regist_level_id integer,
     realname character varying(64) NOT NULL,
+    staff_code character varying(64) NOT NULL,
     password character varying(128) NOT NULL,
     expertise character varying(512),
     ai_eval_score numeric(3,1),
@@ -1284,6 +1285,14 @@ ALTER TABLE ONLY public.drug_info
 
 ALTER TABLE ONLY public.employee
     ADD CONSTRAINT employee_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: employee staff_code unique; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee
+    ADD CONSTRAINT employee_staff_code_key UNIQUE (staff_code);
 
 
 --

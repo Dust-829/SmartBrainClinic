@@ -47,7 +47,7 @@
 
 | 路由 | 状态 |
 | --- | --- |
-| `/doctor/login` | 真实医生目录登录 |
+| `/doctor/login` | 医生工号、密码登录 |
 | `/doctor/workbench` | 真实候诊工作台，需登录 |
 | `/doctor/encounter/:registerId` | 接诊详情，需登录 |
 
@@ -55,7 +55,7 @@
 
 | 路由 | 状态 |
 | --- | --- |
-| `/admin/login` | 演示登录 |
+| `/admin/login` | 管理员工号、密码登录 |
 | `/admin/console` | 控制台骨架，需登录 |
 
 ## 3. 会话与状态

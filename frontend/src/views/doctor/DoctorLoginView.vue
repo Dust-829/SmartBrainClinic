@@ -1,271 +1,109 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
-import { authApi, type DoctorDirectoryItem } from '@/api/auth'
-import { patientApi, type DepartmentOption } from '@/api/patient'
-import SectionCard from '@/components/common/SectionCard.vue'
+import { authApi } from '@/api/auth'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
 
-const route = useRoute()
 const router = useRouter()
 const session = useDoctorSessionStore()
-
-const departments = ref<DepartmentOption[]>([])
-const doctors = ref<Array<DoctorDirectoryItem & { deptCode: string; deptName: string }>>([])
-const selectedDeptCode = ref('')
-const selectedDoctorUuid = ref('')
-const loading = ref(false)
-const errorMessage = ref('')
 const submitting = ref(false)
+const attempted = ref(false)
+const submitError = ref('')
 
-const redirectPath = computed(() => {
-  const value = route.query.redirect
-  return typeof value === 'string' && value.trim() ? value : '/doctor/workbench'
+const form = reactive({
+  staffCode: '',
+  password: '',
 })
 
-const availableDepartments = computed(() => {
-  const doctorDeptCodes = new Set(doctors.value.map((doctor) => doctor.deptCode))
-  return departments.value.filter((department) => doctorDeptCodes.has(department.code))
-})
+const staffCodeError = computed(() => attempted.value && !form.staffCode.trim() ? '请填写工号' : '')
+const passwordError = computed(() => attempted.value && !form.password ? '请填写密码' : '')
 
-const currentDoctors = computed(() =>
-  doctors.value.filter((doctor) => doctor.deptCode === selectedDeptCode.value),
-)
-
-const selectedDoctor = computed(() =>
-  currentDoctors.value.find((doctor) => doctor.uuid === selectedDoctorUuid.value) ?? null,
-)
-
-async function loadDoctorDirectory() {
-  loading.value = true
-  errorMessage.value = ''
-
-  try {
-    const departmentResponse = await patientApi.getDepartments()
-    const nextDepartments = departmentResponse.data.data ?? []
-    departments.value = nextDepartments
-
-    const doctorResponses = await Promise.all(
-      nextDepartments.map(async (department) => {
-        const response = await authApi.listDoctorsByDepartmentCode(department.code)
-        return (response.data.data ?? []).map((doctor) => ({
-          ...doctor,
-          deptCode: department.code,
-          deptName: department.name,
-        }))
-      }),
-    )
-
-    doctors.value = doctorResponses
-      .flat()
-      .sort((left, right) => left.realname.localeCompare(right.realname, 'zh-CN'))
-
-    const firstDepartment = availableDepartments.value[0]
-    selectedDeptCode.value = firstDepartment?.code ?? ''
-    selectedDoctorUuid.value = currentDoctors.value[0]?.uuid ?? ''
-
-    if (!doctors.value.length) {
-      errorMessage.value = '当前没有可用于演示登录的真实医生数据。'
-    }
-  } catch {
-    errorMessage.value = '医生目录加载失败，请稍后重试。'
-  } finally {
-    loading.value = false
-  }
+function clearSubmitError() {
+  submitError.value = ''
 }
 
-function syncDoctorSelection() {
-  if (!currentDoctors.value.length) {
-    selectedDoctorUuid.value = ''
-    return
-  }
-
-  const exists = currentDoctors.value.some((doctor) => doctor.uuid === selectedDoctorUuid.value)
-  if (!exists) {
-    selectedDoctorUuid.value = currentDoctors.value[0].uuid
-  }
-}
-
-function submit() {
-  if (!selectedDoctor.value) return
+async function submit() {
+  attempted.value = true
+  clearSubmitError()
+  if (staffCodeError.value || passwordError.value) return
 
   submitting.value = true
   try {
-    session.login({
-      displayName: selectedDoctor.value.realname,
-      employeeUuid: selectedDoctor.value.uuid,
-      deptCode: selectedDoctor.value.deptCode,
-      deptName: selectedDoctor.value.deptName,
+    const response = await authApi.doctorLogin({
+      staff_code: form.staffCode.trim(),
+      password: form.password,
     })
-    router.replace(redirectPath.value)
+    const staff = response.data.data.staff
+    session.login({
+      displayName: staff.display_name,
+      employeeUuid: staff.uuid,
+      staffCode: staff.staff_code,
+      deptCode: staff.dept_code || undefined,
+      deptName: staff.dept_name || undefined,
+    })
+    router.replace({ name: 'doctor-home' })
+  } catch {
+    submitError.value = '工号或密码不正确，请重新输入。'
   } finally {
     submitting.value = false
   }
 }
-
-onMounted(loadDoctorDirectory)
 </script>
 
 <template>
-  <div class="doctor-login">
-    <div class="doctor-login__hero">
-      <span class="doctor-login__eyebrow">智慧云脑诊疗平台</span>
-      <h1>医生登录</h1>
-      <p>当前阶段先用真实医生目录承载登录身份，确保工作台能拿到实际 `employee_uuid` 并读取候诊队列。</p>
-    </div>
+  <section class="staff-login staff-login--doctor" aria-labelledby="doctor-login-title">
+    <aside class="staff-login__context">
+      <div class="staff-login__brand">
+        <span>智慧云脑诊疗平台</span>
+        <strong>医生端</strong>
+      </div>
+      <div class="staff-login__context-copy">
+        <p class="staff-login__eyebrow">医生登录</p>
+        <h1 id="doctor-login-title">回到清晰、专注的接诊节奏</h1>
+        <p>登录后查看今日候诊队列，并进入接诊工作台。</p>
+      </div>
+    </aside>
 
-    <SectionCard title="登录工作台" subtitle="选择真实科室与医生后进入医生工作台。">
-      <div class="doctor-login__form">
-        <div v-if="errorMessage" class="doctor-login__state is-error">
-          <strong>{{ errorMessage }}</strong>
-          <button type="button" :disabled="loading" @click="loadDoctorDirectory">
-            {{ loading ? '重试中...' : '重新加载' }}
-          </button>
+    <div class="staff-login__panel">
+      <form class="staff-login__form" novalidate @submit.prevent="submit">
+        <div class="staff-login__form-heading">
+          <p class="staff-login__eyebrow">医生登录</p>
+          <h2>进入医生工作台</h2>
+          <p>使用已分配的工号和密码登录。</p>
         </div>
 
-        <template v-else-if="loading">
-          <el-skeleton animated :rows="4" />
-        </template>
+        <label class="staff-login__field" :class="{ 'has-error': staffCodeError }">
+          <span>工号</span>
+          <input
+            v-model="form.staffCode"
+            type="text"
+            autocomplete="username"
+            placeholder="请输入工号"
+            @input="clearSubmitError"
+          />
+          <small v-if="staffCodeError">{{ staffCodeError }}</small>
+        </label>
 
-        <template v-else>
-          <label>
-            <span>科室</span>
-            <select v-model="selectedDeptCode" @change="syncDoctorSelection">
-              <option v-for="department in availableDepartments" :key="department.code" :value="department.code">
-                {{ department.name }}
-              </option>
-            </select>
-          </label>
+        <label class="staff-login__field" :class="{ 'has-error': passwordError }">
+          <span>密码</span>
+          <input
+            v-model="form.password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="请输入密码"
+            @input="clearSubmitError"
+          />
+          <small v-if="passwordError">{{ passwordError }}</small>
+        </label>
 
-          <label>
-            <span>医生</span>
-            <select v-model="selectedDoctorUuid">
-              <option v-for="doctor in currentDoctors" :key="doctor.uuid" :value="doctor.uuid">
-                {{ doctor.realname }}
-              </option>
-            </select>
-          </label>
+        <p v-if="submitError" class="staff-login__feedback is-error" role="alert">{{ submitError }}</p>
+        <p v-else-if="submitting" class="staff-login__feedback" aria-live="polite">正在登录…</p>
 
-          <div v-if="selectedDoctor" class="doctor-login__summary">
-            <strong>{{ selectedDoctor.realname }}</strong>
-            <p>{{ selectedDoctor.deptName }}</p>
-            <span>{{ selectedDoctor.expertise || '暂未维护专长信息' }}</span>
-          </div>
-
-          <button type="button" :disabled="submitting || !selectedDoctor" @click="submit">
-            {{ submitting ? '进入中...' : '进入医生工作台' }}
-          </button>
-        </template>
-      </div>
-    </SectionCard>
-  </div>
+        <button class="staff-login__submit" type="submit" :disabled="submitting">
+          {{ submitting ? '正在进入工作台…' : '登录并进入工作台' }}
+        </button>
+      </form>
+    </div>
+  </section>
 </template>
-
-<style scoped>
-.doctor-login {
-  display: grid;
-  gap: 20px;
-  max-width: 560px;
-}
-
-.doctor-login__hero {
-  display: grid;
-  gap: 10px;
-}
-
-.doctor-login__eyebrow {
-  color: #0f766e;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.doctor-login__hero h1,
-.doctor-login__hero p {
-  margin: 0;
-}
-
-.doctor-login__hero h1 {
-  color: #0f172a;
-  font-size: 34px;
-  line-height: 1.1;
-}
-
-.doctor-login__hero p {
-  color: #475569;
-  line-height: 1.7;
-}
-
-.doctor-login__form {
-  display: grid;
-  gap: 14px;
-}
-
-.doctor-login__form label {
-  display: grid;
-  gap: 8px;
-}
-
-.doctor-login__form span {
-  color: #334155;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.doctor-login__form select {
-  min-height: 46px;
-  padding: 0 14px;
-  border: 1px solid #cbd5e1;
-  border-radius: 10px;
-  outline: 0;
-  background: #ffffff;
-  color: #0f172a;
-  font: inherit;
-}
-
-.doctor-login__form select:focus {
-  border-color: #0f766e;
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
-}
-
-.doctor-login__summary,
-.doctor-login__state {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  border-radius: 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-}
-
-.doctor-login__summary strong,
-.doctor-login__state strong {
-  color: #0f172a;
-}
-
-.doctor-login__summary p,
-.doctor-login__summary span {
-  margin: 0;
-  color: #475569;
-}
-
-.doctor-login__state.is-error {
-  background: #fff7ed;
-  border-color: #fdba74;
-}
-
-.doctor-login__form button {
-  min-height: 46px;
-  border: 0;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #0f766e, #0f9b8e);
-  color: #ffffff;
-  font: inherit;
-  font-weight: 700;
-}
-
-.doctor-login__form button:disabled {
-  opacity: 0.7;
-}
-</style>

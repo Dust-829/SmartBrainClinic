@@ -98,6 +98,8 @@ class Employee(SQLModel, table=True):
                                            description="号别级别ID (门诊医生有效)")
     realname: str = Field(max_length=64, nullable=False,
                           description="员工真实姓名")
+    staff_code: str = Field(max_length=64, unique=True, nullable=False, index=True,
+                            description="医生登录工号")
     password: str = Field(max_length=128, nullable=False,
                           description="Bcrypt 哈希加密后的安全密码密文")
     expertise: Optional[str] = Field(

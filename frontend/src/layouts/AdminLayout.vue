@@ -32,7 +32,7 @@ function logout() {
 </script>
 
 <template>
-  <div class="admin-layout">
+  <div class="admin-layout" :class="{ 'is-login': route.path === '/admin/login' }">
     <aside v-if="route.path !== '/admin/login'" class="admin-layout__aside">
       <div class="admin-layout__brand">
         <span class="admin-layout__eyebrow">智慧云脑诊疗平台</span>
@@ -199,7 +199,11 @@ function logout() {
 }
 
 .admin-layout__main.is-login {
-  padding-top: 88px;
+  padding: 0;
+}
+
+.admin-layout.is-login {
+  grid-template-columns: 1fr;
 }
 
 @media (max-width: 980px) {

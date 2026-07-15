@@ -9,6 +9,7 @@ from sqlmodel import SQLModel
 SQLModel.metadata.clear()
 
 from app.common.security import create_admin_access_token, require_admin
+from app.microservices.auth.api import auth as auth_api
 from app.microservices.auth.services import auth_service
 
 
@@ -71,6 +72,39 @@ async def test_authenticate_admin_rejects_disabled_or_wrong_password():
 
 
 @pytest.mark.asyncio
+async def test_login_endpoints_return_their_own_session_payloads(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-admin-secret")
+    monkeypatch.setenv("JWT_EXPIRE_MINUTES", "30")
+    admin = SimpleNamespace(uuid="00000000-0000-0000-0000-000000000001", staff_code="ADMIN-001", display_name="值班管理员")
+
+    async def fake_authenticate_admin(*_args):
+        return admin
+
+    async def fake_authenticate_doctor(*_args):
+        return {
+            "uuid": "00000000-0000-0000-0000-000000000101",
+            "staff_code": "DOC-000101",
+            "display_name": "王医生",
+            "dept_code": "SJWK",
+            "dept_name": "神经外科",
+        }
+
+    monkeypatch.setattr(auth_api.svc, "authenticate_admin", fake_authenticate_admin)
+    monkeypatch.setattr(auth_api.svc, "authenticate_doctor", fake_authenticate_doctor)
+
+    admin_response = await auth_api.admin_login(auth_api.AdminLoginRequest(staff_code="ADMIN-001", password="test"), FakeSession([]))
+    doctor_response = await auth_api.doctor_login(auth_api.DoctorLoginRequest(staff_code="DOC-000101", password="test"), FakeSession([]))
+
+    assert admin_response["data"]["staff"]["staff_code"] == "ADMIN-001"
+    assert admin_response["data"]["access_token"]
+    assert doctor_response == {
+        "code": 200,
+        "message": "success",
+        "data": {"staff": await fake_authenticate_doctor()},
+    }
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_admin_creation_hashes_password_and_rejects_duplicate_staff_code():
     session = FakeSession([None])
 
@@ -101,3 +135,11 @@ def test_admin_auth_migration_contains_identity_and_audit_tables():
     assert "CREATE TABLE IF NOT EXISTS public.admin_account" in migration
     assert "CREATE TABLE IF NOT EXISTS public.account_operation_audit" in migration
     assert "password_hash" in migration
+
+
+def test_doctor_login_migration_backfills_unique_staff_codes():
+    migration = open("migrations/20260715_01_add_employee_staff_code.sql", encoding="utf-8").read()
+
+    assert "ADD COLUMN IF NOT EXISTS staff_code" in migration
+    assert "UPDATE public.employee" in migration
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS ix_employee_staff_code" in migration

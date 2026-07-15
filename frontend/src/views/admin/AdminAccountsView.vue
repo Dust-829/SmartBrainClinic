@@ -31,6 +31,7 @@ const updatingDoctorStatus = ref('')
 
 const doctorForm = reactive({
   realname: '',
+  staff_code: '',
   dept_code: 'SJWK',
   regist_level_code: '',
   gender: '男',
@@ -138,6 +139,7 @@ function updateDoctorLimit(event: Event) {
 
 function resetDoctorForm() {
   doctorForm.realname = ''
+  doctorForm.staff_code = ''
   doctorForm.dept_code = 'SJWK'
   doctorForm.regist_level_code = ''
   doctorForm.gender = '男'
@@ -168,7 +170,7 @@ function openEditDoctorDialog(doctor: DoctorDirectoryItem) {
 }
 
 async function submitDoctorForm() {
-  if (!doctorForm.realname.trim() || !doctorForm.dept_code.trim()) {
+  if (!doctorForm.realname.trim() || !doctorForm.dept_code.trim() || (doctorDialogMode.value === 'create' && !doctorForm.staff_code.trim())) {
     ElMessage.warning('请补全医生基础资料')
     return
   }
@@ -182,6 +184,7 @@ async function submitDoctorForm() {
     if (doctorDialogMode.value === 'create') {
       await authApi.createEmployee({
         realname: doctorForm.realname.trim(),
+        staff_code: doctorForm.staff_code.trim(),
         password: doctorForm.initial_password,
         dept_code: doctorForm.dept_code.trim(),
         regist_level_code: doctorForm.regist_level_code.trim() || undefined,
@@ -189,7 +192,7 @@ async function submitDoctorForm() {
         expertise: doctorForm.expertise.trim() || undefined,
         ai_eval_score: doctorForm.ai_eval_score,
       })
-      ElMessage.success('医生资料已创建，请通过受控渠道交付初始密码')
+      ElMessage.success('医生资料已创建，请通过受控渠道交付工号和初始密码')
     } else {
       await authApi.updateEmployeeProfile(editingDoctorUuid.value, {
         realname: doctorForm.realname.trim(),
@@ -467,6 +470,7 @@ watch(activeTab, (tab) => {
 
             <div class="account-meta">
               <p>科室编码：{{ doctor.dept_code || '未配置' }}</p>
+              <p>登录工号：{{ doctor.staff_code || '未配置' }}</p>
               <p>挂号级别：{{ doctor.regist_level_code || '未配置' }}</p>
               <p>专长：{{ doctor.expertise || '未填写' }}</p>
             </div>
@@ -569,6 +573,10 @@ watch(activeTab, (tab) => {
         <label>
           <span>姓名</span>
           <input v-model="doctorForm.realname" type="text" placeholder="请输入医生姓名" />
+        </label>
+        <label v-if="doctorDialogMode === 'create'">
+          <span>登录工号</span>
+          <input v-model="doctorForm.staff_code" type="text" autocomplete="username" placeholder="例如 DOC-000001" />
         </label>
         <label>
           <span>性别</span>

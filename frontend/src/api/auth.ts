@@ -2,6 +2,7 @@ import { http, type ApiEnvelope } from './http'
 
 export interface DoctorDirectoryItem {
   uuid: string
+  staff_code?: string | null
   realname: string
   gender?: string | null
   expertise?: string | null
@@ -59,6 +60,16 @@ export interface AdminLoginResult {
   }
 }
 
+export interface DoctorLoginResult {
+  staff: {
+    uuid: string
+    staff_code: string
+    display_name: string
+    dept_code?: string | null
+    dept_name?: string | null
+  }
+}
+
 export interface AccountPagination {
   total: number
   limit: number
@@ -91,6 +102,9 @@ export const authApi = {
   adminLogin(payload: { staff_code: string; password: string }) {
     return http.post<ApiEnvelope<AdminLoginResult>>('/api/v1/auth/admin/login', payload)
   },
+  doctorLogin(payload: { staff_code: string; password: string }) {
+    return http.post<ApiEnvelope<DoctorLoginResult>>('/api/v1/auth/doctor/login', payload)
+  },
   listDoctorAccounts(params: { keyword?: string; limit?: number; offset?: number } = {}) {
     return http.get<ApiEnvelope<DoctorAccountPage>>('/api/v1/auth/admin/doctors', { params })
   },
@@ -114,6 +128,7 @@ export const authApi = {
   },
   createEmployee(payload: {
     realname: string
+    staff_code?: string
     password: string
     dept_code?: string
     regist_level_code?: string

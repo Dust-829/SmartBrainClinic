@@ -6,6 +6,7 @@ import { readSessionState, writeSessionState } from '@/stores/sessionStorage'
 export interface StaffSessionRecord {
   displayName: string
   employeeUuid: string
+  staffCode?: string
   deptCode?: string
   deptName?: string
 }
@@ -38,6 +39,7 @@ export const useDoctorSessionStore = defineStore('doctorSession', () => {
     staff.value = {
       displayName: value.displayName.trim(),
       employeeUuid: value.employeeUuid.trim(),
+      staffCode: value.staffCode?.trim() || undefined,
       deptCode: value.deptCode?.trim() || undefined,
       deptName: value.deptName?.trim() || undefined,
     }
