@@ -25,6 +25,9 @@ logs/
 # frontend
 frontend/node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
 
 # Local CT artifact model, source image data, and generated inference artifacts
 backend/runtime/models/
