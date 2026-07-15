@@ -96,3 +96,40 @@ test('doctor confirms a controlled prescription regression record', async ({ pag
   expect(detailPayload.data.items.length).toBeGreaterThan(0)
   expect(detailPayload.data.items[0].drug_number).toBe(2)
 })
+
+test('doctor encounter keeps the clinical workspace ahead of AI support on a narrow screen', async ({ page }) => {
+  test.setTimeout(120_000)
+  await page.setViewportSize({ width: 390, height: 844 })
+  const fixture = createFixture()
+
+  await page.goto('/doctor/login')
+  const form = page.locator('.doctor-login__form')
+  await expect(form).toBeVisible()
+  await form.locator('select').nth(0).selectOption('XNK')
+  await form.locator('select').nth(1).selectOption(fixture.doctor_uuid)
+  await form.locator('button[type="button"]').click()
+  await expect(page).toHaveURL(/\/doctor\/workbench/)
+
+  await page.goto(fixture.encounter_url)
+  const workspace = page.locator('.doctor-encounter__workspace')
+  await expect(workspace).toBeVisible()
+  const layout = await workspace.evaluate((element) => {
+    const main = element.querySelector<HTMLElement>('.doctor-encounter__main')
+    const sidebar = element.querySelector<HTMLElement>('.doctor-encounter__sidebar')
+    if (!main || !sidebar) {
+      throw new Error('Doctor encounter workspace is incomplete')
+    }
+
+    return {
+      columns: getComputedStyle(element).gridTemplateColumns,
+      mainTop: main.getBoundingClientRect().top,
+      sidebarTop: sidebar.getBoundingClientRect().top,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+    }
+  })
+
+  expect(layout.columns.trim().split(/\s+/)).toHaveLength(1)
+  expect(layout.mainTop).toBeLessThan(layout.sidebarTop)
+  expect(layout.pageScrollWidth).toBeLessThanOrEqual(layout.pageClientWidth + 1)
+})
