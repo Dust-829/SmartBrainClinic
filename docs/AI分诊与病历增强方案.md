@@ -2,13 +2,12 @@
 
 > 专项设计留档。本文保留方案提出时的设计和假设；已落地状态与后续差距以 [项目规划.md](./项目规划.md) 为准。
 
-更新时间：2026-07-10。状态说明：会话模型、挂号关联、`ai-context` 查询和 Medical 草稿消费已在本地工作区完成实现，尚待与代码一同提交、执行数据库迁移并完成医生端只读展示验收。本文中的长期设计不等同于已发布能力。
+更新时间：2026-07-15。状态说明：会话模型、挂号关联、`ai-context` 查询、Medical 草稿消费，以及患者端性别/年龄快照注入真实 LLM 分诊上下文均已在本地工作区完成实现；尚待执行数据库迁移并完成医生端只读展示验收。本文中的长期设计不等同于已发布能力。
 
 ## Summary
 
 当前仓库已经具备这些基础能力：患者端 `AI triage`、医生端 `AI 病历草稿`、`相似病历召回`、`AI 医生助手`、以及 `ai_audit_log` 审计表；但现状仍有三个关键缺口：
 
-- 患者端 `POST /api/v1/patient/triage` 只接收 `messages`，不会自动带入已登录患者的基础档案。
 - 医疗侧 AI 病历草稿仍然把 `register.symptoms` 同时当作症状摘要、对话原文和单次挂号输入来使用，模型上下文与业务字段耦合过深。
 - 医生端还没有一个结构化的“决策辅助”输出层，现有 AI 助手主要是自由问答，不适合稳定生成风险提醒、补问建议、检查建议。
 
@@ -61,7 +60,7 @@
 
 行为固定如下：
 
-- 已登录且拿到 `patient_uuid` 时，后端自动读取 `Patient.real_name / gender / birthdate`，生成 `profile_snapshot_json` 注入 triage prompt。
+- 已登录且拿到 `patient_uuid` 时，后端读取 `Patient.gender / birthdate`，生成仅含性别和计算年龄的 `profile_snapshot_json` 注入 triage prompt；姓名、身份证号和住址不会发送给模型。
 - 若基础档案已完整，AI 不再重复询问年龄和性别；只追问缺失信息或症状细节。
 - 患者端不注入既往病史；既往病史只留给医生侧 AI 使用。
 - 每轮分诊都写入 `ai_conversation_session` 和 `ai_conversation_message`，并把结构化 triage 结果同步到 `latest_result_json`。

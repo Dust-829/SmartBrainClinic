@@ -68,8 +68,32 @@ const validationLabel = computed(() => {
 const resultWarnings = computed(() => {
   const warnings = flow.triageResult?.warnings || []
   const validatorMessages = flow.triageResult?.validator_messages || []
-  return [...warnings, ...validatorMessages].filter(Boolean)
+  return [...warnings, ...validatorMessages]
+    .filter((item) => Boolean(item) && item !== 'recommended_dept_db_fact_check_unavailable')
+    .map((item) => warningLabelMap[item] || item)
 })
+
+const warningLabelMap: Record<string, string> = {
+  llm_triage_no_valid_result_fallback: '真实分诊未返回可用结果，已启用安全兜底推荐',
+  llm_triage_low_quality_fallback: '真实分诊结果不稳定，已启用安全兜底推荐',
+  llm_triage_request_failed_fallback: '真实分诊请求失败，已启用安全兜底推荐',
+  llm_triage_not_configured_fallback: '真实分诊未配置，当前使用安全兜底推荐',
+  recommended_dept_db_fact_check_unavailable: '科室主数据暂未完成二次校验，不影响当前推荐查看',
+}
+
+function encodeUnicodeEscape(value: string) {
+  return Array.from(value)
+    .map((char) => `\\u${char.codePointAt(0)?.toString(16).padStart(4, '0') ?? '003f'}`)
+    .join('')
+}
+
+function buildUserMessage(content: string): TriageMessage {
+  return {
+    role: 'user',
+    content,
+    content_unicode_escape: encodeUnicodeEscape(content),
+  }
+}
 
 onMounted(() => {
   if (!session.patient) {
@@ -94,7 +118,7 @@ async function send(content = input.value) {
   const normalized = content.trim()
   if (!normalized) return
 
-  const nextMessages: TriageMessage[] = [...messages.value, { role: 'user', content: normalized }]
+  const nextMessages: TriageMessage[] = [...messages.value, buildUserMessage(normalized)]
   input.value = ''
   submitting.value = true
   pendingMessages.value = nextMessages
@@ -109,8 +133,10 @@ async function send(content = input.value) {
     const result = response.data.data
     const assistantReply = result.data.reply || '已完成本轮分诊。'
     flow.setTriage([...nextMessages, { role: 'assistant', content: assistantReply }], result)
-  } catch {
+  } catch (error) {
     input.value = normalized
+    console.error('[patient-triage] request failed', error)
+    ElMessage.error('AI 分诊请求超时或失败，请重试')
   } finally {
     pendingMessages.value = []
     assistantPending.value = false
@@ -169,7 +195,7 @@ function formatAge(birthdate?: string) {
 
     <section class="triage-chat__patient">
       <strong>{{ patientLine }}</strong>
-      <span>系统将根据症状描述推荐合适科室</span>
+        <span>已自动使用档案信息：性别、年龄</span>
     </section>
 
     <section class="triage-chat__hero">

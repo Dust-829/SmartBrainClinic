@@ -54,6 +54,8 @@ class AIClient:
         temperature: float = 0.2,
         timeout: float = 30.0,
         max_tokens: Optional[int] = None,
+        response_format: Optional[dict[str, Any]] = None,
+        retries: int = 0,
     ) -> Optional[str]:
         if not self.is_configured:
             logger.info("[AIClient] API key/base not configured; skipping chat completion.")
@@ -66,28 +68,41 @@ class AIClient:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = response_format
 
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{self.api_base}/chat/completions",
-                    json=payload,
-                    headers=self._headers(),
-                    timeout=timeout,
-                )
-            if resp.status_code != 200:
-                logger.error(
-                    "[AIClient] Chat completion HTTP %s: %s",
-                    resp.status_code,
-                    resp.text[:500],
-                )
+        for attempt in range(retries + 1):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        f"{self.api_base}/chat/completions",
+                        json=payload,
+                        headers=self._headers(),
+                        timeout=timeout,
+                    )
+                if resp.status_code != 200:
+                    logger.error(
+                        "[AIClient] Chat completion HTTP %s: %s",
+                        resp.status_code,
+                        resp.text[:500],
+                    )
+                    return None
+
+                result = resp.json()
+                return result["choices"][0]["message"]["content"].strip()
+            except httpx.ReadTimeout as exc:
+                if attempt < retries:
+                    logger.warning(
+                        "[AIClient] Chat completion read timeout on attempt %s/%s, retrying.",
+                        attempt + 1,
+                        retries + 1,
+                    )
+                    continue
+                logger.error("[AIClient] Chat completion failed after timeout: %s", exc, exc_info=True)
                 return None
-
-            result = resp.json()
-            return result["choices"][0]["message"]["content"].strip()
-        except Exception as exc:
-            logger.error("[AIClient] Chat completion failed: %s", exc, exc_info=True)
-            return None
+            except Exception as exc:
+                logger.error("[AIClient] Chat completion failed: %s", exc, exc_info=True)
+                return None
 
     async def chat_json(
         self,
@@ -97,6 +112,8 @@ class AIClient:
         temperature: float = 0.2,
         timeout: float = 10.0,
         max_tokens: Optional[int] = None,
+        response_format: Optional[dict[str, Any]] = None,
+        retries: int = 0,
     ) -> Optional[Any]:
         content = await self.chat_completion(
             model=model,
@@ -104,6 +121,8 @@ class AIClient:
             temperature=temperature,
             timeout=timeout,
             max_tokens=max_tokens,
+            response_format=response_format,
+            retries=retries,
         )
         if content is None:
             return None

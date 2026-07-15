@@ -26,6 +26,7 @@ export interface PatientRecord {
 export interface TriageMessage {
   role: 'user' | 'assistant'
   content: string
+  content_unicode_escape?: string
 }
 
 export interface TriageData {
@@ -247,7 +248,9 @@ export const patientApi = {
     return http.get<ApiEnvelope<DepartmentOption[]>>('/api/v1/patient/departments')
   },
   triage(payload: TriagePayload) {
-    return http.post<ApiEnvelope<TriageResult>>('/api/v1/patient/triage', payload)
+    return http.post<ApiEnvelope<TriageResult>>('/api/v1/patient/triage', payload, {
+      timeout: 60000,
+    })
   },
   recommendDoctors(payload: DoctorRecommendPayload) {
     return http.post<ApiEnvelope<DoctorRecommendation[]>>('/api/v1/patient/recommend-doctors', payload)

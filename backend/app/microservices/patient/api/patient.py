@@ -70,6 +70,7 @@ class RegisterCreate(BaseModel):
 class TriageMessage(BaseModel):
     role: str
     content: str
+    content_unicode_escape: Optional[str] = None
 
 
 class TriageRequest(BaseModel):
@@ -186,6 +187,40 @@ async def _sync_triage_session_messages(
     new_messages = messages[len(existing_payload):]
     if new_messages:
         await append_ai_conversation_messages(session, session_uuid, new_messages, start_turn_index=len(existing_payload) + 1)
+
+
+def _restore_triage_message_content(content: str, content_unicode_escape: str | None) -> str:
+    normalized_content = str(content or '')
+    escaped_content = str(content_unicode_escape or '').strip()
+    if not escaped_content:
+        return normalized_content
+
+    question_mark_count = normalized_content.count('?')
+    suspicious_placeholder = bool(normalized_content) and question_mark_count >= max(3, len(normalized_content) // 2)
+    if not suspicious_placeholder:
+        return normalized_content
+
+    try:
+        restored = escaped_content.encode('ascii').decode('unicode_escape')
+    except UnicodeDecodeError:
+        return normalized_content
+    return restored or normalized_content
+
+
+def _build_triage_profile_snapshot(patient: Patient | None, *, today: date | None = None) -> dict[str, object] | None:
+    """Keep only the profile facts that the triage model needs for this visit."""
+    if not patient or not patient.birthdate or not patient.gender:
+        return None
+
+    reference_date = today or date.today()
+    age = reference_date.year - patient.birthdate.year
+    if (reference_date.month, reference_date.day) < (patient.birthdate.month, patient.birthdate.day):
+        age -= 1
+
+    return {
+        'gender': patient.gender,
+        'age': max(age, 0),
+    }
 
 
 @router.post('', summary='API endpoint')
@@ -316,13 +351,28 @@ async def get_register_ai_context(register_uuid: uuid_pkg.UUID, session: AsyncSe
 @router.post('/triage', summary='AI 智能分诊')
 async def ai_triage(data: TriageRequest, session: AsyncSession = Depends(get_session)):
     try:
-        messages = [{'role': m.role, 'content': m.content} for m in data.messages]
+        messages = [
+            {
+                'role': m.role,
+                'content': _restore_triage_message_content(m.content, m.content_unicode_escape),
+            }
+            for m in data.messages
+        ]
         triage_session = None
+        profile_snapshot = None
+
+        if data.patient_uuid:
+            patient = await svc.get_patient_by_uuid(session, data.patient_uuid)
+            if not patient:
+                raise ValueError('患者不存在，请重新登录后开始分诊')
+            profile_snapshot = _build_triage_profile_snapshot(patient)
 
         if data.session_uuid:
             triage_session = await get_ai_conversation_session(session, data.session_uuid)
             if not triage_session:
                 raise HTTPException(status_code=400, detail='AI 会话不存在，请重新开始分诊')
+            if data.patient_uuid and triage_session.patient_uuid not in (None, data.patient_uuid):
+                raise ValueError('AI 分诊会话与当前患者不匹配，请重新开始分诊')
         else:
             triage_session = await create_ai_conversation_session(
                 session,
@@ -330,11 +380,13 @@ async def ai_triage(data: TriageRequest, session: AsyncSession = Depends(get_ses
                 module_name='patient.triage',
                 patient_uuid=data.patient_uuid,
                 status='draft',
+                profile_snapshot_json=profile_snapshot,
             )
 
         await _sync_triage_session_messages(session, triage_session.uuid, messages)
         res = await run_ai_triage(
             messages=messages,
+            profile_snapshot=profile_snapshot or triage_session.profile_snapshot_json,
             api_key=settings.LLM_API_KEY,
             api_base=settings.LLM_API_BASE,
             model=settings.LLM_MODEL,
@@ -352,6 +404,7 @@ async def ai_triage(data: TriageRequest, session: AsyncSession = Depends(get_ses
             session,
             triage_session.uuid,
             patient_uuid=data.patient_uuid if data.patient_uuid else triage_session.patient_uuid,
+            profile_snapshot_json=profile_snapshot or triage_session.profile_snapshot_json,
             latest_result_json=res,
             summary_text=symptom_summary,
             source=res.get('source') if isinstance(res, dict) else None,

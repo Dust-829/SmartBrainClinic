@@ -40,14 +40,16 @@ SYSTEM_PROMPT = """
 
 规则：
 1. 只能在以下科室代码中选择：SJWK(神经外科)、XNK(心内科)、GK(骨科)、EK(儿科)、FCK(妇产科)。
-2. 信息不足时继续追问，每次最多追问 1 到 2 个问题。
-3. 禁止直接给出诊断、处方、检查单和治疗方案。
-4. 若用户描述胸痛、呼吸困难、意识不清、大出血、自杀倾向等急症风险，应明确提示立即前往急诊或拨打 120。
-5. 若科室无法确定，必须返回 dept_determined=false 且 recommended_dept_code=null。
-6. 若科室可以确定，返回 dept_determined=true 并填写推荐科室代码。
-7. symptom_summary 要尽量整合主诉、部位、持续时间、伴随症状、既往史。
-8. gender_preference 只能填写：男、女、不限；妇产科默认女，其余情况默认不限。
-9. 只返回 JSON，不要返回 Markdown，不要返回额外解释。
+2. 如果用户明确在问“挂什么科”“挂哪科”“看什么科”，且当前症状或疾病已经足以对应某个科室，则直接给出科室，不要先追问年龄、性别或既往史。
+3. 常见直接分诊线索：高血压、血压高、心慌、心悸、胸痛、胸闷优先推荐 XNK；头痛、眩晕、脑部、昏迷优先推荐 SJWK；骨折、摔伤、扭伤优先推荐 GK；婴儿、儿童优先推荐 EK；怀孕、产检、痛经、阴道出血优先推荐 FCK。
+4. 只有在现有信息仍无法落到以上 5 个科室之一时，才继续追问，每次最多追问 1 到 2 个问题。
+5. 禁止直接给出诊断、处方、检查单和治疗方案。
+6. 若用户描述胸痛、呼吸困难、意识不清、大出血、自杀倾向等急症风险，应明确提示立即前往急诊或拨打 120。
+7. 若科室无法确定，必须返回 dept_determined=false 且 recommended_dept_code=null。
+8. 若科室可以确定，返回 dept_determined=true 并填写推荐科室代码。
+9. symptom_summary 要尽量整合主诉、部位、持续时间、伴随症状、既往史。
+10. gender_preference 只能填写：男、女、不限；妇产科默认女，其余情况默认不限。
+11. 只返回 JSON，不要返回 Markdown，不要返回额外解释。
 
 返回格式：
 {
@@ -62,6 +64,7 @@ SYSTEM_PROMPT = """
 
 async def run_ai_triage(
     messages: List[Dict[str, str]],
+    profile_snapshot: Dict[str, Any] | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     model: str | None = None,
@@ -89,12 +92,14 @@ async def run_ai_triage(
     else:
         logger.info('[AI Triage] Invoking real LLM for multi-turn triage.')
         try:
-            full_messages = _build_triage_llm_messages(messages)
+            full_messages = _build_triage_llm_messages(messages, profile_snapshot=profile_snapshot)
             data = await AIClient(api_key=api_key, api_base=api_base).chat_json(
                 model=model,
                 messages=full_messages,
                 temperature=0.3,
-                timeout=10.0,
+                timeout=20.0,
+                response_format={"type": "json_object"},
+                retries=1,
             )
             if data:
                 dept_code = data.get('recommended_dept_code')
@@ -204,12 +209,19 @@ async def run_ai_triage(
     return result
 
 
-def _build_triage_llm_messages(messages: List[Dict[str, str]]) -> list[dict[str, str]]:
+def _build_triage_llm_messages(
+    messages: List[Dict[str, str]],
+    *,
+    profile_snapshot: Dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
     normalized_messages = _normalize_triage_messages(messages)
     recent_messages = normalized_messages[-MAX_TRIAGE_RECENT_MESSAGES:]
     older_messages = normalized_messages[:-MAX_TRIAGE_RECENT_MESSAGES]
 
     llm_messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+    profile_context = _build_triage_profile_context(profile_snapshot)
+    if profile_context:
+        llm_messages.append({'role': 'system', 'content': profile_context})
     memory = _build_triage_memory(older_messages)
     if memory:
         llm_messages.append(
@@ -220,6 +232,21 @@ def _build_triage_llm_messages(messages: List[Dict[str, str]]) -> list[dict[str,
         )
     llm_messages.extend(recent_messages)
     return llm_messages
+
+
+def _build_triage_profile_context(profile_snapshot: Dict[str, Any] | None) -> str:
+    if not isinstance(profile_snapshot, dict):
+        return ''
+
+    gender = str(profile_snapshot.get('gender') or '').strip()
+    age = profile_snapshot.get('age')
+    if not gender or not isinstance(age, int) or age < 0:
+        return ''
+
+    return (
+        f'当前患者基础档案已确认：性别为{gender}，年龄为{age}岁。'
+        '这是系统已提供的信息，不要再次询问患者年龄或性别；仅追问缺失的症状细节。'
+    )
 
 
 def _normalize_triage_messages(messages: List[Dict[str, str]]) -> list[dict[str, str]]:
@@ -410,6 +437,23 @@ def _contains_triage_detail(text: str) -> bool:
     return any(term in text for term in detail_terms)
 
 
+def _is_department_selection_query(text: str) -> bool:
+    normalized = str(text or '').strip()
+    if not normalized:
+        return False
+
+    query_markers = (
+        '挂什么科',
+        '挂哪科',
+        '挂什么科室',
+        '看什么科',
+        '看哪科',
+        '去什么科',
+        '推荐科室',
+    )
+    return any(marker in normalized for marker in query_markers)
+
+
 def _clamp_confidence(value: float) -> float:
     return round(max(0.05, min(0.95, value)), 2)
 
@@ -473,8 +517,11 @@ def _should_use_rule_fallback(
         return False
 
     patient_text = _collect_user_text(messages)
-    if not _contains_triage_detail(patient_text):
+    is_department_query = _is_department_selection_query(patient_text)
+    if not _contains_triage_detail(patient_text) and not is_department_query:
         return False
+    if is_department_query:
+        return True
 
     reply = str(llm_data.get('reply') or '')
     summary = str(llm_data.get('symptom_summary') or '').strip()
@@ -504,7 +551,26 @@ def _mock_multi_turn_triage(messages: List[Dict[str, str]]) -> Dict[str, Any]:
         dept_code = 'FCK'
     elif any(keyword in user_texts_lower for keyword in ['小儿', '婴儿', '儿童', '小孩', '宝宝']):
         dept_code = 'EK'
-    elif any(keyword in user_texts_lower for keyword in ['发热', '咳嗽', '感冒', '流感', '胸闷', '胃痛', '心脏', '心慌']):
+    elif any(
+        keyword in user_texts_lower
+        for keyword in [
+            '发热',
+            '咳嗽',
+            '感冒',
+            '流感',
+            '胸闷',
+            '胃痛',
+            '心脏',
+            '心慌',
+            '高血压',
+            '血压高',
+            '血压偏高',
+            '低血压',
+            '心悸',
+            '心率',
+            '胸痛',
+        ]
+    ):
         dept_code = 'XNK'
 
     user_msg_count = len([message for message in messages if message.get('role') == 'user'])
