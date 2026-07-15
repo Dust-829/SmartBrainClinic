@@ -16,3 +16,17 @@ def test_doctor_encounter_keeps_ai_prescription_recommendation_separate_from_cre
     assert "医生确认并开立" in encounter_source
     assert encounter_source.index('AI 处方建议') > encounter_source.index('<aside class="doctor-encounter__sidebar">')
     assert encounter_source.index('AI 处方建议') > encounter_source.index('本次 AI 分诊')
+
+
+def test_doctor_encounter_keeps_work_area_before_ai_support_on_narrow_screens():
+    encounter_source = Path("../frontend/src/views/doctor/DoctorEncounterView.vue").read_text(encoding="utf-8")
+
+    workspace_index = encounter_source.index('<div class="doctor-encounter__workspace">')
+    main_index = encounter_source.index('<div class="doctor-encounter__main">')
+    sidebar_index = encounter_source.index('<aside class="doctor-encounter__sidebar">')
+    narrow_media_index = encounter_source.index('@media (max-width: 1180px)')
+    narrow_media_source = encounter_source[narrow_media_index:]
+
+    assert workspace_index < main_index < sidebar_index
+    assert '.doctor-encounter__workspace,' in narrow_media_source
+    assert 'grid-template-columns: 1fr;' in narrow_media_source
