@@ -87,7 +87,10 @@ def select_validated_llm_order_candidates(
     if max_items <= 0:
         return [], []
     if not isinstance(llm_items, list):
-        return fallback_items, ["llm_order_invalid_payload_fallback"]
+        return fallback_items, [
+            "llm_order_invalid_payload_fallback",
+            "llm_order_no_valid_result_fallback",
+        ]
 
     candidates_by_id = {
         item.get("medical_technology_id"): dict(item)

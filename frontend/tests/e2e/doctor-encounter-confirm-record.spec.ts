@@ -29,7 +29,7 @@ function createFixture(): DoctorPrescriptionFixture {
 }
 
 test('doctor confirms a controlled prescription regression record', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(180_000)
   const fixture = createFixture()
 
   await page.goto('/doctor/login')

@@ -139,9 +139,9 @@ async def _rank_rule_candidates_with_llm(
                 {"role": "user", "content": _build_order_ranking_context(clinical_text, rule_candidates)},
             ],
             temperature=0.1,
-            timeout=12.0,
+            timeout=8.0,
             response_format={"type": "json_object"},
-            retries=1,
+            retries=0,
         )
         llm_items = llm_data.get("items") if isinstance(llm_data, Mapping) else None
         candidates, validation_warnings = select_validated_llm_order_candidates(

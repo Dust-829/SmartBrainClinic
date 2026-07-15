@@ -93,3 +93,20 @@ def test_llm_ranking_discards_catalog_mismatch_and_falls_back_to_rule_candidates
     assert "llm_order_catalog_mismatch_discarded" in warnings
     assert "llm_order_reason_missing_discarded" in warnings
     assert "llm_order_no_valid_result_fallback" in warnings
+
+
+def test_llm_ranking_marks_invalid_payload_as_a_rule_fallback():
+    rule_candidates = build_rule_order_candidates(
+        clinical_text="突发头痛伴眩晕，需要排除急性颅内问题",
+        technologies=CATALOG,
+        ordered_technology_ids=[],
+    )
+
+    selected, warnings = select_validated_llm_order_candidates(
+        rule_candidates=rule_candidates,
+        llm_items={"items": []},
+    )
+
+    assert selected == rule_candidates
+    assert "llm_order_invalid_payload_fallback" in warnings
+    assert "llm_order_no_valid_result_fallback" in warnings
