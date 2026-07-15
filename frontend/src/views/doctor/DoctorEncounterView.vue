@@ -17,7 +17,7 @@ import {
   type RegisterMedicalRequests,
   type SimilarMedicalRecord,
 } from '@/api/medical'
-import { patientApi, type RegisterDetail } from '@/api/patient'
+import { patientApi, type RegisterAIContext, type RegisterDetail } from '@/api/patient'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { useDoctorSessionStore } from '@/stores/doctorSession'
 
@@ -48,6 +48,9 @@ const assistantQuestion = ref('')
 const assistantAnswer = ref('')
 const assistantLoading = ref(false)
 const registerDetail = ref<RegisterDetail | null>(null)
+const triageContext = ref<RegisterAIContext | null>(null)
+const triageContextLoading = ref(false)
+const triageContextError = ref('')
 const technologyLoading = ref(false)
 const technologyErrorMessage = ref('')
 const queueLoading = ref(false)
@@ -112,6 +115,7 @@ const registerId = computed(() => String(route.params.registerId ?? ''))
 const doctor = computed(() => session.staff)
 const pageTitle = computed(() => registerDetail.value?.patient_name || '接诊详情')
 const doctorDisplay = computed(() => doctor.value?.displayName || '当前医生')
+const triageMessages = computed(() => triageContext.value?.messages ?? [])
 const allTechnologyOptions = computed(() => [
   ...technologyOptions.check.map((item) => ({ ...item, orderType: 'check' as const })),
   ...technologyOptions.inspection.map((item) => ({ ...item, orderType: 'inspection' as const })),
@@ -173,6 +177,35 @@ function resetOrderDraft() {
   orderDraft.medicalTechnologyId = null
   orderDraft.checkInfo = ''
   orderDraft.checkPosition = ''
+}
+
+function triageSourceLabel(source?: string | null) {
+  const labels: Record<string, string> = {
+    llm: '真实 AI 分诊',
+    fallback: '安全兜底分诊',
+    rule: '规则分诊',
+    mock: '模拟分诊',
+  }
+  return labels[source || ''] || 'AI 分诊记录'
+}
+
+async function loadTriageContext() {
+  if (!registerId.value) return
+
+  triageContextLoading.value = true
+  triageContextError.value = ''
+  triageContext.value = null
+  try {
+    const response = await patientApi.getRegisterAIContext(registerId.value)
+    triageContext.value = response.data.data ?? null
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response?.status
+    if (status !== 404) {
+      triageContextError.value = getErrorMessage(error, 'AI 分诊上下文暂时无法读取，不影响本次接诊。')
+    }
+  } finally {
+    triageContextLoading.value = false
+  }
 }
 
 function syncOrderSelection() {
@@ -376,6 +409,8 @@ async function loadEncounter() {
   loading.value = true
   errorMessage.value = ''
   draftMissing.value = false
+  triageContext.value = null
+  triageContextError.value = ''
   similarCases.value = []
   assistantAnswer.value = ''
   assistantQuestion.value = ''
@@ -398,7 +433,7 @@ async function loadEncounter() {
       }
     }
 
-    await Promise.all([loadMedicalTechnologies(), loadRequestQueue(), loadArtifactSources()])
+    await Promise.all([loadMedicalTechnologies(), loadRequestQueue(), loadArtifactSources(), loadTriageContext()])
   } catch (error) {
     registerDetail.value = null
     errorMessage.value = getErrorMessage(error, '接诊详情加载失败，请稍后重试。')
@@ -1449,6 +1484,54 @@ onBeforeUnmount(() => {
             </div>
 
             <aside class="doctor-encounter__sidebar">
+              <SectionCard title="本次 AI 分诊" subtitle="只读参考信息，不会自动写入病历或诊断。">
+                <template #extra>
+                  <span v-if="triageContext" class="doctor-encounter__badge is-progress">
+                    {{ triageSourceLabel(triageContext.source) }}
+                  </span>
+                </template>
+
+                <div v-if="triageContextLoading" class="doctor-encounter__state is-plain">
+                  <strong>正在读取分诊上下文</strong>
+                  <p>正在整理本次患者与 AI 的关键问答。</p>
+                </div>
+
+                <div v-else-if="triageContextError" class="doctor-encounter__state is-error">
+                  <strong>{{ triageContextError }}</strong>
+                  <button type="button" class="doctor-encounter__secondary" @click="loadTriageContext">重新读取</button>
+                </div>
+
+                <div v-else-if="triageContext" class="doctor-encounter__triage-context">
+                  <div class="doctor-encounter__triage-summary">
+                    <span>分诊摘要</span>
+                    <strong>{{ triageContext.summary_text || '本次分诊未形成症状摘要。' }}</strong>
+                  </div>
+                  <dl v-if="triageContext.profile_snapshot" class="doctor-encounter__triage-profile">
+                    <div v-if="triageContext.profile_snapshot.gender">
+                      <dt>性别</dt>
+                      <dd>{{ triageContext.profile_snapshot.gender }}</dd>
+                    </div>
+                    <div v-if="typeof triageContext.profile_snapshot.age === 'number'">
+                      <dt>年龄</dt>
+                      <dd>{{ triageContext.profile_snapshot.age }} 岁</dd>
+                    </div>
+                  </dl>
+                  <div class="doctor-encounter__triage-transcript">
+                    <span>关键问答</span>
+                    <article v-for="message in triageMessages" :key="message.turn_index" :class="`is-${message.role}`">
+                      <strong>{{ message.role === 'user' ? '患者' : 'AI 分诊' }}</strong>
+                      <p>{{ message.content }}</p>
+                    </article>
+                  </div>
+                  <p class="doctor-encounter__hint">AI 内容仅用于辅助了解本次情况，诊疗结论仍由医生独立确认。</p>
+                </div>
+
+                <div v-else class="doctor-encounter__state is-plain">
+                  <strong>本次未使用 AI 分诊</strong>
+                  <p>患者可能通过手动选科挂号，当前没有可供查看的 AI 问答记录。</p>
+                </div>
+              </SectionCard>
+
               <SectionCard title="相似病历召回" subtitle="用当前症状与诊断去召回已确认的历史病历。">
                 <template #extra>
                   <span class="doctor-encounter__badge is-live">已实现</span>
@@ -1695,6 +1778,72 @@ onBeforeUnmount(() => {
   color: #64748b;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.doctor-encounter__triage-context,
+.doctor-encounter__triage-summary,
+.doctor-encounter__triage-transcript {
+  display: grid;
+  gap: 10px;
+}
+
+.doctor-encounter__triage-summary > span,
+.doctor-encounter__triage-transcript > span,
+.doctor-encounter__triage-profile dt {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.doctor-encounter__triage-summary strong {
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.doctor-encounter__triage-profile {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+}
+
+.doctor-encounter__triage-profile div {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: #f1f5f9;
+}
+
+.doctor-encounter__triage-profile dd {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.doctor-encounter__triage-transcript article {
+  display: grid;
+  gap: 5px;
+  padding: 10px 0;
+  border-top: 1px solid #e2e8f0;
+}
+
+.doctor-encounter__triage-transcript article strong {
+  color: #0f766e;
+  font-size: 12px;
+}
+
+.doctor-encounter__triage-transcript article.is-assistant strong {
+  color: #1d4ed8;
+}
+
+.doctor-encounter__triage-transcript article p {
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .doctor-encounter__field,

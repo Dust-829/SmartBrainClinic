@@ -237,6 +237,25 @@ export interface RegisterDetail {
   clinic_room_location?: string | null
 }
 
+export interface RegisterAIContextMessage {
+  turn_index: number
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface RegisterAIContext {
+  session_uuid: string
+  summary_text?: string | null
+  profile_snapshot?: {
+    gender?: string
+    age?: number
+  } | null
+  source?: string | null
+  model?: string | null
+  validated?: boolean
+  messages: RegisterAIContextMessage[]
+}
+
 export const patientApi = {
   createPatient(payload: PatientCreatePayload) {
     return http.post<ApiEnvelope<PatientRecord>>('/api/v1/patient', payload)
@@ -287,6 +306,9 @@ export const patientApi = {
   },
   getRegisterDetail(registerUuid: string) {
     return http.get<ApiEnvelope<RegisterDetail>>(`/api/v1/patient/register/${registerUuid}`)
+  },
+  getRegisterAIContext(registerUuid: string) {
+    return http.get<ApiEnvelope<RegisterAIContext>>(`/api/v1/patient/register/${registerUuid}/ai-context`)
   },
   getRegisterHistory(patientUuid: string) {
     return http.get<ApiEnvelope<RegisterDetail[]>>(`/api/v1/patient/${patientUuid}/registers/detail`)
