@@ -5,6 +5,7 @@ import { expect, test } from '@playwright/test'
 
 type DoctorPrescriptionFixture = {
   doctor_uuid: string
+  register_uuid: string
   encounter_url: string
 }
 
@@ -68,5 +69,30 @@ test('doctor confirms a controlled prescription regression record', async ({ pag
   const quantityInput = pendingItem.locator('input[type="number"]')
   await quantityInput.fill('2')
   await expect(quantityInput).toHaveValue('2')
-  await expect(page.getByRole('button', { name: /医生确认并开立/ })).toBeEnabled()
+  const createButton = page.getByRole('button', { name: /医生确认并开立/ })
+  await expect(createButton).toBeEnabled()
+  const createResponse = page.waitForResponse((response) =>
+    response.url().includes('/api/v1/pharmacy/prescription') && response.request().method() === 'POST',
+  )
+  await createButton.click()
+  const createdResponse = await createResponse
+  await expect(createdResponse.status()).toBe(200)
+  const createdPayload = (await createdResponse.json()) as { code: number; data: { uuid: string } }
+  expect(createdPayload.code).toBe(201)
+  const prescriptionUuid = createdPayload.data.uuid
+  await expect(page.locator('.doctor-encounter__prescription-created')).toBeVisible()
+
+  const apiBaseUrl = process.env.E2E_API_BASE_URL ?? 'http://localhost:8000'
+  const detailResult = await page.evaluate(async ({ baseUrl, uuid }) => {
+    const response = await fetch(`${baseUrl}/api/v1/pharmacy/admin/workbench/prescriptions/${uuid}`)
+    return { status: response.status, payload: await response.json() }
+  }, { baseUrl: apiBaseUrl, uuid: prescriptionUuid })
+  expect(detailResult.status).toBe(200)
+  const detailPayload = detailResult.payload as {
+    data: { header: { register_uuid: string; is_ai_recommended: boolean }; items: Array<{ drug_number: number }> }
+  }
+  expect(detailPayload.data.header.register_uuid).toBe(fixture.register_uuid)
+  expect(detailPayload.data.header.is_ai_recommended).toBe(true)
+  expect(detailPayload.data.items.length).toBeGreaterThan(0)
+  expect(detailPayload.data.items[0].drug_number).toBe(2)
 })
