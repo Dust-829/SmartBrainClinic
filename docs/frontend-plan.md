@@ -221,7 +221,7 @@ AI 辅助与布局（已完成 / 待验证）：
 
 ### 后续切片
 
-1. 按 [AI 检查检验建议实施计划](./ai-check-inspection-recommendation-plan.md) 实现只读后端接口：只返回检查、检验候选项目和理由，不自动创建订单；医生筛选后复用 `POST /api/v1/medical/orders/sign` 签署。
+1. 按 [AI 检查检验建议实施计划](./ai-check-inspection-recommendation-plan.md) 接入只读后端接口：受控规则候选已完成，下一步读取已确认病历、真实目录和已开项目后返回检查、检验候选及理由；不自动创建订单。
 2. 非空医生队列可视化回归。
 3. 管理员真实鉴权和排班管理。
 4. 三端完整演示回归。
