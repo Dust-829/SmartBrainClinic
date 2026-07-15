@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..services import medical_service as svc
+from ..services import ai_order_recommendation_service as ai_order_recommendation_svc
 from app.common.response import success, created
 from ..models.medical import MedicalTechnology
 from pydantic import BaseModel, Field
@@ -41,6 +42,10 @@ class OrderSignItem(BaseModel):
 class OrderSignRequest(BaseModel):
     register_uuid: uuid_pkg.UUID
     items: list[OrderSignItem] = Field(min_length=1)
+
+
+class AIOrderRecommendationRequest(BaseModel):
+    register_uuid: uuid_pkg.UUID
 
 
 class RefundItem(BaseModel):
@@ -208,6 +213,17 @@ async def sign_orders(
             background_tasks,
         )
         return created({"count": len(items), "items": items})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/ai-recommendation", summary="AI 检查检验候选建议")
+async def recommend_orders(
+    data: AIOrderRecommendationRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        return success(await ai_order_recommendation_svc.recommend_order_candidates(session, data.register_uuid))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
