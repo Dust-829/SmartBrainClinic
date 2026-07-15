@@ -64,6 +64,15 @@ test('doctor confirms a controlled prescription regression record', async ({ pag
   await recommendationButton.click()
   await expect((await recommendationResponse).status()).toBe(200)
 
+  const orderRecommendationButton = page.locator('.doctor-encounter__ai-order-workspace .doctor-encounter__secondary')
+  await expect(orderRecommendationButton).toBeEnabled()
+  const orderRecommendationResponse = page.waitForResponse((response) =>
+    response.url().includes('/api/v1/medical/orders/ai-recommendation') && response.request().method() === 'POST',
+  )
+  await orderRecommendationButton.click()
+  await expect((await orderRecommendationResponse).status()).toBe(200)
+  await expect(page.locator('.doctor-encounter__ai-order-context')).toBeVisible()
+
   const pendingItem = page.locator('.doctor-encounter__prescription-item').first()
   await expect(pendingItem).toBeVisible()
   const quantityInput = pendingItem.locator('input[type="number"]')

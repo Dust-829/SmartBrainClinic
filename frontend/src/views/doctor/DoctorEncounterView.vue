@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 
 import {
+  type AIOrderRecommendationResult,
   type ArtifactInferenceTask,
   type ArtifactInputSource,
   type InspectionReportResultItem,
@@ -188,6 +189,12 @@ const canCreatePrescription = computed(
       (item) => item.drug_usage.trim() && Number.isInteger(Number(item.drug_number)) && Number(item.drug_number) > 0,
     ),
 )
+const orderRecommendationLoading = ref(false)
+const orderRecommendationError = ref('')
+const orderRecommendation = ref<AIOrderRecommendationResult | null>(null)
+const canGenerateOrderRecommendation = computed(
+  () => isMedicalRecordConfirmed.value && !orderRecommendationLoading.value,
+)
 
 function getErrorMessage(error: unknown, fallback: string) {
   const detail = (error as { response?: { data?: { detail?: string; message?: string } } })?.response?.data
@@ -212,6 +219,12 @@ function resetPrescriptionWorkspace() {
   prescriptionRecommendation.value = null
   pendingPrescriptionItems.value = []
   createdPrescription.value = null
+}
+
+function resetOrderRecommendationWorkspace() {
+  orderRecommendationLoading.value = false
+  orderRecommendationError.value = ''
+  orderRecommendation.value = null
 }
 
 function resetOrderDraft() {
@@ -456,6 +469,7 @@ async function loadEncounter() {
   assistantAnswer.value = ''
   assistantQuestion.value = ''
   resetPrescriptionWorkspace()
+  resetOrderRecommendationWorkspace()
 
   try {
     const detailResponse = await patientApi.getRegisterDetail(registerId.value)
@@ -551,6 +565,29 @@ async function generatePrescriptionRecommendation() {
   } finally {
     prescriptionRecommendationLoading.value = false
   }
+}
+
+async function generateOrderRecommendation() {
+  if (!registerId.value || !canGenerateOrderRecommendation.value) return
+
+  orderRecommendationLoading.value = true
+  orderRecommendationError.value = ''
+  try {
+    const response = await medicalApi.recommendOrderCandidates(registerId.value)
+    orderRecommendation.value = response.data.data ?? null
+    if (!orderRecommendation.value?.items.length) {
+      ElMessage.info('当前病历没有返回可供医生确认的检查检验建议。')
+    }
+  } catch (error) {
+    orderRecommendation.value = null
+    orderRecommendationError.value = getErrorMessage(error, '检查检验建议生成失败，请稍后重试。')
+  } finally {
+    orderRecommendationLoading.value = false
+  }
+}
+
+function orderRecommendationSourceLabel(source?: string | null) {
+  return source === 'record_catalog_rule' ? '受控规则候选' : '安全校验结果'
 }
 
 function removePendingPrescriptionItem(localId: number) {
@@ -1698,6 +1735,58 @@ onBeforeUnmount(() => {
                 </div>
               </SectionCard>
 
+              <SectionCard title="AI 检查检验建议" subtitle="只展示候选项目和理由；本步不会自动加入待签清单或创建订单。">
+                <template #extra>
+                  <span class="doctor-encounter__badge" :class="isMedicalRecordConfirmed ? 'is-live' : 'is-progress'">
+                    {{ isMedicalRecordConfirmed ? '可生成建议' : '等待病历确认' }}
+                  </span>
+                </template>
+
+                <div v-if="!isMedicalRecordConfirmed" class="doctor-encounter__state is-plain">
+                  <strong>请先确认本次病历</strong>
+                  <p>候选只读取已确认病历、实时项目目录和已开项目，避免根据未定稿信息建议检查或检验。</p>
+                </div>
+
+                <div v-else class="doctor-encounter__ai-order-workspace">
+                  <div class="doctor-encounter__panel-actions">
+                    <button
+                      type="button"
+                      class="doctor-encounter__secondary"
+                      :disabled="!canGenerateOrderRecommendation"
+                      @click="generateOrderRecommendation"
+                    >
+                      {{ orderRecommendationLoading ? '生成中...' : '生成 AI 检查检验建议' }}
+                    </button>
+                  </div>
+
+                  <div v-if="orderRecommendationError" class="doctor-encounter__state is-error">
+                    <strong>{{ orderRecommendationError }}</strong>
+                    <button type="button" class="doctor-encounter__secondary" @click="generateOrderRecommendation">重新生成</button>
+                  </div>
+
+                  <div v-else-if="orderRecommendation" class="doctor-encounter__ai-order-context">
+                    <span>来源：{{ orderRecommendationSourceLabel(orderRecommendation.source) }}</span>
+                    <span>{{ orderRecommendation.triage_context_used ? '已参考本次 AI 分诊上下文' : '本次未获取到 AI 分诊上下文，已按病历和目录生成' }}</span>
+                  </div>
+
+                  <section v-if="orderRecommendation" class="doctor-encounter__ai-order-list" aria-label="AI 检查检验候选">
+                    <div v-if="!orderRecommendation.items.length" class="doctor-encounter__state is-plain">
+                      <strong>没有安全候选项目</strong>
+                      <p>当前信息不足、项目已开立或目录中没有匹配项目。本次不会创建任何订单。</p>
+                    </div>
+                    <article v-for="item in orderRecommendation.items" :key="`${item.type}-${item.medical_technology_id}`" class="doctor-encounter__ai-order-item">
+                      <div class="doctor-encounter__pending-title">
+                        <span class="doctor-encounter__type-tag" :class="`is-${item.type}`">{{ medicalTypeLabel(item.type) }}</span>
+                        <strong>{{ item.tech_name || '未命名项目' }}</strong>
+                      </div>
+                      <p>{{ item.reason }}</p>
+                      <span v-if="item.type === 'check'">建议部位：{{ item.check_position || '请医生补充' }}；建议目的：{{ item.check_info || '请医生补充' }}</span>
+                      <span>参考价格：{{ formatPrice(item.price) }}。医生确认后才可在下一步加入待签清单。</span>
+                    </article>
+                  </section>
+                </div>
+              </SectionCard>
+
               <SectionCard title="相似病历召回" subtitle="用当前症状与诊断去召回已确认的历史病历。">
                 <template #extra>
                   <span class="doctor-encounter__badge is-live">已实现</span>
@@ -1900,7 +1989,9 @@ onBeforeUnmount(() => {
 .doctor-encounter__similar-list,
 .doctor-encounter__form,
 .doctor-encounter__prescription-workspace,
-.doctor-encounter__prescription-list {
+.doctor-encounter__prescription-list,
+.doctor-encounter__ai-order-workspace,
+.doctor-encounter__ai-order-list {
   display: grid;
   gap: 16px;
 }
@@ -2738,7 +2829,9 @@ onBeforeUnmount(() => {
 
 .doctor-encounter__prescription-context,
 .doctor-encounter__prescription-item,
-.doctor-encounter__prescription-created {
+.doctor-encounter__prescription-created,
+.doctor-encounter__ai-order-context,
+.doctor-encounter__ai-order-item {
   display: grid;
   gap: 10px;
   padding: 14px;
@@ -2751,6 +2844,18 @@ onBeforeUnmount(() => {
   color: #475569;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.doctor-encounter__ai-order-context,
+.doctor-encounter__ai-order-item > span {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.doctor-encounter__ai-order-context {
+  background: #eff6ff;
+  border-color: #bfdbfe;
 }
 
 .doctor-encounter__prescription-heading {

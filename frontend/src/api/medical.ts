@@ -104,6 +104,26 @@ export interface OrderSignResult {
   items: OrderSignResultItem[]
 }
 
+export type AIOrderRecommendationType = 'check' | 'inspection'
+
+export interface AIOrderRecommendationItem {
+  type: AIOrderRecommendationType
+  medical_technology_id: number
+  tech_code?: string | null
+  tech_name?: string | null
+  price: string
+  reason: string
+  check_position?: string | null
+  check_info?: string | null
+}
+
+export interface AIOrderRecommendationResult {
+  items: AIOrderRecommendationItem[]
+  source: string
+  triage_context_used: boolean
+  warnings: string[]
+}
+
 export interface MedicalRequestItem {
   uuid: string
   register_uuid: string
@@ -243,6 +263,11 @@ export const medicalApi = {
   },
   signOrders(payload: OrderSignPayload) {
     return http.post<ApiEnvelope<OrderSignResult>>('/api/v1/medical/orders/sign', payload)
+  },
+  recommendOrderCandidates(registerUuid: string) {
+    return http.post<ApiEnvelope<AIOrderRecommendationResult>>('/api/v1/medical/orders/ai-recommendation', {
+      register_uuid: registerUuid,
+    })
   },
   getRegisterRequests(registerUuid: string) {
     return http.get<ApiEnvelope<RegisterMedicalRequests>>(`/api/v1/medical/requests/register/${registerUuid}`)
