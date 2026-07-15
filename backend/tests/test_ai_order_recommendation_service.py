@@ -60,6 +60,11 @@ async def test_recommendation_service_uses_catalog_and_excludes_existing_orders(
         return {"summary_text": "突发头痛伴眩晕", "messages": []}
 
     monkeypatch.setattr(recommendation_service.PatientClient, "get_register_ai_context", triage_context)
+    monkeypatch.setattr(
+        recommendation_service,
+        "settings",
+        SimpleNamespace(LLM_API_KEY="", LLM_API_BASE="https://llm.example/v1", LLM_MODEL="test-model"),
+    )
     record = SimpleNamespace(
         is_doctor_confirmed=True,
         readme="头痛",
@@ -83,3 +88,58 @@ async def test_recommendation_service_uses_catalog_and_excludes_existing_orders(
     assert all(item["medical_technology_id"] != 1 for item in result["items"])
     assert all(item["type"] in {"check", "inspection"} for item in result["items"])
     assert session.write_calls == []
+
+
+@pytest.mark.asyncio
+async def test_recommendation_service_uses_llm_only_for_whitelisted_ranking_and_audits(monkeypatch):
+    async def triage_context(_register_uuid):
+        return {"summary_text": "突发头痛伴眩晕", "messages": []}
+
+    audit_calls = []
+
+    class _FakeAIClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def chat_json(self, **_kwargs):
+            return {
+                "items": [
+                    {"medical_technology_id": 2, "reason": "优先结合医生查体评估神经系统症状。", "price": "0.01"},
+                    {"medical_technology_id": 999, "reason": "目录外项目"},
+                ]
+            }
+
+    async def audit_spy(**kwargs):
+        audit_calls.append(kwargs)
+
+    monkeypatch.setattr(recommendation_service.PatientClient, "get_register_ai_context", triage_context)
+    monkeypatch.setattr(recommendation_service, "AIClient", _FakeAIClient)
+    monkeypatch.setattr(recommendation_service, "record_ai_audit", audit_spy)
+    monkeypatch.setattr(
+        recommendation_service,
+        "settings",
+        SimpleNamespace(LLM_API_KEY="test-key", LLM_API_BASE="https://llm.example/v1", LLM_MODEL="test-model"),
+    )
+    record = SimpleNamespace(
+        is_doctor_confirmed=True,
+        readme="头痛",
+        present="突发头痛伴眩晕",
+        history="",
+        physique="",
+        diagnosis="急性神经系统症状待排",
+        proposal="",
+    )
+    catalog = [
+        SimpleNamespace(id=1, tech_code="DEMO_CT_HEAD", tech_name="头颅CT", tech_type="check", price="180.00"),
+        SimpleNamespace(id=2, tech_code="DEMO_MRI_HEAD", tech_name="头颅MRI", tech_type="check", price="680.00"),
+    ]
+    session = _ReadOnlySession([[record], catalog, [], []])
+
+    result = await recommendation_service.recommend_order_candidates(session, "e47f3a0d-4f59-4699-902a-f24aac30f972")
+
+    assert result["source"] == "llm_catalog_validated"
+    assert [item["medical_technology_id"] for item in result["items"]] == [2]
+    assert result["items"][0]["price"] == "680.00"
+    assert "llm_order_catalog_mismatch_discarded" in result["warnings"]
+    assert audit_calls[0]["module_name"] == "medical.order_recommendation"
+    assert audit_calls[0]["result"]["source"] == "llm"

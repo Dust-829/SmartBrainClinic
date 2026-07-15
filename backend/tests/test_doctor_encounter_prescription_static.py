@@ -42,6 +42,7 @@ def test_doctor_encounter_keeps_ai_order_recommendations_separate_from_order_cre
     assert "function addOrderRecommendationToPending(item: PendingOrderRecommendationItem)" in encounter_source
     assert "pendingOrders.value.push({" in encounter_source
     assert "async function signPendingOrders()" in encounter_source
+    assert "source === 'llm_catalog_validated'" in encounter_source
     assert "AI 检查检验建议" in encounter_source
     assert "加入待签清单后仍需医生统一签署才会开立" in encounter_source
     assert encounter_source.index("AI 检查检验建议") > encounter_source.index('<aside class="doctor-encounter__sidebar">')

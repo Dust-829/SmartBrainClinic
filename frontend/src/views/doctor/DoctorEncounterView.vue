@@ -602,6 +602,7 @@ async function generateOrderRecommendation() {
 }
 
 function orderRecommendationSourceLabel(source?: string | null) {
+  if (source === 'llm_catalog_validated') return 'LLM 白名单校验结果'
   return source === 'record_catalog_rule' ? '受控规则候选' : '安全校验结果'
 }
 
