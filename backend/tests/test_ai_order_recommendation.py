@@ -1,4 +1,7 @@
-from app.microservices.medical.services.ai_order_recommendation import build_rule_order_candidates
+from app.microservices.medical.services.ai_order_recommendation import (
+    build_rule_order_candidates,
+    select_validated_llm_order_candidates,
+)
 
 
 CATALOG = [
@@ -42,3 +45,51 @@ def test_rule_candidates_do_not_guess_without_a_supported_clinical_trigger():
     )
 
     assert candidates == []
+
+
+def test_llm_ranking_keeps_only_catalog_whitelist_fields_and_reason():
+    rule_candidates = build_rule_order_candidates(
+        clinical_text="突发头痛伴眩晕，需要排除急性颅内问题",
+        technologies=CATALOG,
+        ordered_technology_ids=[],
+    )
+
+    selected, warnings = select_validated_llm_order_candidates(
+        rule_candidates=rule_candidates,
+        llm_items=[
+            {
+                "medical_technology_id": 1,
+                "reason": "需由医生结合查体判断是否优先排除急性颅内病变。",
+                "type": "disposal",
+                "price": "0.01",
+                "check_position": "全身",
+            },
+        ],
+    )
+
+    assert warnings == []
+    assert [item["medical_technology_id"] for item in selected] == [1]
+    assert selected[0]["type"] == "check"
+    assert selected[0]["price"] == "180.00"
+    assert selected[0]["check_position"] == "头部"
+
+
+def test_llm_ranking_discards_catalog_mismatch_and_falls_back_to_rule_candidates():
+    rule_candidates = build_rule_order_candidates(
+        clinical_text="突发头痛伴眩晕，需要排除急性颅内问题",
+        technologies=CATALOG,
+        ordered_technology_ids=[],
+    )
+
+    selected, warnings = select_validated_llm_order_candidates(
+        rule_candidates=rule_candidates,
+        llm_items=[
+            {"medical_technology_id": 999, "reason": "目录外项目"},
+            {"medical_technology_id": 1, "reason": ""},
+        ],
+    )
+
+    assert selected == rule_candidates
+    assert "llm_order_catalog_mismatch_discarded" in warnings
+    assert "llm_order_reason_missing_discarded" in warnings
+    assert "llm_order_no_valid_result_fallback" in warnings

@@ -71,6 +71,60 @@ def build_rule_order_candidates(
     return [item for _, _, item in candidates[:max_items]]
 
 
+def select_validated_llm_order_candidates(
+    *,
+    rule_candidates: Iterable[Mapping[str, Any]],
+    llm_items: Any,
+    max_items: int = 3,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Keep only LLM rankings that reference the server-generated candidate whitelist.
+
+    The LLM may change ordering and supply a concise reason. Catalog identity, type,
+    price, and check details always remain the server-generated values.
+    """
+
+    fallback_items = [dict(item) for item in rule_candidates][:max_items]
+    if max_items <= 0:
+        return [], []
+    if not isinstance(llm_items, list):
+        return fallback_items, ["llm_order_invalid_payload_fallback"]
+
+    candidates_by_id = {
+        item.get("medical_technology_id"): dict(item)
+        for item in fallback_items
+        if isinstance(item.get("medical_technology_id"), int)
+    }
+    selected: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    selected_ids: set[int] = set()
+    for item in llm_items:
+        if not isinstance(item, Mapping):
+            warnings.append("llm_order_invalid_item_discarded")
+            continue
+        technology_id = item.get("medical_technology_id")
+        if not isinstance(technology_id, int) or technology_id not in candidates_by_id:
+            warnings.append("llm_order_catalog_mismatch_discarded")
+            continue
+        if technology_id in selected_ids:
+            warnings.append("llm_order_duplicate_discarded")
+            continue
+        reason = item.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            warnings.append("llm_order_reason_missing_discarded")
+            continue
+
+        selected_item = candidates_by_id[technology_id]
+        selected_item["reason"] = reason.strip()
+        selected.append(selected_item)
+        selected_ids.add(technology_id)
+        if len(selected) >= max_items:
+            break
+
+    if not selected:
+        return fallback_items, [*warnings, "llm_order_no_valid_result_fallback"]
+    return selected, warnings
+
+
 def _score_technology(clinical_text: str, technology: Mapping[str, Any]) -> tuple[int, str]:
     name = f"{technology.get('tech_code') or ''} {technology.get('tech_name') or ''}".lower()
     neuro_trigger = _first_match(clinical_text, _NEUROLOGY_TERMS)
