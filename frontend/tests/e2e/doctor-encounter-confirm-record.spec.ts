@@ -73,6 +73,32 @@ test('doctor confirms a controlled prescription regression record', async ({ pag
   await expect((await orderRecommendationResponse).status()).toBe(200)
   await expect(page.locator('.doctor-encounter__ai-order-context')).toBeVisible()
 
+  const apiBaseUrl = process.env.E2E_API_BASE_URL ?? 'http://localhost:8000'
+  const getRequestCount = async () => page.evaluate(async ({ baseUrl, registerUuid }) => {
+    const response = await fetch(`${baseUrl}/api/v1/medical/requests/register/${registerUuid}`)
+    const payload = await response.json() as { data: { checks: unknown[]; inspections: unknown[]; disposals: unknown[] } }
+    return {
+      status: response.status,
+      count: payload.data.checks.length + payload.data.inspections.length + payload.data.disposals.length,
+    }
+  }, { baseUrl: apiBaseUrl, registerUuid: fixture.register_uuid })
+  const requestCountBeforeAdd = await getRequestCount()
+  expect(requestCountBeforeAdd.status).toBe(200)
+
+  const orderCandidate = page.locator('.doctor-encounter__ai-order-item').first()
+  await expect(orderCandidate).toBeVisible()
+  const candidateInputs = orderCandidate.locator('input[type="text"]')
+  if (await candidateInputs.count()) {
+    await candidateInputs.nth(0).fill('head')
+    await candidateInputs.nth(1).fill('rule-out acute cause')
+  }
+  const pendingOrderCountBeforeAdd = await page.locator('.doctor-encounter__pending-item').count()
+  await orderCandidate.locator('.doctor-encounter__secondary').click()
+  await expect(page.locator('.doctor-encounter__pending-item')).toHaveCount(pendingOrderCountBeforeAdd + 1)
+  const requestCountAfterAdd = await getRequestCount()
+  expect(requestCountAfterAdd.status).toBe(200)
+  expect(requestCountAfterAdd.count).toBe(requestCountBeforeAdd.count)
+
   const pendingItem = page.locator('.doctor-encounter__prescription-item').first()
   await expect(pendingItem).toBeVisible()
   const quantityInput = pendingItem.locator('input[type="number"]')
@@ -91,7 +117,6 @@ test('doctor confirms a controlled prescription regression record', async ({ pag
   const prescriptionUuid = createdPayload.data.uuid
   await expect(page.locator('.doctor-encounter__prescription-created')).toBeVisible()
 
-  const apiBaseUrl = process.env.E2E_API_BASE_URL ?? 'http://localhost:8000'
   const detailResult = await page.evaluate(async ({ baseUrl, uuid }) => {
     const response = await fetch(`${baseUrl}/api/v1/pharmacy/admin/workbench/prescriptions/${uuid}`)
     return { status: response.status, payload: await response.json() }

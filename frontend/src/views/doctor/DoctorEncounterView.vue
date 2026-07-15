@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 
 import {
+  type AIOrderRecommendationItem,
   type AIOrderRecommendationResult,
   type ArtifactInferenceTask,
   type ArtifactInputSource,
@@ -111,6 +112,10 @@ interface PendingPrescriptionItem extends PrescriptionRecommendationItem {
   localId: number
 }
 
+interface PendingOrderRecommendationItem extends AIOrderRecommendationItem {
+  localId: number
+}
+
 const isMedicalRecordConfirmed = ref(false)
 const prescriptionRecommendationLoading = ref(false)
 const prescriptionRecommendationError = ref('')
@@ -192,6 +197,8 @@ const canCreatePrescription = computed(
 const orderRecommendationLoading = ref(false)
 const orderRecommendationError = ref('')
 const orderRecommendation = ref<AIOrderRecommendationResult | null>(null)
+const pendingOrderRecommendationItems = ref<PendingOrderRecommendationItem[]>([])
+let pendingOrderRecommendationSequence = 0
 const canGenerateOrderRecommendation = computed(
   () => isMedicalRecordConfirmed.value && !orderRecommendationLoading.value,
 )
@@ -225,6 +232,7 @@ function resetOrderRecommendationWorkspace() {
   orderRecommendationLoading.value = false
   orderRecommendationError.value = ''
   orderRecommendation.value = null
+  pendingOrderRecommendationItems.value = []
 }
 
 function resetOrderDraft() {
@@ -575,11 +583,18 @@ async function generateOrderRecommendation() {
   try {
     const response = await medicalApi.recommendOrderCandidates(registerId.value)
     orderRecommendation.value = response.data.data ?? null
-    if (!orderRecommendation.value?.items.length) {
+    pendingOrderRecommendationItems.value = (orderRecommendation.value?.items ?? []).map((item) => ({
+      ...item,
+      localId: ++pendingOrderRecommendationSequence,
+      check_position: item.check_position ?? '',
+      check_info: item.check_info ?? '',
+    }))
+    if (!pendingOrderRecommendationItems.value.length) {
       ElMessage.info('当前病历没有返回可供医生确认的检查检验建议。')
     }
   } catch (error) {
     orderRecommendation.value = null
+    pendingOrderRecommendationItems.value = []
     orderRecommendationError.value = getErrorMessage(error, '检查检验建议生成失败，请稍后重试。')
   } finally {
     orderRecommendationLoading.value = false
@@ -588,6 +603,40 @@ async function generateOrderRecommendation() {
 
 function orderRecommendationSourceLabel(source?: string | null) {
   return source === 'record_catalog_rule' ? '受控规则候选' : '安全校验结果'
+}
+
+function canAddOrderRecommendationItem(item: PendingOrderRecommendationItem) {
+  if (signingOrders.value) return false
+  if (item.type !== 'check') return true
+  return Boolean(item.check_position?.trim() && item.check_info?.trim())
+}
+
+function removeOrderRecommendationItem(localId: number) {
+  if (signingOrders.value) return
+  pendingOrderRecommendationItems.value = pendingOrderRecommendationItems.value.filter((item) => item.localId !== localId)
+}
+
+function addOrderRecommendationToPending(item: PendingOrderRecommendationItem) {
+  if (!canAddOrderRecommendationItem(item)) {
+    ElMessage.warning('检查候选加入待签清单前，请先确认检查部位和目的。')
+    return
+  }
+  if (pendingOrders.value.some((pending) => pending.medicalTechnologyId === item.medical_technology_id)) {
+    ElMessage.info('该项目已在待签清单中。')
+    return
+  }
+
+  pendingOrders.value.push({
+    localId: ++pendingOrderSequence,
+    type: item.type,
+    medicalTechnologyId: item.medical_technology_id,
+    technologyName: item.tech_name || '未命名项目',
+    price: item.price,
+    checkInfo: item.type === 'check' ? item.check_info?.trim() : undefined,
+    checkPosition: item.type === 'check' ? item.check_position?.trim() : undefined,
+  })
+  removeOrderRecommendationItem(item.localId)
+  ElMessage.success('候选已加入待签清单，仍需医生确认签署后才会开立。')
 }
 
 function removePendingPrescriptionItem(localId: number) {
@@ -1735,7 +1784,7 @@ onBeforeUnmount(() => {
                 </div>
               </SectionCard>
 
-              <SectionCard title="AI 检查检验建议" subtitle="只展示候选项目和理由；本步不会自动加入待签清单或创建订单。">
+              <SectionCard title="AI 检查检验建议" subtitle="医生确认候选后加入待签清单；统一签署前不会创建订单。">
                 <template #extra>
                   <span class="doctor-encounter__badge" :class="isMedicalRecordConfirmed ? 'is-live' : 'is-progress'">
                     {{ isMedicalRecordConfirmed ? '可生成建议' : '等待病历确认' }}
@@ -1770,18 +1819,31 @@ onBeforeUnmount(() => {
                   </div>
 
                   <section v-if="orderRecommendation" class="doctor-encounter__ai-order-list" aria-label="AI 检查检验候选">
-                    <div v-if="!orderRecommendation.items.length" class="doctor-encounter__state is-plain">
-                      <strong>没有安全候选项目</strong>
-                      <p>当前信息不足、项目已开立或目录中没有匹配项目。本次不会创建任何订单。</p>
+                    <div v-if="!pendingOrderRecommendationItems.length" class="doctor-encounter__state is-plain">
+                      <strong>没有待处理候选项目</strong>
+                      <p>当前信息不足、项目已开立，或医生已处理全部候选。本次不会创建任何订单。</p>
                     </div>
-                    <article v-for="item in orderRecommendation.items" :key="`${item.type}-${item.medical_technology_id}`" class="doctor-encounter__ai-order-item">
+                    <article v-for="item in pendingOrderRecommendationItems" :key="item.localId" class="doctor-encounter__ai-order-item">
                       <div class="doctor-encounter__pending-title">
                         <span class="doctor-encounter__type-tag" :class="`is-${item.type}`">{{ medicalTypeLabel(item.type) }}</span>
                         <strong>{{ item.tech_name || '未命名项目' }}</strong>
                       </div>
                       <p>{{ item.reason }}</p>
-                      <span v-if="item.type === 'check'">建议部位：{{ item.check_position || '请医生补充' }}；建议目的：{{ item.check_info || '请医生补充' }}</span>
-                      <span>参考价格：{{ formatPrice(item.price) }}。医生确认后才可在下一步加入待签清单。</span>
+                      <div v-if="item.type === 'check'" class="doctor-encounter__prescription-fields">
+                        <label class="doctor-encounter__field">
+                          <span>检查部位</span>
+                          <input v-model="item.check_position" type="text" :disabled="signingOrders" />
+                        </label>
+                        <label class="doctor-encounter__field">
+                          <span>检查目的</span>
+                          <input v-model="item.check_info" type="text" :disabled="signingOrders" />
+                        </label>
+                      </div>
+                      <span>参考价格：{{ formatPrice(item.price) }}。加入待签清单后仍需医生统一签署才会开立。</span>
+                      <div class="doctor-encounter__pending-actions">
+                        <button type="button" :disabled="signingOrders" @click="removeOrderRecommendationItem(item.localId)">忽略</button>
+                        <button type="button" class="doctor-encounter__secondary" :disabled="!canAddOrderRecommendationItem(item)" @click="addOrderRecommendationToPending(item)">加入待签清单</button>
+                      </div>
                     </article>
                   </section>
                 </div>
