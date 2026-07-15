@@ -14,3 +14,5 @@ def test_doctor_encounter_keeps_ai_prescription_recommendation_separate_from_cre
     assert "isMedicalRecordConfirmed.value = true" in encounter_source
     assert "AI 处方建议" in encounter_source
     assert "医生确认并开立" in encounter_source
+    assert encounter_source.index('AI 处方建议') > encounter_source.index('<aside class="doctor-encounter__sidebar">')
+    assert encounter_source.index('AI 处方建议') > encounter_source.index('本次 AI 分诊')

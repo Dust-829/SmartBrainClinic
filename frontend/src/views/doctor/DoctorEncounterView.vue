@@ -1579,6 +1579,57 @@ onBeforeUnmount(() => {
                 </div>
               </SectionCard>
 
+            </div>
+
+            <aside class="doctor-encounter__sidebar">
+              <SectionCard title="本次 AI 分诊" subtitle="只读参考信息，不会自动写入病历或诊断。">
+                <template #extra>
+                  <span v-if="triageContext" class="doctor-encounter__badge is-progress">
+                    {{ triageSourceLabel(triageContext.source) }}
+                  </span>
+                </template>
+
+                <div v-if="triageContextLoading" class="doctor-encounter__state is-plain">
+                  <strong>正在读取分诊上下文</strong>
+                  <p>正在整理本次患者与 AI 的关键问答。</p>
+                </div>
+
+                <div v-else-if="triageContextError" class="doctor-encounter__state is-error">
+                  <strong>{{ triageContextError }}</strong>
+                  <button type="button" class="doctor-encounter__secondary" @click="loadTriageContext">重新读取</button>
+                </div>
+
+                <div v-else-if="triageContext" class="doctor-encounter__triage-context">
+                  <div class="doctor-encounter__triage-summary">
+                    <span>分诊摘要</span>
+                    <strong>{{ triageContext.summary_text || '本次分诊未形成症状摘要。' }}</strong>
+                  </div>
+                  <dl v-if="triageContext.profile_snapshot" class="doctor-encounter__triage-profile">
+                    <div v-if="triageContext.profile_snapshot.gender">
+                      <dt>性别</dt>
+                      <dd>{{ triageContext.profile_snapshot.gender }}</dd>
+                    </div>
+                    <div v-if="typeof triageContext.profile_snapshot.age === 'number'">
+                      <dt>年龄</dt>
+                      <dd>{{ triageContext.profile_snapshot.age }} 岁</dd>
+                    </div>
+                  </dl>
+                  <div class="doctor-encounter__triage-transcript">
+                    <span>关键问答</span>
+                    <article v-for="message in triageMessages" :key="message.turn_index" :class="`is-${message.role}`">
+                      <strong>{{ message.role === 'user' ? '患者' : 'AI 分诊' }}</strong>
+                      <p>{{ message.content }}</p>
+                    </article>
+                  </div>
+                  <p class="doctor-encounter__hint">AI 内容仅用于辅助了解本次情况，诊疗结论仍由医生独立确认。</p>
+                </div>
+
+                <div v-else class="doctor-encounter__state is-plain">
+                  <strong>本次未使用 AI 分诊</strong>
+                  <p>患者可能通过手动选科挂号，当前没有可供查看的 AI 问答记录。</p>
+                </div>
+              </SectionCard>
+
               <SectionCard title="AI 处方建议" subtitle="先确认病历，再由医生调整和确认；AI 不会自动写入正式处方。">
                 <template #extra>
                   <span class="doctor-encounter__badge" :class="isMedicalRecordConfirmed ? 'is-live' : 'is-progress'">
@@ -1644,56 +1695,6 @@ onBeforeUnmount(() => {
                     <strong>处方已开立：{{ createdPrescription.prescription_code }}</strong>
                     <p>共 {{ createdPrescription.items.length }} 项，金额 {{ createdPrescription.total_amount }} 元；后续进入患者缴费和药房发药流程。</p>
                   </div>
-                </div>
-              </SectionCard>
-            </div>
-
-            <aside class="doctor-encounter__sidebar">
-              <SectionCard title="本次 AI 分诊" subtitle="只读参考信息，不会自动写入病历或诊断。">
-                <template #extra>
-                  <span v-if="triageContext" class="doctor-encounter__badge is-progress">
-                    {{ triageSourceLabel(triageContext.source) }}
-                  </span>
-                </template>
-
-                <div v-if="triageContextLoading" class="doctor-encounter__state is-plain">
-                  <strong>正在读取分诊上下文</strong>
-                  <p>正在整理本次患者与 AI 的关键问答。</p>
-                </div>
-
-                <div v-else-if="triageContextError" class="doctor-encounter__state is-error">
-                  <strong>{{ triageContextError }}</strong>
-                  <button type="button" class="doctor-encounter__secondary" @click="loadTriageContext">重新读取</button>
-                </div>
-
-                <div v-else-if="triageContext" class="doctor-encounter__triage-context">
-                  <div class="doctor-encounter__triage-summary">
-                    <span>分诊摘要</span>
-                    <strong>{{ triageContext.summary_text || '本次分诊未形成症状摘要。' }}</strong>
-                  </div>
-                  <dl v-if="triageContext.profile_snapshot" class="doctor-encounter__triage-profile">
-                    <div v-if="triageContext.profile_snapshot.gender">
-                      <dt>性别</dt>
-                      <dd>{{ triageContext.profile_snapshot.gender }}</dd>
-                    </div>
-                    <div v-if="typeof triageContext.profile_snapshot.age === 'number'">
-                      <dt>年龄</dt>
-                      <dd>{{ triageContext.profile_snapshot.age }} 岁</dd>
-                    </div>
-                  </dl>
-                  <div class="doctor-encounter__triage-transcript">
-                    <span>关键问答</span>
-                    <article v-for="message in triageMessages" :key="message.turn_index" :class="`is-${message.role}`">
-                      <strong>{{ message.role === 'user' ? '患者' : 'AI 分诊' }}</strong>
-                      <p>{{ message.content }}</p>
-                    </article>
-                  </div>
-                  <p class="doctor-encounter__hint">AI 内容仅用于辅助了解本次情况，诊疗结论仍由医生独立确认。</p>
-                </div>
-
-                <div v-else class="doctor-encounter__state is-plain">
-                  <strong>本次未使用 AI 分诊</strong>
-                  <p>患者可能通过手动选科挂号，当前没有可供查看的 AI 问答记录。</p>
                 </div>
               </SectionCard>
 
