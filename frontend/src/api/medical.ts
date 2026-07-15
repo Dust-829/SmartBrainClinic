@@ -166,6 +166,7 @@ export interface ArtifactInferenceTask {
   model_weight_sha256?: string | null
   threshold?: string | null
   mask_object_ref?: string | null
+  probability_object_ref?: string | null
   overlay_object_ref?: string | null
   result_metadata?: {
     artifact_pixel_count?: number
@@ -283,6 +284,18 @@ export const medicalApi = {
   },
   getArtifactInferenceOverlayUrl(taskUuid: string) {
     return `${apiBaseUrl}/api/v1/medical/artifact-inference/${encodeURIComponent(taskUuid)}/overlay`
+  },
+  getArtifactInferenceSliceUrl(
+    taskUuid: string,
+    params: { sliceIndex: number; threshold: number; showMask: boolean; opacity: number },
+  ) {
+    const query = new URLSearchParams({
+      slice_index: String(params.sliceIndex),
+      threshold: params.threshold.toFixed(2),
+      show_mask: String(params.showMask),
+      opacity: params.opacity.toFixed(2),
+    })
+    return `${apiBaseUrl}/api/v1/medical/artifact-inference/${encodeURIComponent(taskUuid)}/slice?${query}`
   },
   getLatestCheckReport(checkUuid: string) {
     return http.get<ApiEnvelope<MedicalReport>>(`/api/v1/medical/check/${checkUuid}/report/latest`)

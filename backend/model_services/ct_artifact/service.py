@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal
 
 import numpy as np
 import SimpleITK as sitk
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -23,6 +24,7 @@ MODEL_NAME = "attention-unet2d"
 MODEL_VERSION = "attention_unet2d/best.pth"
 THRESHOLD = 0.5
 _inference_lock = asyncio.Lock()
+_slice_render_lock = asyncio.Lock()
 
 
 class ArtifactSegmentationRequest(BaseModel):
@@ -120,6 +122,62 @@ def _run_inference(request: ArtifactSegmentationRequest, infer: CTArtifactInfer)
     }
 
 
+def _load_source_image(source_ref: str, source_format: Literal["dicom", "nifti"]) -> sitk.Image:
+    source_path = resolve_input_ref(source_ref)
+    if source_format == "dicom":
+        if not source_path.is_dir():
+            raise ValueError("A DICOM source_ref must identify one series directory")
+        return load_single_dicom_series(source_path)
+    if not source_path.is_file():
+        raise ValueError("A NIfTI source_ref must identify one file")
+    return sitk.ReadImage(str(source_path))
+
+
+def _resolve_probability_ref(task_id: str, probability_object_ref: str) -> Path:
+    expected = PurePosixPath("output") / task_id / "artifact_probability.nii.gz"
+    actual = PurePosixPath(probability_object_ref.replace("\\", "/"))
+    if actual != expected:
+        raise ValueError("probability_object_ref is not valid for this task")
+    candidate = (RUNTIME_ROOT / Path(*actual.parts)).resolve()
+    if OUTPUT_ROOT.resolve() not in candidate.parents or not candidate.is_file():
+        raise FileNotFoundError("The task probability volume is unavailable")
+    return candidate
+
+
+def _render_artifact_slice(
+    task_id: str,
+    source_ref: str,
+    source_format: Literal["dicom", "nifti"],
+    probability_object_ref: str,
+    slice_index: int,
+    threshold: float,
+    show_mask: bool,
+    opacity: float,
+) -> bytes:
+    image = _load_source_image(source_ref, source_format)
+    probability_image = sitk.ReadImage(str(_resolve_probability_ref(task_id, probability_object_ref)))
+    # Keep an owned NumPy copy. A view from a temporary SimpleITK image can outlive
+    # its backing buffer and terminate the native process during later mask access.
+    probability = sitk.GetArrayFromImage(probability_image)
+    volume = sitk.GetArrayViewFromImage(image)
+    if probability.shape != volume.shape:
+        raise ValueError("The probability volume does not match the CT volume")
+    if not 0 <= slice_index < volume.shape[0]:
+        raise ValueError("slice_index is outside the available CT volume")
+
+    source = volume[slice_index].astype(np.float32)
+    low, high = np.percentile(source, (1, 99))
+    normalized = np.clip((source - low) / max(high - low, 1e-6), 0, 1)
+    rgb = np.repeat((normalized * 255).astype(np.uint8)[..., None], 3, axis=2).astype(np.float32)
+    if show_mask:
+        mask = probability[slice_index] > threshold
+        coral = np.array([220, 82, 72], dtype=np.float32)
+        rgb[mask] = rgb[mask] * (1 - opacity) + coral * opacity
+    buffer = io.BytesIO()
+    Image.fromarray(rgb.astype(np.uint8)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.infer = CTArtifactInfer()
@@ -148,3 +206,32 @@ async def artifact_segmentation(request: ArtifactSegmentationRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Artifact inference failed") from exc
+
+
+@app.get("/v1/artifact-slice")
+async def get_artifact_slice(
+    task_id: str = Query(min_length=1, max_length=64),
+    source_ref: str = Query(min_length=1, max_length=1024),
+    source_format: Literal["dicom", "nifti"] = Query(),
+    probability_object_ref: str = Query(min_length=1, max_length=1024),
+    slice_index: int = Query(ge=0),
+    threshold: float = Query(ge=0.05, le=0.95),
+    show_mask: bool = Query(default=True),
+    opacity: float = Query(default=0.55, ge=0.2, le=0.9),
+):
+    try:
+        async with _slice_render_lock:
+            content = await asyncio.to_thread(
+                _render_artifact_slice,
+                task_id,
+                source_ref,
+                source_format,
+                probability_object_ref,
+                slice_index,
+                threshold,
+                show_mask,
+                opacity,
+            )
+        return Response(content=content, media_type="image/png", headers={"Cache-Control": "no-store"})
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

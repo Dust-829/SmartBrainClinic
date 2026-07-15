@@ -460,6 +460,27 @@ async def list_artifact_input_sources() -> list[dict[str, str]]:
     return await ArtifactInferenceClient.list_input_sources()
 
 
+async def render_artifact_slice(
+    task: ArtifactInferenceTask,
+    slice_index: int,
+    threshold: float,
+    show_mask: bool,
+    opacity: float,
+) -> bytes:
+    if task.task_state != "succeeded" or not task.probability_object_ref:
+        raise ValueError("当前任务未保留可交互的概率图数据")
+    return await ArtifactInferenceClient.render_artifact_slice({
+        "task_id": str(task.uuid),
+        "source_ref": task.source_image_ref,
+        "source_format": task.source_format,
+        "probability_object_ref": task.probability_object_ref,
+        "slice_index": slice_index,
+        "threshold": threshold,
+        "show_mask": show_mask,
+        "opacity": opacity,
+    })
+
+
 def resolve_artifact_output_file(task: ArtifactInferenceTask) -> Path:
     if not task.overlay_object_ref or not task.overlay_object_ref.startswith("output/"):
         raise ValueError("任务尚未生成预览图")

@@ -1,7 +1,7 @@
 import uuid as uuid_pkg
 from typing import Any, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_session
 from ..services import medical_service as svc
@@ -436,6 +436,27 @@ async def get_artifact_inference_overlay(task_uuid: str, session: AsyncSession =
         return FileResponse(svc.resolve_artifact_output_file(task), media_type="image/png")
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/artifact-inference/{task_uuid}/slice", summary="读取 CT 伪影交互切片")
+async def get_artifact_inference_slice(
+    task_uuid: str,
+    slice_index: int = 0,
+    threshold: float = 0.5,
+    show_mask: bool = True,
+    opacity: float = 0.55,
+    session: AsyncSession = Depends(get_session),
+):
+    if slice_index < 0 or not 0.05 <= threshold <= 0.95 or not 0.2 <= opacity <= 0.9:
+        raise HTTPException(status_code=400, detail="切片渲染参数超出允许范围")
+    task = await svc.get_artifact_inference_task(session, task_uuid)
+    if not task:
+        raise HTTPException(status_code=404, detail="伪影分析任务不存在")
+    try:
+        content = await svc.render_artifact_slice(task, slice_index, threshold, show_mask, opacity)
+        return Response(content=content, media_type="image/png", headers={"Cache-Control": "no-store"})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 @router.get("/inspection/{uuid}", summary="获取检验单明细")
 async def get_inspection_request(uuid: str, session: AsyncSession = Depends(get_session)):

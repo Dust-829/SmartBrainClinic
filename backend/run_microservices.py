@@ -12,6 +12,8 @@ from pathlib import Path
 
 DEFAULT_CT_ARTIFACT_PYTHON = r"D:\develop\Anaconda\envs\py3106\python.exe"
 CT_ARTIFACT_STARTUP_TIMEOUT_SECONDS = 60.0
+CT_ARTIFACT_MAX_RESTART_ATTEMPTS = 3
+CT_ARTIFACT_RESTART_DELAY_SECONDS = 3.0
 
 
 @dataclass(frozen=True)
@@ -239,6 +241,8 @@ def main() -> int:
     services = build_services()
     optional_services = [service for service in services if not service.critical]
     core_services = [service for service in services if service.critical]
+    optional_service_by_name = {service.name: service for service in optional_services}
+    optional_restart_attempts = {service.name: 0 for service in optional_services}
 
     os.makedirs("logs", exist_ok=True)
 
@@ -293,6 +297,18 @@ def main() -> int:
                         with suppress(Exception):
                             handle.close()
                     print_log_tail(managed.name, managed.log_path)
+                    service = optional_service_by_name.get(managed.name)
+                    attempts = optional_restart_attempts.get(managed.name, 0)
+                    if service and attempts < CT_ARTIFACT_MAX_RESTART_ATTEMPTS:
+                        optional_restart_attempts[managed.name] = attempts + 1
+                        print(
+                            f"Restarting CTArtifact in {int(CT_ARTIFACT_RESTART_DELAY_SECONDS)} seconds "
+                            f"(attempt {attempts + 1}/{CT_ARTIFACT_MAX_RESTART_ATTEMPTS})..."
+                        )
+                        time.sleep(CT_ARTIFACT_RESTART_DELAY_SECONDS)
+                        start_optional_ct_artifact(service, processes, log_files)
+                    elif service:
+                        print("CTArtifact restart limit reached; core microservices will continue without CT image analysis.")
                     continue
 
                 print(f"ERROR: {managed.name} service stopped unexpectedly!")

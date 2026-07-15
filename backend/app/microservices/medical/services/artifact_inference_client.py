@@ -28,3 +28,14 @@ class ArtifactInferenceClient:
         )
         response.raise_for_status()
         return response.json()
+
+    @staticmethod
+    async def render_artifact_slice(payload: dict[str, Any]) -> bytes:
+        client = await get_shared_async_client()
+        response = await client.get(
+            f"{settings.CT_ARTIFACT_SERVICE_URL.rstrip('/')}/v1/artifact-slice",
+            params=payload,
+            timeout=settings.CT_ARTIFACT_SERVICE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.content

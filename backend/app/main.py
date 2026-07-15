@@ -80,7 +80,8 @@ async def gateway_proxy(service: str, path: str, request: Request):
         return Response(
             content=resp.content,
             status_code=resp.status_code,
-            headers=dict(resp.headers),
+            media_type=resp.headers.get("content-type"),
+            headers={"cache-control": resp.headers.get("cache-control", "no-store")},
         )
     except httpx.ConnectError:
         return JSONResponse(

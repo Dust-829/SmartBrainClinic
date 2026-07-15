@@ -41,6 +41,17 @@ interface PendingOrder {
   checkPosition?: string
 }
 
+interface ArtifactViewerState {
+  sliceIndex: number
+  threshold: number
+  showMask: boolean
+  opacity: number
+  renderedSliceIndex: number
+  renderedThreshold: number
+  renderedShowMask: boolean
+  renderedOpacity: number
+}
+
 const route = useRoute()
 const router = useRouter()
 const session = useDoctorSessionStore()
@@ -71,6 +82,8 @@ const expandedArtifactCheckUuid = ref<string | null>(null)
 const artifactTaskByCheck = reactive<Record<string, ArtifactInferenceTask | null>>({})
 const artifactSourceByCheck = reactive<Record<string, string>>({})
 const artifactSubmittingByCheck = reactive<Record<string, boolean>>({})
+const artifactViewerByCheck = reactive<Record<string, ArtifactViewerState>>({})
+const artifactViewerImageState = reactive<Record<string, 'loading' | 'ready' | 'error'>>({})
 const expandedReportCheckUuid = ref<string | null>(null)
 const reportByCheck = reactive<Record<string, MedicalReport | null>>({})
 const reportDraftByCheck = reactive<Record<string, string>>({})
@@ -87,6 +100,7 @@ const reportCorrectingByInspection = reactive<Record<string, boolean>>({})
 
 let queuePollTimer: number | null = null
 let artifactTaskPollTimer: number | null = null
+const artifactViewerRenderTimers = new Map<string, number>()
 let pendingOrderSequence = 0
 
 const technologyOptions = reactive<Record<OrderType, MedicalTechnologyOption[]>>({
@@ -895,6 +909,50 @@ function artifactOverlayUrl(task: ArtifactInferenceTask) {
   return task.overlay_object_ref ? medicalApi.getArtifactInferenceOverlayUrl(task.uuid) : ''
 }
 
+function artifactSliceCount(task: ArtifactInferenceTask) {
+  return Math.max(1, task.result_metadata?.image_size?.[2] ?? 1)
+}
+
+function artifactViewerState(checkUuid: string, task: ArtifactInferenceTask) {
+  if (!artifactViewerByCheck[checkUuid]) {
+    artifactViewerByCheck[checkUuid] = {
+      sliceIndex: Math.min(Math.max(0, task.result_metadata?.selected_slice ?? 0), artifactSliceCount(task) - 1),
+      threshold: Number(task.threshold ?? 0.5),
+      showMask: true,
+      opacity: 0.55,
+      renderedSliceIndex: Math.min(Math.max(0, task.result_metadata?.selected_slice ?? 0), artifactSliceCount(task) - 1),
+      renderedThreshold: Number(task.threshold ?? 0.5),
+      renderedShowMask: true,
+      renderedOpacity: 0.55,
+    }
+  }
+  return artifactViewerByCheck[checkUuid]
+}
+
+function scheduleArtifactViewerRender(checkUuid: string) {
+  const existingTimer = artifactViewerRenderTimers.get(checkUuid)
+  if (existingTimer !== undefined) window.clearTimeout(existingTimer)
+  artifactViewerRenderTimers.set(checkUuid, window.setTimeout(() => {
+    const viewer = artifactViewerByCheck[checkUuid]
+    if (!viewer) return
+    viewer.renderedSliceIndex = viewer.sliceIndex
+    viewer.renderedThreshold = viewer.threshold
+    viewer.renderedShowMask = viewer.showMask
+    viewer.renderedOpacity = viewer.opacity
+    artifactViewerImageState[checkUuid] = 'loading'
+    artifactViewerRenderTimers.delete(checkUuid)
+  }, 300))
+}
+
+function setArtifactViewerImageState(checkUuid: string, state: 'ready' | 'error') {
+  artifactViewerImageState[checkUuid] = state
+}
+
+function artifactSliceUrl(checkUuid: string, task: ArtifactInferenceTask) {
+  const viewer = artifactViewerState(checkUuid, task)
+  return medicalApi.getArtifactInferenceSliceUrl(task.uuid, { sliceIndex: viewer.renderedSliceIndex, threshold: viewer.renderedThreshold, showMask: viewer.renderedShowMask, opacity: viewer.renderedOpacity })
+}
+
 function toggleCheckReport(checkUuid: string) {
   expandedReportCheckUuid.value = expandedReportCheckUuid.value === checkUuid ? null : checkUuid
 }
@@ -1157,6 +1215,8 @@ watch(
 onBeforeUnmount(() => {
   stopQueuePolling()
   stopArtifactTaskPolling()
+  artifactViewerRenderTimers.forEach((timer) => window.clearTimeout(timer))
+  artifactViewerRenderTimers.clear()
 })
 </script>
 
@@ -1402,7 +1462,53 @@ onBeforeUnmount(() => {
                                   </div>
                                 </div>
 
-                                <div v-if="artifactTaskByCheck[item.uuid]?.task_state === 'succeeded'" class="doctor-encounter__artifact-result">
+                                <div
+                                  v-if="artifactTaskByCheck[item.uuid]?.task_state === 'succeeded' && artifactTaskByCheck[item.uuid]?.probability_object_ref"
+                                  class="doctor-encounter__artifact-viewer"
+                                >
+                                  <div class="doctor-encounter__artifact-canvas">
+                                    <img
+                                      :key="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!)"
+                                      :src="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!)"
+                                      :alt="`CT 第 ${artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sliceIndex + 1} 层伪影掩码叠加图`"
+                                      class="doctor-encounter__artifact-preview"
+                                      @load="setArtifactViewerImageState(item.uuid, 'ready')"
+                                      @error="setArtifactViewerImageState(item.uuid, 'error')"
+                                    />
+                                    <span v-if="artifactViewerImageState[item.uuid] === 'loading'" class="doctor-encounter__artifact-image-state">正在更新切片…</span>
+                                    <span v-else-if="artifactViewerImageState[item.uuid] === 'error'" class="doctor-encounter__artifact-image-state is-error">当前切片加载失败，请稍后重试。</span>
+                                  </div>
+                                  <div class="doctor-encounter__artifact-controls">
+                                    <div class="doctor-encounter__artifact-control-head">
+                                      <strong>交互式掩码查看</strong>
+                                      <span aria-live="polite">第 {{ artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sliceIndex + 1 }} / {{ artifactSliceCount(artifactTaskByCheck[item.uuid]!) }} 层</span>
+                                    </div>
+                                    <label class="doctor-encounter__artifact-control">
+                                      <span>切片</span>
+                                      <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sliceIndex" type="range" min="0" :max="artifactSliceCount(artifactTaskByCheck[item.uuid]!) - 1" step="1" @input="scheduleArtifactViewerRender(item.uuid)" />
+                                    </label>
+                                    <label class="doctor-encounter__artifact-control">
+                                      <span>掩码阈值</span>
+                                      <div>
+                                        <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).threshold" type="range" min="0.05" max="0.95" step="0.01" @input="scheduleArtifactViewerRender(item.uuid)" />
+                                        <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).threshold" type="number" min="0.05" max="0.95" step="0.01" aria-label="精确输入掩码阈值" @input="scheduleArtifactViewerRender(item.uuid)" />
+                                      </div>
+                                    </label>
+                                    <label class="doctor-encounter__artifact-control">
+                                      <span>掩码透明度</span>
+                                      <div>
+                                        <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).opacity" type="range" min="0.2" max="0.9" step="0.05" @input="scheduleArtifactViewerRender(item.uuid)" />
+                                        <output>{{ artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).opacity.toFixed(2) }}</output>
+                                      </div>
+                                    </label>
+                                    <label class="doctor-encounter__artifact-switch">
+                                      <input v-model="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).showMask" type="checkbox" @change="scheduleArtifactViewerRender(item.uuid)" />
+                                      显示掩码叠加
+                                    </label>
+                                    <span>阈值和切片变化会实时重新渲染当前图像。</span>
+                                  </div>
+                                </div>
+                                <div v-else-if="artifactTaskByCheck[item.uuid]?.task_state === 'succeeded'" class="doctor-encounter__artifact-result">
                                   <img
                                     :src="artifactOverlayUrl(artifactTaskByCheck[item.uuid]!)"
                                     alt="CT 伪影掩码叠加预览"
@@ -2529,6 +2635,68 @@ onBeforeUnmount(() => {
   align-items: center;
 }
 
+.doctor-encounter__artifact-viewer {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.25fr) minmax(230px, 0.75fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.doctor-encounter__artifact-canvas {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 280px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #0f172a;
+}
+
+.doctor-encounter__artifact-image-state {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.78);
+  color: #dcebf0;
+  font-size: 12px;
+}
+
+.doctor-encounter__artifact-image-state.is-error { color: #ffd7d1; }
+
+.doctor-encounter__artifact-controls {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d5e3eb;
+  border-radius: 12px;
+  background: #f5f9fb;
+}
+
+.doctor-encounter__artifact-control-head,
+.doctor-encounter__artifact-control,
+.doctor-encounter__artifact-switch {
+  display: grid;
+  gap: 7px;
+  color: #365766;
+  font-size: 12px;
+}
+
+.doctor-encounter__artifact-control-head {
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+}
+
+.doctor-encounter__artifact-control-head strong { color: #173d49; font-size: 14px; }
+.doctor-encounter__artifact-control div { display: grid; grid-template-columns: 1fr 70px; gap: 8px; align-items: center; }
+.doctor-encounter__artifact-control input[type='range'] { width: 100%; accent-color: #0f7672; }
+.doctor-encounter__artifact-control input[type='number'] { width: 100%; padding: 6px 7px; border: 1px solid #b9ced9; border-radius: 7px; color: #173d49; }
+.doctor-encounter__artifact-control output { display: grid; place-items: center; min-height: 30px; border: 1px solid #b9ced9; border-radius: 7px; color: #173d49; background: #fff; }
+.doctor-encounter__artifact-switch { grid-template-columns: auto 1fr; align-items: center; }
+.doctor-encounter__artifact-controls > span { color: #5c6f7e; font-size: 12px; line-height: 1.5; }
+
 .doctor-encounter__artifact-preview {
   display: block;
   width: 100%;
@@ -3028,7 +3196,8 @@ onBeforeUnmount(() => {
   }
 
   .doctor-encounter__artifact-meta,
-  .doctor-encounter__artifact-result {
+  .doctor-encounter__artifact-result,
+  .doctor-encounter__artifact-viewer {
     grid-template-columns: 1fr;
   }
 
