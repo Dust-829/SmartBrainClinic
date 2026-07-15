@@ -441,19 +441,22 @@ async def get_artifact_inference_overlay(task_uuid: str, session: AsyncSession =
 @router.get("/artifact-inference/{task_uuid}/slice", summary="读取 CT 伪影交互切片")
 async def get_artifact_inference_slice(
     task_uuid: str,
-    slice_index: int = 0,
+    plane: str = "axial",
+    axial_index: int = 0,
+    coronal_index: int = 0,
+    sagittal_index: int = 0,
     threshold: float = 0.5,
     show_mask: bool = True,
     opacity: float = 0.55,
     session: AsyncSession = Depends(get_session),
 ):
-    if slice_index < 0 or not 0.05 <= threshold <= 0.95 or not 0.2 <= opacity <= 0.9:
+    if plane not in {"axial", "coronal", "sagittal"} or min(axial_index, coronal_index, sagittal_index) < 0 or not 0.05 <= threshold <= 0.95 or not 0.2 <= opacity <= 0.9:
         raise HTTPException(status_code=400, detail="切片渲染参数超出允许范围")
     task = await svc.get_artifact_inference_task(session, task_uuid)
     if not task:
         raise HTTPException(status_code=404, detail="伪影分析任务不存在")
     try:
-        content = await svc.render_artifact_slice(task, slice_index, threshold, show_mask, opacity)
+        content = await svc.render_artifact_slice(task, plane, axial_index, coronal_index, sagittal_index, threshold, show_mask, opacity)
         return Response(content=content, media_type="image/png", headers={"Cache-Control": "no-store"})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

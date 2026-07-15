@@ -64,3 +64,46 @@ def test_ct_artifact_service_keeps_input_and_output_references_relative():
     assert '"probability_object_ref": f"output/{request.task_id}/artifact_probability.nii.gz"' in source
     assert 'child.suffix.lower() == ".dcm"' in source
     assert "The inference path performs the strict" in source
+
+
+def test_ct_artifact_slice_contract_supports_three_linked_planes():
+    service_source = Path("model_services/ct_artifact/service.py").read_text(encoding="utf-8")
+    medical_source = Path("app/microservices/medical/api/medical.py").read_text(encoding="utf-8")
+
+    assert 'Literal["axial", "coronal", "sagittal"]' in service_source
+    assert 'plane: Literal["axial", "coronal", "sagittal"] = Query(default="axial")' in service_source
+    assert 'coronal_index: int | None' in service_source
+    assert 'sagittal_index: int | None' in service_source
+    assert 'plane not in {"axial", "coronal", "sagittal"}' in medical_source
+    assert '_RENDER_VOLUME_CACHE_LIMIT = 2' in service_source
+    assert 'def _load_render_volume(' in service_source
+
+
+def test_non_axial_plane_display_respects_physical_voxel_spacing():
+    data = run_isolated_python(
+        """
+        import json
+        import numpy as np
+        from model_services.ct_artifact.service import _resample_plane_for_display
+
+        source = np.zeros((36, 512), dtype=np.float32)
+        probability = np.zeros((36, 512), dtype=np.float32)
+        coronal_source, coronal_probability = _resample_plane_for_display(
+            source, probability, 'coronal', (0.5, 0.5, 5.0)
+        )
+        axial_source, axial_probability = _resample_plane_for_display(
+            source, probability, 'axial', (0.5, 0.5, 5.0)
+        )
+        print(json.dumps({
+            'coronal': list(coronal_source.shape),
+            'coronal_probability': list(coronal_probability.shape),
+            'axial': list(axial_source.shape),
+            'axial_probability': list(axial_probability.shape),
+        }))
+        """
+    )
+
+    assert data["coronal"] == [360, 512]
+    assert data["coronal_probability"] == [360, 512]
+    assert data["axial"] == [36, 512]
+    assert data["axial_probability"] == [36, 512]

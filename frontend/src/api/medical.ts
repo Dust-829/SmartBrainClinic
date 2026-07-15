@@ -287,14 +287,21 @@ export const medicalApi = {
   },
   getArtifactInferenceSliceUrl(
     taskUuid: string,
-    params: { sliceIndex: number; threshold: number; showMask: boolean; opacity: number },
+    params: {
+      plane: 'axial' | 'coronal' | 'sagittal'
+      sliceIndex: number
+      threshold: number
+      showMask: boolean
+      opacity: number
+    },
   ) {
     const query = new URLSearchParams({
-      slice_index: String(params.sliceIndex),
+      plane: params.plane,
       threshold: params.threshold.toFixed(2),
       show_mask: String(params.showMask),
       opacity: params.opacity.toFixed(2),
     })
+    query.set(`${params.plane}_index`, String(params.sliceIndex))
     return `${apiBaseUrl}/api/v1/medical/artifact-inference/${encodeURIComponent(taskUuid)}/slice?${query}`
   },
   getLatestCheckReport(checkUuid: string) {

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import io
 from contextlib import asynccontextmanager
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal
 
@@ -25,6 +27,17 @@ MODEL_VERSION = "attention_unet2d/best.pth"
 THRESHOLD = 0.5
 _inference_lock = asyncio.Lock()
 _slice_render_lock = asyncio.Lock()
+_RENDER_VOLUME_CACHE_LIMIT = 2
+
+
+@dataclass
+class RenderVolume:
+    volume: np.ndarray
+    probability: np.ndarray
+    spacing: tuple[float, float, float]
+
+
+_render_volume_cache: OrderedDict[tuple[str, str, str, str], RenderVolume] = OrderedDict()
 
 
 class ArtifactSegmentationRequest(BaseModel):
@@ -144,33 +157,107 @@ def _resolve_probability_ref(task_id: str, probability_object_ref: str) -> Path:
     return candidate
 
 
+def _resample_plane_for_display(
+    source: np.ndarray,
+    probability: np.ndarray,
+    plane: Literal["axial", "coronal", "sagittal"],
+    spacing: tuple[float, float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Correct non-axial pixel aspect ratios for display without changing volume data."""
+    if plane == "axial":
+        return source, probability
+
+    row_spacing = spacing[2]
+    column_spacing = spacing[0] if plane == "coronal" else spacing[1]
+    if row_spacing <= 0 or column_spacing <= 0:
+        return source, probability
+
+    target_height = max(1, round(source.shape[0] * row_spacing / column_spacing))
+    if target_height == source.shape[0]:
+        return source, probability
+
+    target_size = (source.shape[1], target_height)
+    source_resampled = np.asarray(
+        Image.fromarray(source.astype(np.float32), mode="F").resize(target_size, resample=Image.Resampling.BILINEAR)
+    )
+    probability_resampled = np.asarray(
+        Image.fromarray(probability.astype(np.float32), mode="F").resize(target_size, resample=Image.Resampling.BILINEAR)
+    )
+    return source_resampled, probability_resampled
+
+
+def _load_render_volume(
+    task_id: str,
+    source_ref: str,
+    source_format: Literal["dicom", "nifti"],
+    probability_object_ref: str,
+) -> RenderVolume:
+    cache_key = (task_id, source_ref, source_format, probability_object_ref)
+    cached = _render_volume_cache.pop(cache_key, None)
+    if cached is not None:
+        _render_volume_cache[cache_key] = cached
+        return cached
+
+    image = _load_source_image(source_ref, source_format)
+    probability_image = sitk.ReadImage(str(_resolve_probability_ref(task_id, probability_object_ref)))
+    # Keep owned arrays. SimpleITK views tied to temporary image instances can
+    # outlive their backing buffers and terminate the native process.
+    rendered = RenderVolume(
+        volume=sitk.GetArrayFromImage(image),
+        probability=sitk.GetArrayFromImage(probability_image),
+        spacing=tuple(float(value) for value in image.GetSpacing()),
+    )
+    _render_volume_cache[cache_key] = rendered
+    while len(_render_volume_cache) > _RENDER_VOLUME_CACHE_LIMIT:
+        _render_volume_cache.popitem(last=False)
+    return rendered
+
+
 def _render_artifact_slice(
     task_id: str,
     source_ref: str,
     source_format: Literal["dicom", "nifti"],
     probability_object_ref: str,
-    slice_index: int,
+    plane: Literal["axial", "coronal", "sagittal"],
+    axial_index: int,
+    coronal_index: int,
+    sagittal_index: int,
     threshold: float,
     show_mask: bool,
     opacity: float,
 ) -> bytes:
-    image = _load_source_image(source_ref, source_format)
-    probability_image = sitk.ReadImage(str(_resolve_probability_ref(task_id, probability_object_ref)))
-    # Keep an owned NumPy copy. A view from a temporary SimpleITK image can outlive
-    # its backing buffer and terminate the native process during later mask access.
-    probability = sitk.GetArrayFromImage(probability_image)
-    volume = sitk.GetArrayViewFromImage(image)
+    rendered_volume = _load_render_volume(task_id, source_ref, source_format, probability_object_ref)
+    probability = rendered_volume.probability
+    volume = rendered_volume.volume
     if probability.shape != volume.shape:
         raise ValueError("The probability volume does not match the CT volume")
-    if not 0 <= slice_index < volume.shape[0]:
-        raise ValueError("slice_index is outside the available CT volume")
+    depth, height, width = volume.shape
+    if not 0 <= axial_index < depth:
+        raise ValueError("axial_index is outside the available CT volume")
+    if not 0 <= coronal_index < height:
+        raise ValueError("coronal_index is outside the available CT volume")
+    if not 0 <= sagittal_index < width:
+        raise ValueError("sagittal_index is outside the available CT volume")
 
-    source = volume[slice_index].astype(np.float32)
+    if plane == "axial":
+        source, mask_probability = volume[axial_index], probability[axial_index]
+    elif plane == "coronal":
+        source, mask_probability = volume[:, coronal_index, :], probability[:, coronal_index, :]
+    else:
+        source, mask_probability = volume[:, :, sagittal_index], probability[:, :, sagittal_index]
+
+    source, mask_probability = _resample_plane_for_display(
+        source,
+        mask_probability,
+        plane,
+        rendered_volume.spacing,
+    )
+    source = source.astype(np.float32)
     low, high = np.percentile(source, (1, 99))
     normalized = np.clip((source - low) / max(high - low, 1e-6), 0, 1)
     rgb = np.repeat((normalized * 255).astype(np.uint8)[..., None], 3, axis=2).astype(np.float32)
     if show_mask:
-        mask = probability[slice_index] > threshold
+        mask = mask_probability > threshold
         coral = np.array([220, 82, 72], dtype=np.float32)
         rgb[mask] = rgb[mask] * (1 - opacity) + coral * opacity
     buffer = io.BytesIO()
@@ -214,7 +301,11 @@ async def get_artifact_slice(
     source_ref: str = Query(min_length=1, max_length=1024),
     source_format: Literal["dicom", "nifti"] = Query(),
     probability_object_ref: str = Query(min_length=1, max_length=1024),
-    slice_index: int = Query(ge=0),
+    plane: Literal["axial", "coronal", "sagittal"] = Query(default="axial"),
+    slice_index: int | None = Query(default=None, ge=0),
+    axial_index: int | None = Query(default=None, ge=0),
+    coronal_index: int | None = Query(default=None, ge=0),
+    sagittal_index: int | None = Query(default=None, ge=0),
     threshold: float = Query(ge=0.05, le=0.95),
     show_mask: bool = Query(default=True),
     opacity: float = Query(default=0.55, ge=0.2, le=0.9),
@@ -227,7 +318,10 @@ async def get_artifact_slice(
                 source_ref,
                 source_format,
                 probability_object_ref,
-                slice_index,
+                plane,
+                axial_index if axial_index is not None else (slice_index if slice_index is not None else 0),
+                coronal_index if coronal_index is not None else 0,
+                sagittal_index if sagittal_index is not None else 0,
                 threshold,
                 show_mask,
                 opacity,

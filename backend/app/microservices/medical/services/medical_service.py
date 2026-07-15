@@ -462,7 +462,10 @@ async def list_artifact_input_sources() -> list[dict[str, str]]:
 
 async def render_artifact_slice(
     task: ArtifactInferenceTask,
-    slice_index: int,
+    plane: str,
+    axial_index: int,
+    coronal_index: int,
+    sagittal_index: int,
     threshold: float,
     show_mask: bool,
     opacity: float,
@@ -474,7 +477,10 @@ async def render_artifact_slice(
         "source_ref": task.source_image_ref,
         "source_format": task.source_format,
         "probability_object_ref": task.probability_object_ref,
-        "slice_index": slice_index,
+        "plane": plane,
+        "axial_index": axial_index,
+        "coronal_index": coronal_index,
+        "sagittal_index": sagittal_index,
         "threshold": threshold,
         "show_mask": show_mask,
         "opacity": opacity,

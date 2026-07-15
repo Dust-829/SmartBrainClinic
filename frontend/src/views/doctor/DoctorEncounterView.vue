@@ -42,15 +42,21 @@ interface PendingOrder {
 }
 
 interface ArtifactViewerState {
-  sliceIndex: number
+  axialIndex: number
+  coronalIndex: number
+  sagittalIndex: number
   threshold: number
   showMask: boolean
   opacity: number
-  renderedSliceIndex: number
+  renderedAxialIndex: number
+  renderedCoronalIndex: number
+  renderedSagittalIndex: number
   renderedThreshold: number
   renderedShowMask: boolean
   renderedOpacity: number
 }
+
+type ArtifactPlane = 'axial' | 'coronal' | 'sagittal'
 
 const route = useRoute()
 const router = useRouter()
@@ -913,14 +919,29 @@ function artifactSliceCount(task: ArtifactInferenceTask) {
   return Math.max(1, task.result_metadata?.image_size?.[2] ?? 1)
 }
 
+function artifactCoronalCount(task: ArtifactInferenceTask) {
+  return Math.max(1, task.result_metadata?.image_size?.[1] ?? 1)
+}
+
+function artifactSagittalCount(task: ArtifactInferenceTask) {
+  return Math.max(1, task.result_metadata?.image_size?.[0] ?? 1)
+}
+
 function artifactViewerState(checkUuid: string, task: ArtifactInferenceTask) {
   if (!artifactViewerByCheck[checkUuid]) {
+    const axialIndex = Math.min(Math.max(0, task.result_metadata?.selected_slice ?? 0), artifactSliceCount(task) - 1)
+    const coronalIndex = Math.floor((artifactCoronalCount(task) - 1) / 2)
+    const sagittalIndex = Math.floor((artifactSagittalCount(task) - 1) / 2)
     artifactViewerByCheck[checkUuid] = {
-      sliceIndex: Math.min(Math.max(0, task.result_metadata?.selected_slice ?? 0), artifactSliceCount(task) - 1),
+      axialIndex,
+      coronalIndex,
+      sagittalIndex,
       threshold: Number(task.threshold ?? 0.5),
       showMask: true,
       opacity: 0.55,
-      renderedSliceIndex: Math.min(Math.max(0, task.result_metadata?.selected_slice ?? 0), artifactSliceCount(task) - 1),
+      renderedAxialIndex: axialIndex,
+      renderedCoronalIndex: coronalIndex,
+      renderedSagittalIndex: sagittalIndex,
       renderedThreshold: Number(task.threshold ?? 0.5),
       renderedShowMask: true,
       renderedOpacity: 0.55,
@@ -929,13 +950,15 @@ function artifactViewerState(checkUuid: string, task: ArtifactInferenceTask) {
   return artifactViewerByCheck[checkUuid]
 }
 
-function scheduleArtifactViewerRender(checkUuid: string) {
+function scheduleArtifactViewerRender(checkUuid: string, planes: ArtifactPlane[] = ['axial', 'coronal', 'sagittal']) {
   const existingTimer = artifactViewerRenderTimers.get(checkUuid)
   if (existingTimer !== undefined) window.clearTimeout(existingTimer)
   artifactViewerRenderTimers.set(checkUuid, window.setTimeout(() => {
     const viewer = artifactViewerByCheck[checkUuid]
     if (!viewer) return
-    viewer.renderedSliceIndex = viewer.sliceIndex
+    if (planes.includes('axial')) viewer.renderedAxialIndex = viewer.axialIndex
+    if (planes.includes('coronal')) viewer.renderedCoronalIndex = viewer.coronalIndex
+    if (planes.includes('sagittal')) viewer.renderedSagittalIndex = viewer.sagittalIndex
     viewer.renderedThreshold = viewer.threshold
     viewer.renderedShowMask = viewer.showMask
     viewer.renderedOpacity = viewer.opacity
@@ -948,9 +971,20 @@ function setArtifactViewerImageState(checkUuid: string, state: 'ready' | 'error'
   artifactViewerImageState[checkUuid] = state
 }
 
-function artifactSliceUrl(checkUuid: string, task: ArtifactInferenceTask) {
+function artifactSliceUrl(checkUuid: string, task: ArtifactInferenceTask, plane: 'axial' | 'coronal' | 'sagittal') {
   const viewer = artifactViewerState(checkUuid, task)
-  return medicalApi.getArtifactInferenceSliceUrl(task.uuid, { sliceIndex: viewer.renderedSliceIndex, threshold: viewer.renderedThreshold, showMask: viewer.renderedShowMask, opacity: viewer.renderedOpacity })
+  const sliceIndex = plane === 'axial'
+    ? viewer.renderedAxialIndex
+    : plane === 'coronal'
+      ? viewer.renderedCoronalIndex
+      : viewer.renderedSagittalIndex
+  return medicalApi.getArtifactInferenceSliceUrl(task.uuid, {
+    plane,
+    sliceIndex,
+    threshold: viewer.renderedThreshold,
+    showMask: viewer.renderedShowMask,
+    opacity: viewer.renderedOpacity,
+  })
 }
 
 function toggleCheckReport(checkUuid: string) {
@@ -1466,26 +1500,44 @@ onBeforeUnmount(() => {
                                   v-if="artifactTaskByCheck[item.uuid]?.task_state === 'succeeded' && artifactTaskByCheck[item.uuid]?.probability_object_ref"
                                   class="doctor-encounter__artifact-viewer"
                                 >
-                                  <div class="doctor-encounter__artifact-canvas">
-                                    <img
-                                      :key="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!)"
-                                      :src="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!)"
-                                      :alt="`CT 第 ${artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sliceIndex + 1} 层伪影掩码叠加图`"
-                                      class="doctor-encounter__artifact-preview"
-                                      @load="setArtifactViewerImageState(item.uuid, 'ready')"
-                                      @error="setArtifactViewerImageState(item.uuid, 'error')"
-                                    />
-                                    <span v-if="artifactViewerImageState[item.uuid] === 'loading'" class="doctor-encounter__artifact-image-state">正在更新切片…</span>
+                                  <div class="doctor-encounter__artifact-planes">
+                                    <figure class="doctor-encounter__artifact-plane is-axial">
+                                      <figcaption><strong>轴位</strong><span>第 {{ artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).axialIndex + 1 }} / {{ artifactSliceCount(artifactTaskByCheck[item.uuid]!) }} 层</span></figcaption>
+                                      <div class="doctor-encounter__artifact-canvas">
+                                        <img :key="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!, 'axial')" :src="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!, 'axial')" alt="轴位 CT 伪影掩码叠加图" class="doctor-encounter__artifact-preview" @load="setArtifactViewerImageState(item.uuid, 'ready')" @error="setArtifactViewerImageState(item.uuid, 'error')" />
+                                      </div>
+                                    </figure>
+                                    <figure class="doctor-encounter__artifact-plane">
+                                      <figcaption><strong>冠状位</strong><span>第 {{ artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).coronalIndex + 1 }} / {{ artifactCoronalCount(artifactTaskByCheck[item.uuid]!) }} 层</span></figcaption>
+                                      <div class="doctor-encounter__artifact-canvas">
+                                        <img :key="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!, 'coronal')" :src="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!, 'coronal')" alt="冠状位 CT 伪影掩码叠加图" class="doctor-encounter__artifact-preview" @load="setArtifactViewerImageState(item.uuid, 'ready')" @error="setArtifactViewerImageState(item.uuid, 'error')" />
+                                      </div>
+                                    </figure>
+                                    <figure class="doctor-encounter__artifact-plane">
+                                      <figcaption><strong>矢状位</strong><span>第 {{ artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sagittalIndex + 1 }} / {{ artifactSagittalCount(artifactTaskByCheck[item.uuid]!) }} 层</span></figcaption>
+                                      <div class="doctor-encounter__artifact-canvas">
+                                        <img :key="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!, 'sagittal')" :src="artifactSliceUrl(item.uuid, artifactTaskByCheck[item.uuid]!, 'sagittal')" alt="矢状位 CT 伪影掩码叠加图" class="doctor-encounter__artifact-preview" @load="setArtifactViewerImageState(item.uuid, 'ready')" @error="setArtifactViewerImageState(item.uuid, 'error')" />
+                                      </div>
+                                    </figure>
+                                    <span v-if="artifactViewerImageState[item.uuid] === 'loading'" class="doctor-encounter__artifact-image-state">正在更新三平面图像…</span>
                                     <span v-else-if="artifactViewerImageState[item.uuid] === 'error'" class="doctor-encounter__artifact-image-state is-error">当前切片加载失败，请稍后重试。</span>
                                   </div>
                                   <div class="doctor-encounter__artifact-controls">
                                     <div class="doctor-encounter__artifact-control-head">
-                                      <strong>交互式掩码查看</strong>
-                                      <span aria-live="polite">第 {{ artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sliceIndex + 1 }} / {{ artifactSliceCount(artifactTaskByCheck[item.uuid]!) }} 层</span>
+                                      <strong>三平面掩码查看</strong>
+                                      <span aria-live="polite">空间定位</span>
                                     </div>
                                     <label class="doctor-encounter__artifact-control">
-                                      <span>切片</span>
-                                      <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sliceIndex" type="range" min="0" :max="artifactSliceCount(artifactTaskByCheck[item.uuid]!) - 1" step="1" @input="scheduleArtifactViewerRender(item.uuid)" />
+                                      <span>轴位层（Z）</span>
+                                      <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).axialIndex" type="range" min="0" :max="artifactSliceCount(artifactTaskByCheck[item.uuid]!) - 1" step="1" @input="scheduleArtifactViewerRender(item.uuid, ['axial'])" />
+                                    </label>
+                                    <label class="doctor-encounter__artifact-control">
+                                      <span>冠状位位置（Y）</span>
+                                      <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).coronalIndex" type="range" min="0" :max="artifactCoronalCount(artifactTaskByCheck[item.uuid]!) - 1" step="1" @input="scheduleArtifactViewerRender(item.uuid, ['coronal'])" />
+                                    </label>
+                                    <label class="doctor-encounter__artifact-control">
+                                      <span>矢状位位置（X）</span>
+                                      <input v-model.number="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).sagittalIndex" type="range" min="0" :max="artifactSagittalCount(artifactTaskByCheck[item.uuid]!) - 1" step="1" @input="scheduleArtifactViewerRender(item.uuid, ['sagittal'])" />
                                     </label>
                                     <label class="doctor-encounter__artifact-control">
                                       <span>掩码阈值</span>
@@ -1505,7 +1557,7 @@ onBeforeUnmount(() => {
                                       <input v-model="artifactViewerState(item.uuid, artifactTaskByCheck[item.uuid]!).showMask" type="checkbox" @change="scheduleArtifactViewerRender(item.uuid)" />
                                       显示掩码叠加
                                     </label>
-                                    <span>阈值和切片变化会实时重新渲染当前图像。</span>
+                                    <span>三个坐标共同定义当前空间点；阈值和透明度会同步刷新三个视图。</span>
                                   </div>
                                 </div>
                                 <div v-else-if="artifactTaskByCheck[item.uuid]?.task_state === 'succeeded'" class="doctor-encounter__artifact-result">
@@ -2637,20 +2689,49 @@ onBeforeUnmount(() => {
 
 .doctor-encounter__artifact-viewer {
   display: grid;
-  grid-template-columns: minmax(260px, 1.25fr) minmax(230px, 0.75fr);
+  grid-template-columns: minmax(420px, 1.4fr) minmax(230px, 0.6fr);
   gap: 16px;
   align-items: stretch;
 }
+
+.doctor-encounter__artifact-planes {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.doctor-encounter__artifact-plane {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+}
+
+.doctor-encounter__artifact-plane.is-axial { grid-column: 1 / -1; }
+
+.doctor-encounter__artifact-plane figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #5c6f7e;
+  font-size: 12px;
+}
+
+.doctor-encounter__artifact-plane figcaption strong { color: #173d49; }
 
 .doctor-encounter__artifact-canvas {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 280px;
-  padding: 12px;
+  min-height: 138px;
+  padding: 8px;
   border-radius: 12px;
   background: #0f172a;
 }
+
+.doctor-encounter__artifact-plane.is-axial .doctor-encounter__artifact-canvas { min-height: 238px; }
 
 .doctor-encounter__artifact-image-state {
   position: absolute;
@@ -2700,11 +2781,13 @@ onBeforeUnmount(() => {
 .doctor-encounter__artifact-preview {
   display: block;
   width: 100%;
-  max-height: 240px;
+  max-height: 220px;
   object-fit: contain;
   border-radius: 10px;
   background: #0f172a;
 }
+
+.doctor-encounter__artifact-plane.is-axial .doctor-encounter__artifact-preview { max-height: 300px; }
 
 .doctor-encounter__artifact-findings,
 .doctor-encounter__artifact-waiting,
