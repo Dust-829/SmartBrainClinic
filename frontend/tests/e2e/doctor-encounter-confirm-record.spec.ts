@@ -55,5 +55,18 @@ test('doctor confirms a controlled prescription regression record', async ({ pag
 
   await page.locator('.doctor-encounter__hero-actions .doctor-encounter__primary').click()
   await expect(page.getByText('AI 处方建议')).toBeVisible()
-  await expect(page.getByRole('button', { name: '生成 AI 处方建议' })).toBeEnabled()
+  const recommendationButton = page.getByRole('button', { name: '生成 AI 处方建议' })
+  await expect(recommendationButton).toBeEnabled()
+  const recommendationResponse = page.waitForResponse((response) =>
+    response.url().includes('/api/v1/pharmacy/recommend-prescription') && response.request().method() === 'POST',
+  )
+  await recommendationButton.click()
+  await expect((await recommendationResponse).status()).toBe(200)
+
+  const pendingItem = page.locator('.doctor-encounter__prescription-item').first()
+  await expect(pendingItem).toBeVisible()
+  const quantityInput = pendingItem.locator('input[type="number"]')
+  await quantityInput.fill('2')
+  await expect(quantityInput).toHaveValue('2')
+  await expect(page.getByRole('button', { name: /医生确认并开立/ })).toBeEnabled()
 })
