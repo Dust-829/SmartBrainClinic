@@ -1,12 +1,76 @@
+-- Local demo/test databases only. This clears public tables; cross-schema references cause failure and are not cleared.
 BEGIN;
 
 DO $$
+DECLARE
+    expected_tables text[] := ARRAY[
+        'department',
+        'clinic_room',
+        'regist_level',
+        'settle_category',
+        'employee',
+        'patient',
+        'scheduling_rule',
+        'scheduling_actual',
+        'scheduling_time_slot',
+        'register',
+        'disease',
+        'medical_record',
+        'medical_record_disease',
+        'medical_technology',
+        'check_request',
+        'inspection_request',
+        'disposal_request',
+        'drug_info',
+        'prescription',
+        'prescription_item',
+        'outpatient_bill',
+        'outpatient_bill_detail',
+        'billing_item_charge_lock',
+        'billing_duplicate_charge_audit',
+        'billing_refund_saga_step',
+        'patient_feedback',
+        'schedule_disruption',
+        'scheduling_application',
+        'outbox_event',
+        'ai_audit_log',
+        'idempotency_record',
+        'ai_conversation_session',
+        'ai_conversation_message',
+        'artifact_inference_task',
+        'medical_report',
+        'admin_account',
+        'account_operation_audit'
+    ];
+    missing_tables text[];
+    truncate_tables text;
 BEGIN
-    IF to_regclass('public.ai_conversation_session') IS NULL
-        OR to_regclass('public.ai_conversation_message') IS NULL THEN
+    SELECT array_agg(expected.table_name ORDER BY expected.table_name)
+    INTO missing_tables
+    FROM unnest(expected_tables) AS expected(table_name)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename = expected.table_name
+    );
+
+    IF missing_tables IS NOT NULL THEN
         RAISE EXCEPTION
-            'Missing ai_conversation tables. Run backend/migrations/20260708_01_create_ai_conversation_tables.sql first.';
+            'Missing required business tables: %. Import the base schema and run backend migrations in filename order first.',
+            array_to_string(missing_tables, ', ');
     END IF;
+
+    SELECT string_agg(format('%I.%I', schemaname, tablename), ', ' ORDER BY tablename)
+    INTO truncate_tables
+    FROM pg_tables
+    WHERE schemaname = 'public';
+
+    IF truncate_tables IS NULL THEN
+        RAISE EXCEPTION 'No persistent tables found in the public schema.';
+    END IF;
+
+    EXECUTE 'TRUNCATE TABLE ' || truncate_tables || ' RESTART IDENTITY';
 END $$;
 
 CREATE OR REPLACE FUNCTION pg_temp.sbc_demo_uuid(seed text)
@@ -22,33 +86,6 @@ AS $$
         substr(md5('smartbrainclinic-full-demo:' || seed), 21, 12)
     )::uuid;
 $$;
-
-SELECT setval(pg_get_serial_sequence('department', 'id'), COALESCE((SELECT MAX(id) FROM department), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('clinic_room', 'id'), COALESCE((SELECT MAX(id) FROM clinic_room), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('regist_level', 'id'), COALESCE((SELECT MAX(id) FROM regist_level), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('settle_category', 'id'), COALESCE((SELECT MAX(id) FROM settle_category), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('employee', 'id'), COALESCE((SELECT MAX(id) FROM employee), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('patient', 'id'), COALESCE((SELECT MAX(id) FROM patient), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('scheduling_rule', 'id'), COALESCE((SELECT MAX(id) FROM scheduling_rule), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('scheduling_actual', 'id'), COALESCE((SELECT MAX(id) FROM scheduling_actual), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('scheduling_time_slot', 'id'), COALESCE((SELECT MAX(id) FROM scheduling_time_slot), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('register', 'id'), COALESCE((SELECT MAX(id) FROM register), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('disease', 'id'), COALESCE((SELECT MAX(id) FROM disease), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('medical_technology', 'id'), COALESCE((SELECT MAX(id) FROM medical_technology), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('medical_record', 'id'), COALESCE((SELECT MAX(id) FROM medical_record), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('check_request', 'id'), COALESCE((SELECT MAX(id) FROM check_request), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('inspection_request', 'id'), COALESCE((SELECT MAX(id) FROM inspection_request), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('disposal_request', 'id'), COALESCE((SELECT MAX(id) FROM disposal_request), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('drug_info', 'id'), COALESCE((SELECT MAX(id) FROM drug_info), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('prescription', 'id'), COALESCE((SELECT MAX(id) FROM prescription), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('prescription_item', 'id'), COALESCE((SELECT MAX(id) FROM prescription_item), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('outpatient_bill', 'id'), COALESCE((SELECT MAX(id) FROM outpatient_bill), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('outpatient_bill_detail', 'id'), COALESCE((SELECT MAX(id) FROM outpatient_bill_detail), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('ai_conversation_session', 'id'), COALESCE((SELECT MAX(id) FROM ai_conversation_session), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('ai_conversation_message', 'id'), COALESCE((SELECT MAX(id) FROM ai_conversation_message), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('patient_feedback', 'id'), COALESCE((SELECT MAX(id) FROM patient_feedback), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('schedule_disruption', 'id'), COALESCE((SELECT MAX(id) FROM schedule_disruption), 1), TRUE);
-SELECT setval(pg_get_serial_sequence('scheduling_application', 'id'), COALESCE((SELECT MAX(id) FROM scheduling_application), 1), TRUE);
 
 CREATE TEMP TABLE tmp_demo_departments (
     dept_key text PRIMARY KEY,
@@ -274,6 +311,78 @@ INSERT INTO tmp_demo_schedules VALUES
     ('su_today_pm', pg_temp.sbc_demo_uuid('schedule:su_today_pm'), 'su', 0, '下午', 4, 'sjnk_01'),
     ('su_tomorrow_am', pg_temp.sbc_demo_uuid('schedule:su_tomorrow_am'), 'su', 1, '上午', 4, 'sjnk_01');
 
+-- Extend the core demo domain to at least twenty rows per required table.
+INSERT INTO tmp_demo_departments (dept_key, dept_uuid, dept_code, dept_name, dept_type)
+SELECT
+    'expanded_dept_' || n,
+    pg_temp.sbc_demo_uuid('department:expanded:' || n),
+    'DEMO_EXP_' || lpad(n::text, 2, '0'),
+    '演示扩展科室' || n,
+    'outpatient'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO tmp_demo_rooms (room_key, room_uuid, dept_key, room_name, location)
+SELECT
+    'expanded_room_' || n,
+    pg_temp.sbc_demo_uuid('room:expanded:' || n),
+    'expanded_dept_' || n,
+    '演示扩展诊室' || n,
+    'D楼' || n || '层'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO tmp_demo_regist_levels (level_key, level_uuid, regist_code, regist_name, regist_fee)
+SELECT
+    'expanded_level_' || n,
+    pg_temp.sbc_demo_uuid('regist:expanded:' || n),
+    'DEMO_EXP_LEVEL_' || lpad(n::text, 2, '0'),
+    '演示扩展挂号级别' || n,
+    20.00 + n
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO tmp_demo_settles (settle_key, settle_uuid, settle_code, settle_name)
+SELECT
+    'expanded_settle_' || n,
+    pg_temp.sbc_demo_uuid('settle:expanded:' || n),
+    'DEMO_EXP_SETTLE_' || lpad(n::text, 2, '0'),
+    '演示扩展结算类别' || n
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO tmp_demo_employees (employee_key, employee_uuid, dept_key, level_key, realname, password, expertise, gender, ai_eval_score)
+SELECT
+    'expanded_doctor_' || n,
+    pg_temp.sbc_demo_uuid('employee:expanded:' || n),
+    'expanded_dept_' || n,
+    'expanded_level_' || n,
+    '演示扩展医生' || n,
+    '123',
+    '演示扩展门诊接诊',
+    CASE WHEN n % 2 = 0 THEN 'female' ELSE 'male' END,
+    4.0 + (n % 10) / 10.0
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO tmp_demo_schedule_rules (rule_key, rule_uuid, doctor_key, rule_name, week_rule, llm_text_rule, regist_quota, room_key)
+SELECT
+    'expanded_rule_' || n,
+    pg_temp.sbc_demo_uuid('rule:expanded:' || n),
+    'expanded_doctor_' || n,
+    '演示扩展医生' || n || '工作日门诊',
+    '1,2,3,4,5',
+    '工作日演示扩展门诊。',
+    4,
+    'expanded_room_' || n
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO tmp_demo_schedules (schedule_key, schedule_uuid, doctor_key, day_offset, noon, regist_quota, room_key)
+SELECT
+    'expanded_schedule_' || n,
+    pg_temp.sbc_demo_uuid('schedule:expanded:' || n),
+    'expanded_doctor_' || n,
+    n,
+    CASE WHEN n % 2 = 0 THEN '下午' ELSE '上午' END,
+    4,
+    'expanded_room_' || n
+FROM generate_series(1, 20) AS n;
+
 INSERT INTO department (uuid, dept_code, dept_name, dept_type, delmark)
 SELECT dept_uuid, dept_code, dept_name, dept_type, 1 FROM tmp_demo_departments
 ON CONFLICT (dept_code) DO UPDATE SET uuid = EXCLUDED.uuid, dept_name = EXCLUDED.dept_name, dept_type = EXCLUDED.dept_type, delmark = 1;
@@ -313,6 +422,9 @@ ON CONFLICT (uuid) DO UPDATE SET scheduling_actual_id=EXCLUDED.scheduling_actual
 CREATE TEMP TABLE tmp_demo_registers (register_key text PRIMARY KEY, register_uuid uuid NOT NULL, patient_key text NOT NULL, schedule_key text NOT NULL, slot_no integer NOT NULL, settle_key text NOT NULL, visit_state integer NOT NULL, symptoms text NOT NULL) ON COMMIT DROP;
 INSERT INTO tmp_demo_registers VALUES
 ('r001',pg_temp.sbc_demo_uuid('register:r001'),'p01','chen_yday_am',1,'zf',3,'持续头痛伴恶心'),('r002',pg_temp.sbc_demo_uuid('register:r002'),'p02','chen_yday_am',2,'zf',3,'术后头部闷胀复查'),('r003',pg_temp.sbc_demo_uuid('register:r003'),'p03','gu_yday_am',1,'yb',3,'眩晕伴恶心'),('r004',pg_temp.sbc_demo_uuid('register:r004'),'p04','gu_yday_am',2,'zf',3,'反复偏头痛'),('r005',pg_temp.sbc_demo_uuid('register:r005'),'p05','lin_yday_am',1,'yb',3,'右臂麻木'),('r006',pg_temp.sbc_demo_uuid('register:r006'),'p06','lin_yday_am',2,'zf',3,'足部麻木半年'),('r007',pg_temp.sbc_demo_uuid('register:r007'),'p07','xu_yday_pm',1,'yb',3,'急性眩晕步态不稳'),('r008',pg_temp.sbc_demo_uuid('register:r008'),'p08','xu_yday_pm',2,'zf',3,'术后轻度头晕复查'),('r009',pg_temp.sbc_demo_uuid('register:r009'),'p09','chen_yday_am',3,'zf',4,'历史取消挂号'),('r010',pg_temp.sbc_demo_uuid('register:r010'),'p01','chen_today_am',1,'zf',2,'今日头痛加重'),('r011',pg_temp.sbc_demo_uuid('register:r011'),'p10','chen_today_am',2,'yb',1,'头晕视物模糊'),('r012',pg_temp.sbc_demo_uuid('register:r012'),'p11','chen_today_am',3,'zf',1,'晨起头部压迫感'),('r013',pg_temp.sbc_demo_uuid('register:r013'),'p03','gu_today_am',1,'yb',2,'眩晕复发'),('r014',pg_temp.sbc_demo_uuid('register:r014'),'p12','gu_today_am',2,'zf',1,'搏动性头痛'),('r015',pg_temp.sbc_demo_uuid('register:r015'),'p13','gu_today_am',3,'zf',1,'颈部僵硬头晕'),('r016',pg_temp.sbc_demo_uuid('register:r016'),'p14','lin_today_am',1,'yb',1,'右手短暂麻木'),('r017',pg_temp.sbc_demo_uuid('register:r017'),'p15','lin_today_am',2,'zf',1,'偏头痛复诊'),('r018',pg_temp.sbc_demo_uuid('register:r018'),'p16','xu_today_pm',1,'yb',1,'步态不稳伴眩晕');
+INSERT INTO tmp_demo_registers VALUES
+    ('r019', pg_temp.sbc_demo_uuid('register:r019'), 'p19', 'expanded_schedule_1', 1, 'expanded_settle_1', 1, '演示扩展挂号一'),
+    ('r020', pg_temp.sbc_demo_uuid('register:r020'), 'p20', 'expanded_schedule_2', 1, 'expanded_settle_2', 1, '演示扩展挂号二');
 INSERT INTO register (uuid, patient_id, visit_date, noon, dept_uuid, employee_uuid, scheduling_actual_id, settle_category_uuid, regist_method, regist_money, is_emergency, visit_state, symptoms, scheduling_time_slot_id)
 SELECT r.register_uuid,p.id,sa.schedule_date,sa.noon,d.uuid,e.employee_uuid,sa.id,sc.uuid,'online',rl.regist_fee,FALSE,r.visit_state,r.symptoms,sts.id FROM tmp_demo_registers r JOIN tmp_demo_patients tp ON tp.patient_key=r.patient_key JOIN patient p ON p.uuid=tp.patient_uuid JOIN tmp_demo_schedules s ON s.schedule_key=r.schedule_key JOIN scheduling_actual sa ON sa.uuid=s.schedule_uuid JOIN tmp_demo_employees e ON e.employee_key=s.doctor_key JOIN tmp_demo_departments td ON td.dept_key=e.dept_key JOIN department d ON d.dept_code=td.dept_code JOIN tmp_demo_settles ts ON ts.settle_key=r.settle_key JOIN settle_category sc ON sc.settle_code=ts.settle_code JOIN tmp_demo_regist_levels tl ON tl.level_key=e.level_key JOIN regist_level rl ON rl.regist_code=tl.regist_code JOIN scheduling_time_slot sts ON sts.uuid=pg_temp.sbc_demo_uuid('slot:'||r.schedule_key||':'||r.slot_no)
 ON CONFLICT (uuid) DO UPDATE SET patient_id=EXCLUDED.patient_id, visit_date=EXCLUDED.visit_date, noon=EXCLUDED.noon, dept_uuid=EXCLUDED.dept_uuid, employee_uuid=EXCLUDED.employee_uuid, scheduling_actual_id=EXCLUDED.scheduling_actual_id, settle_category_uuid=EXCLUDED.settle_category_uuid, visit_state=EXCLUDED.visit_state, symptoms=EXCLUDED.symptoms, scheduling_time_slot_id=EXCLUDED.scheduling_time_slot_id;
@@ -735,9 +847,9 @@ SELECT
     NOW() - INTERVAL '2 hours'
 FROM (
     VALUES
-        ('dis001', 'r023', 'p21', 'chen', 's2', 'tomorrow clinic may be adjusted, watch for reschedule notice'),
-        ('dis002', 'r024', 'p22', 'gu', 's1', 'tomorrow clinic has schedule fluctuation, watch for update'),
-        ('dis003', 'r029', 'p02', 'chen', 's1', 'day two follow up may move to afternoon')
+        ('dis001', 'r019', 'p19', 'chen', 's2', 'tomorrow clinic may be adjusted, watch for reschedule notice'),
+        ('dis002', 'r020', 'p20', 'gu', 's1', 'tomorrow clinic has schedule fluctuation, watch for update'),
+        ('dis003', 'r018', 'p16', 'xu', 's1', 'day two follow up may move to afternoon')
     ) AS src(dis_key, register_key, patient_key, doctor_key, slot_key, message)
 JOIN tmp_demo_registers tr ON tr.register_key = src.register_key
 JOIN register r ON r.uuid = tr.register_uuid
@@ -787,4 +899,384 @@ ON CONFLICT (uuid) DO UPDATE SET content=EXCLUDED.content;
 INSERT INTO ai_conversation_message (uuid, session_uuid, turn_index, role, content)
 SELECT pg_temp.sbc_demo_uuid('ai-message:'||r.register_key||':2'), pg_temp.sbc_demo_uuid('ai-session:'||r.register_key), 2, 'assistant', '已记录症状，建议按预约时间到诊并携带既往检查资料。' FROM tmp_demo_registers r WHERE r.register_key IN ('r001','r003','r005','r007','r010','r011','r013','r016','r018')
 ON CONFLICT (uuid) DO UPDATE SET content=EXCLUDED.content;
+
+-- Complete the demo graph: every required table has at least twenty rows.
+INSERT INTO disease (disease_code, disease_name, disease_type, delmark, disease_vector)
+SELECT 'DEMO_DISEASE_' || lpad(n::text, 2, '0'), 'Demo disease ' || n, 'neurology', 1, NULL
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO medical_technology (uuid, tech_code, tech_name, tech_type, price, delmark)
+SELECT pg_temp.sbc_demo_uuid('technology:expanded:' || n),
+       'DEMO_TECH_' || lpad(n::text, 2, '0'),
+       'Demo technology ' || n,
+       CASE n % 3 WHEN 0 THEN 'disposal' WHEN 1 THEN 'check' ELSE 'inspection' END,
+       50.00 + n, 1
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO drug_info (uuid, drug_code, drug_name, specification, unit, price, stock, min_stock_limit, delmark)
+SELECT pg_temp.sbc_demo_uuid('drug:expanded:' || n),
+       'DEMO_DRUG_' || lpad(n::text, 2, '0'),
+       'Demo drug ' || n, '10mg*10', 'box', 10.00 + n, 100 + n, 10, 1
+FROM generate_series(1, 20) AS n;
+
+-- A medical record is one-to-one with a register, so fill only the eight missing links.
+INSERT INTO medical_record (
+    uuid, register_uuid, readme, present, history, allergy, physique,
+    proposal, diagnosis, is_doctor_confirmed, cure, dialog_vector
+)
+SELECT pg_temp.sbc_demo_uuid('record:missing:' || r.uuid::text), r.uuid,
+       'Demo chief complaint', 'Demo present illness', 'Demo history', 'None',
+       'Stable', 'Routine follow-up', 'Demo diagnosis', FALSE, 'Observation', NULL
+FROM register r
+WHERE NOT EXISTS (SELECT 1 FROM medical_record mr WHERE mr.register_uuid = r.uuid);
+
+INSERT INTO medical_record_disease (medical_record_id, disease_id, is_primary)
+SELECT mr.id, d.id, TRUE
+FROM medical_record mr
+JOIN register r ON r.uuid = mr.register_uuid
+JOIN LATERAL (
+    SELECT id FROM disease ORDER BY id OFFSET ((r.id - 1) % 20) LIMIT 1
+) d ON TRUE
+WHERE NOT EXISTS (
+    SELECT 1 FROM medical_record_disease mrd WHERE mrd.medical_record_id = mr.id
+);
+
+INSERT INTO check_request (
+    uuid, register_uuid, medical_technology_id, check_info, check_position,
+    creation_time, inputcheck_employee_uuid, check_time, image_path,
+    ai_tumor_prob, check_result, check_state
+)
+SELECT pg_temp.sbc_demo_uuid('check:expanded:' || n), r.uuid, mt.id,
+       'Demo imaging request ' || n, 'head', NOW() - INTERVAL '1 hour', e.uuid,
+       NOW() - INTERVAL '30 minutes', '/demo/expanded-check-' || n || '.dcm',
+       (n % 10)::numeric / 10, 'Demo imaging result ' || n, 'completed'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE
+JOIN LATERAL (SELECT id FROM medical_technology ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) mt ON TRUE
+JOIN LATERAL (SELECT uuid FROM employee ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) e ON TRUE;
+
+INSERT INTO inspection_request (
+    uuid, register_uuid, medical_technology_id, creation_time, input_employee_uuid,
+    inspection_time, test_results, inspection_state
+)
+SELECT pg_temp.sbc_demo_uuid('inspection:expanded:' || n), r.uuid, mt.id,
+       NOW() - INTERVAL '1 hour', e.uuid, NOW() - INTERVAL '25 minutes',
+       jsonb_build_object('demo_value', n), 'completed'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE
+JOIN LATERAL (SELECT id FROM medical_technology ORDER BY id OFFSET ((n + 4) % 20) LIMIT 1) mt ON TRUE
+JOIN LATERAL (SELECT uuid FROM employee ORDER BY id OFFSET ((n + 1) % 20) LIMIT 1) e ON TRUE;
+
+INSERT INTO disposal_request (
+    uuid, register_uuid, medical_technology_id, creation_time, disposal_time,
+    disposal_state, disposal_result
+)
+SELECT pg_temp.sbc_demo_uuid('disposal:expanded:' || n), r.uuid, mt.id,
+       NOW() - INTERVAL '1 hour', NOW() - INTERVAL '20 minutes', 'completed',
+       'Demo disposal result ' || n
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE
+JOIN LATERAL (SELECT id FROM medical_technology ORDER BY id OFFSET ((n + 8) % 20) LIMIT 1) mt ON TRUE;
+
+INSERT INTO prescription (uuid, register_uuid, prescription_code, creation_time, is_ai_recommended, drug_state)
+SELECT pg_temp.sbc_demo_uuid('prescription:expanded:' || n), r.uuid,
+       'RX-DEMO-EXP-' || lpad(n::text, 2, '0'), NOW() - INTERVAL '1 hour',
+       n % 2 = 0, 'issued'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE;
+
+INSERT INTO prescription_item (uuid, prescription_id, drug_id, drug_usage, drug_number)
+SELECT pg_temp.sbc_demo_uuid('prescription-item:expanded:' || n), p.id, d.id,
+       'oral once daily', 1 + n % 3
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT id FROM prescription WHERE prescription_code = 'RX-DEMO-EXP-' || lpad(n::text, 2, '0')) p ON TRUE
+JOIN LATERAL (SELECT id FROM drug_info ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) d ON TRUE;
+
+INSERT INTO outpatient_bill (
+    uuid, register_uuid, bill_code, total_amount, settle_category_uuid,
+    pay_method, pay_time, transaction_id, bill_state
+)
+SELECT pg_temp.sbc_demo_uuid('bill:expanded:' || n), r.uuid,
+       'FPDEMOEXP' || lpad(n::text, 3, '0'), 100.00 + n, sc.uuid,
+       'demo', NOW() - INTERVAL '1 hour', 'DEMO-TXN-' || n, 'paid'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE
+JOIN LATERAL (SELECT uuid FROM settle_category ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) sc ON TRUE;
+
+INSERT INTO outpatient_bill_detail (uuid, bill_id, item_type, item_source_id, amount)
+SELECT pg_temp.sbc_demo_uuid('bill-detail:expanded:' || n), b.id, 'demo_check',
+       pg_temp.sbc_demo_uuid('check:expanded:' || n)::text, 100.00 + n
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT id FROM outpatient_bill WHERE bill_code = 'FPDEMOEXP' || lpad(n::text, 3, '0')) b ON TRUE;
+
+INSERT INTO billing_item_charge_lock (item_type, item_source_id, bill_id, bill_code, created_at)
+SELECT d.item_type, d.item_source_id, d.bill_id, b.bill_code, NOW() - INTERVAL '1 hour'
+FROM outpatient_bill_detail d
+JOIN outpatient_bill b ON b.id = d.bill_id
+WHERE d.item_type = 'demo_check'
+ON CONFLICT (item_type, item_source_id) DO NOTHING;
+
+INSERT INTO billing_duplicate_charge_audit (
+    item_type, item_source_id, duplicate_count, bill_ids, bill_codes, detail_ids, audited_at
+)
+SELECT 'demo_duplicate', 'demo-duplicate-' || n, 1,
+       n::text, 'FPDEMOEXP' || lpad(n::text, 3, '0'), n::text, NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO billing_refund_saga_step (
+    bill_code, step_name, status, request_payload, response_payload,
+    error_message, created_at, updated_at
+)
+SELECT 'FPDEMOEXP' || lpad(n::text, 3, '0'), 'demo-step-' || n, 'succeeded',
+       '{"demo":true}', '{"refunded":false}', NULL, NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO patient_feedback (uuid, register_uuid, doctor_uuid, content, is_processed, created_at)
+SELECT pg_temp.sbc_demo_uuid('feedback:expanded:' || n), r.uuid, e.uuid,
+       'Demo feedback ' || n, n % 2 = 0, NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE
+JOIN LATERAL (SELECT uuid FROM employee ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) e ON TRUE;
+
+INSERT INTO schedule_disruption (
+    uuid, patient_id, register_id, original_employee_uuid, original_time_range,
+    original_schedule_date, original_noon, message, status, created_at
+)
+SELECT pg_temp.sbc_demo_uuid('disruption:expanded:' || n), p.id, r.id, r.employee_uuid,
+       '08:00-08:10', r.visit_date::date, r.noon, 'Demo schedule disruption ' || n,
+       'unread', NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT id, patient_id, employee_uuid, visit_date, noon FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE
+JOIN patient p ON p.id = r.patient_id;
+
+INSERT INTO scheduling_application (uuid, employee_uuid, prompt, status, created_at, processed_at)
+SELECT pg_temp.sbc_demo_uuid('scheduling-application:expanded:' || n), e.uuid,
+       'Demo scheduling application ' || n,
+       CASE n % 3 WHEN 0 THEN 'rejected' WHEN 1 THEN 'pending' ELSE 'approved' END,
+       NOW() - INTERVAL '1 hour', CASE WHEN n % 3 = 1 THEN NULL ELSE NOW() - INTERVAL '30 minutes' END
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM employee ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) e ON TRUE;
+
+INSERT INTO outbox_event (uuid, topic, payload, status, created_at, retry_count)
+SELECT pg_temp.sbc_demo_uuid('outbox:expanded:' || n), 'demo.seed',
+       json_build_object('sequence', n)::text, 'pending', NOW() - INTERVAL '1 hour', 0
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO ai_audit_log (
+    uuid, module_name, source, model, input_summary, output_summary, warnings,
+    validated, validator_messages, latency_ms, context, created_at, review_status,
+    review_note, reviewer, reviewed_at
+)
+SELECT pg_temp.sbc_demo_uuid('ai-audit:expanded:' || n), 'demo_seed', 'demo', 'demo-model',
+       'Desensitized demo input ' || n, 'Desensitized demo output ' || n, NULL,
+       n % 3 <> 0, '[]', 10 + n, 'demo', NOW() - INTERVAL '1 hour',
+       CASE n % 3 WHEN 0 THEN 'pending' WHEN 1 THEN 'approved' ELSE 'rejected' END,
+       'Demo review ' || n, 'demo-reviewer', NOW() - INTERVAL '30 minutes'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO idempotency_record (scope, idempotency_key, request_hash, status, response_body, created_at, updated_at)
+SELECT 'demo.seed', 'demo-key-' || n, md5('demo-request-' || n), 'completed',
+       json_build_object('sequence', n)::text, NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO ai_conversation_session (
+    uuid, surface, module_name, patient_uuid, register_uuid, employee_uuid, status,
+    profile_snapshot_json, latest_result_json, summary_text, source, model, validated,
+    created_at, updated_at
+)
+SELECT pg_temp.sbc_demo_uuid('ai-session:expanded:' || n), 'patient', 'demo_seed',
+       p.uuid, r.uuid, r.employee_uuid, 'linked', '{}'::jsonb, '{}'::jsonb,
+       'Demo conversation summary ' || n, 'demo', 'demo-model', TRUE,
+       NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid, patient_id, employee_uuid FROM register ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) r ON TRUE
+JOIN patient p ON p.id = r.patient_id;
+
+INSERT INTO ai_conversation_message (uuid, session_uuid, turn_index, role, content, created_at)
+SELECT pg_temp.sbc_demo_uuid('ai-message:expanded:' || n),
+       pg_temp.sbc_demo_uuid('ai-session:expanded:' || n), 1, 'user',
+       'Demo conversation message ' || n, NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO artifact_inference_task (
+    uuid, check_uuid, register_uuid, submitted_by_employee_uuid, source_image_ref,
+    source_format, task_state, model_name, model_version, threshold,
+    probability_object_ref, result_metadata, created_at, started_at, completed_at
+)
+SELECT pg_temp.sbc_demo_uuid('artifact-task:expanded:' || n), c.uuid, c.register_uuid,
+       e.uuid, c.image_path, 'dcm', 'completed', 'attention-unet2d', 'demo-v1', 0.500,
+       '/demo/artifact-' || n || '.json', jsonb_build_object('sequence', n),
+       NOW() - INTERVAL '1 hour', NOW() - INTERVAL '50 minutes', NOW() - INTERVAL '40 minutes'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid, register_uuid, image_path FROM check_request WHERE uuid = pg_temp.sbc_demo_uuid('check:expanded:' || n)) c ON TRUE
+JOIN LATERAL (SELECT uuid FROM employee ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) e ON TRUE;
+
+INSERT INTO medical_report (
+    uuid, register_uuid, source_request_uuid, report_type, report_state, conclusion,
+    structured_result, artifact_task_uuid, reviewer_employee_uuid, reviewed_at,
+    published_at, version, created_at, updated_at
+)
+SELECT pg_temp.sbc_demo_uuid('medical-report:expanded:' || n), c.register_uuid, c.uuid,
+       'check', 'published', 'Demo report conclusion ' || n, jsonb_build_object('sequence', n),
+       t.uuid, e.uuid, NOW() - INTERVAL '30 minutes', NOW() - INTERVAL '20 minutes', 1,
+       NOW() - INTERVAL '1 hour', NOW() - INTERVAL '20 minutes'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid, register_uuid FROM check_request WHERE uuid = pg_temp.sbc_demo_uuid('check:expanded:' || n)) c ON TRUE
+JOIN LATERAL (SELECT uuid FROM artifact_inference_task WHERE uuid = pg_temp.sbc_demo_uuid('artifact-task:expanded:' || n)) t ON TRUE
+JOIN LATERAL (SELECT uuid FROM employee ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) e ON TRUE;
+
+INSERT INTO admin_account (uuid, staff_code, display_name, password_hash, is_active, created_at, updated_at)
+SELECT pg_temp.sbc_demo_uuid('admin:expanded:' || n), 'DEMO_DISABLED_' || lpad(n::text, 2, '0'),
+       'Disabled demo administrator ' || n,
+       '$2b$12$i6n6eixGiJafNAMrQSb4Iu2X0nSh4m1v7MwDVTJh8qQXl9aoNbNrC',
+       FALSE, NOW() - INTERVAL '1 hour', NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n;
+
+INSERT INTO account_operation_audit (
+    uuid, actor_admin_uuid, target_type, target_uuid, action, result, detail, created_at
+)
+SELECT pg_temp.sbc_demo_uuid('account-audit:expanded:' || n),
+       pg_temp.sbc_demo_uuid('admin:expanded:' || n),
+       CASE WHEN n % 2 = 0 THEN 'employee' ELSE 'patient' END,
+       CASE WHEN n % 2 = 0 THEN e.uuid ELSE p.uuid END,
+       'demo_disabled_account_audit', 'success', 'Demo audit only; account remains disabled.',
+       NOW() - INTERVAL '1 hour'
+FROM generate_series(1, 20) AS n
+JOIN LATERAL (SELECT uuid FROM employee ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) e ON TRUE
+JOIN LATERAL (SELECT uuid FROM patient ORDER BY id OFFSET ((n - 1) % 20) LIMIT 1) p ON TRUE;
+
+DO $$
+DECLARE
+    required_tables text[] := ARRAY[
+        'department', 'clinic_room', 'regist_level', 'settle_category', 'employee', 'patient',
+        'scheduling_rule', 'scheduling_actual', 'scheduling_time_slot', 'register', 'disease',
+        'medical_record', 'medical_record_disease', 'medical_technology', 'check_request',
+        'inspection_request', 'disposal_request', 'drug_info', 'prescription', 'prescription_item',
+        'outpatient_bill', 'outpatient_bill_detail', 'billing_item_charge_lock',
+        'billing_duplicate_charge_audit', 'billing_refund_saga_step', 'patient_feedback',
+        'schedule_disruption', 'scheduling_application', 'outbox_event', 'ai_audit_log',
+        'idempotency_record', 'ai_conversation_session', 'ai_conversation_message',
+        'artifact_inference_task', 'medical_report', 'admin_account', 'account_operation_audit'
+    ];
+    table_name text;
+    row_count bigint;
+BEGIN
+    FOREACH table_name IN ARRAY required_tables LOOP
+        EXECUTE format('SELECT count(*) FROM public.%I', table_name) INTO row_count;
+        IF row_count < 20 THEN
+            RAISE EXCEPTION 'Demo seed table % has % rows; expected at least 20.', table_name, row_count;
+        END IF;
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1 FROM medical_record GROUP BY register_uuid HAVING count(*) <> 1
+    ) OR (SELECT count(*) FROM medical_record) <> (SELECT count(*) FROM register) THEN
+        RAISE EXCEPTION 'Every demo register must have exactly one medical record.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM medical_record mr
+        LEFT JOIN register r ON r.uuid = mr.register_uuid
+        WHERE r.uuid IS NULL
+    ) THEN
+        RAISE EXCEPTION 'medical_record must reference an existing register.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM prescription_item pi
+        LEFT JOIN prescription p ON p.id = pi.prescription_id
+        LEFT JOIN drug_info d ON d.id = pi.drug_id
+        WHERE p.id IS NULL OR d.id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'prescription_item must reference existing prescription and drug rows.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM outpatient_bill_detail detail
+        LEFT JOIN outpatient_bill bill ON bill.id = detail.bill_id
+        WHERE bill.id IS NULL
+    ) THEN
+        RAISE EXCEPTION 'outpatient_bill_detail must reference an existing bill.';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM billing_item_charge_lock GROUP BY item_type, item_source_id HAVING count(*) <> 1
+    ) THEN
+        RAISE EXCEPTION 'billing_item_charge_lock contains duplicate source reservations.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM billing_item_charge_lock lock_row
+        LEFT JOIN outpatient_bill bill
+            ON bill.id = lock_row.bill_id
+           AND bill.bill_code = lock_row.bill_code
+        WHERE bill.id IS NULL
+           OR NOT EXISTS (
+                SELECT 1
+                FROM outpatient_bill_detail detail
+                WHERE detail.bill_id = lock_row.bill_id
+                  AND detail.item_type = lock_row.item_type
+                  AND detail.item_source_id = lock_row.item_source_id
+           )
+    ) THEN
+        RAISE EXCEPTION 'billing_item_charge_lock must match an existing bill and source detail.';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM billing_refund_saga_step GROUP BY bill_code, step_name HAVING count(*) <> 1
+    ) THEN
+        RAISE EXCEPTION 'billing_refund_saga_step contains duplicate saga steps.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM artifact_inference_task t
+        LEFT JOIN check_request c ON c.uuid = t.check_uuid
+        WHERE c.uuid IS NULL OR c.register_uuid <> t.register_uuid
+    ) THEN
+        RAISE EXCEPTION 'artifact_inference_task must reference an existing check for the same register.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM ai_conversation_message message
+        LEFT JOIN ai_conversation_session session ON session.uuid = message.session_uuid
+        WHERE session.uuid IS NULL
+    ) THEN
+        RAISE EXCEPTION 'ai_conversation_message must reference an existing session.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM medical_report r
+        LEFT JOIN artifact_inference_task t ON t.uuid = r.artifact_task_uuid
+        LEFT JOIN check_request c ON c.uuid = r.source_request_uuid
+        WHERE t.uuid IS NULL
+           OR c.uuid IS NULL
+           OR c.register_uuid <> r.register_uuid
+           OR t.register_uuid <> r.register_uuid
+           OR t.check_uuid <> r.source_request_uuid
+    ) THEN
+        RAISE EXCEPTION 'medical_report must reference a matching check and artifact task for its register.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM account_operation_audit audit
+        LEFT JOIN admin_account admin ON admin.uuid = audit.actor_admin_uuid
+        WHERE admin.uuid IS NULL OR admin.is_active
+    ) THEN
+        RAISE EXCEPTION 'account_operation_audit actors must reference disabled demo administrators.';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM account_operation_audit audit
+        LEFT JOIN employee e
+            ON audit.target_type = 'employee'
+           AND e.uuid = audit.target_uuid
+        LEFT JOIN patient p
+            ON audit.target_type = 'patient'
+           AND p.uuid = audit.target_uuid
+        WHERE audit.target_type NOT IN ('employee', 'patient')
+           OR (audit.target_type = 'employee' AND e.uuid IS NULL)
+           OR (audit.target_type = 'patient' AND p.uuid IS NULL)
+    ) THEN
+        RAISE EXCEPTION 'account_operation_audit targets must be existing employee or patient rows.';
+    END IF;
+END $$;
+
 COMMIT;
